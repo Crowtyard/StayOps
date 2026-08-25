@@ -2,7 +2,12 @@
 
 from app.models.audit import AuditLog
 from app.models.base import Base
-from app.models.room import Room, RoomStatus, RoomType
+from app.models.room import (
+    CleaningStatus,
+    OccupancyStatus,
+    Room,
+    RoomType,
+)
 from app.models.user import Permission, Role, RolePermission, User, UserRole
 
 __all__ = [
@@ -11,9 +16,9 @@ __all__ = [
     "Permission",
     "Role",
     "RolePermission",
+    "CleaningStatus",
+    "OccupancyStatus",
     "Room",
-    "RoomStatus",
-    "RoomType",
     "User",
     "UserRole",
 ]

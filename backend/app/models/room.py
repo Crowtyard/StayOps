@@ -1,8 +1,11 @@
 """房型与房间模型。
 
-rooms.status 为 PostgreSQL 原生枚举（room_status），合法值：
-available / occupied / cleaning / maintenance / out_of_service。
-状态机合法转换的校验在 API 层（Sprint 1 第二阶段）实现。
+房态拆分为两个独立维度（决策见 docs/DECISIONS.md）：
+- occupancy_status：占用状态（available/reserved/occupied/blocked/out_of_service）
+- cleaning_status：清洁状态（clean/dirty/cleaning/inspection/rework）
+
+两个维度可自由组合，例如 reserved + dirty = 已预订但待清扫。
+状态机合法转换校验在 app/core/state_machine.py，由 API 层强制。
 """
 
 import enum
@@ -23,12 +26,20 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 
 
-class RoomStatus(str, enum.Enum):
+class OccupancyStatus(str, enum.Enum):
     available = "available"
+    reserved = "reserved"
     occupied = "occupied"
-    cleaning = "cleaning"
-    maintenance = "maintenance"
+    blocked = "blocked"
     out_of_service = "out_of_service"
+
+
+class CleaningStatus(str, enum.Enum):
+    clean = "clean"
+    dirty = "dirty"
+    cleaning = "cleaning"
+    inspection = "inspection"
+    rework = "rework"
 
 
 class RoomType(Base):
@@ -65,15 +76,26 @@ class Room(Base):
         ForeignKey("room_types.id", ondelete="RESTRICT"), nullable=False
     )
     floor: Mapped[int] = mapped_column(Integer, nullable=False)
-    status: Mapped[RoomStatus] = mapped_column(
+    occupancy_status: Mapped[OccupancyStatus] = mapped_column(
         Enum(
-            RoomStatus,
-            name="room_status",
+            OccupancyStatus,
+            name="occupancy_status",
             values_callable=lambda members: [m.value for m in members],
         ),
         nullable=False,
-        default=RoomStatus.available,
-        server_default=RoomStatus.available.value,
+        default=OccupancyStatus.available,
+        server_default=OccupancyStatus.available.value,
+        index=True,
+    )
+    cleaning_status: Mapped[CleaningStatus] = mapped_column(
+        Enum(
+            CleaningStatus,
+            name="cleaning_status",
+            values_callable=lambda members: [m.value for m in members],
+        ),
+        nullable=False,
+        default=CleaningStatus.clean,
+        server_default=CleaningStatus.clean.value,
         index=True,
     )
     notes: Mapped[str | None] = mapped_column(String(255))

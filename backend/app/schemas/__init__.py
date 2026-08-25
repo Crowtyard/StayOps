@@ -1,8 +1,55 @@
-"""Pydantic 请求/响应模型（schemas）。
+"""Pydantic 请求/响应模型（schemas）。"""
 
-Sprint 1 第二阶段（API 路由）时填充：
-- auth.py（登录/当前用户）
-- user.py / role.py / permission.py
-- room_type.py / room.py / audit.py
-本阶段仅保留包结构。
-"""
+from app.schemas.audit import AuditLogOut
+from app.schemas.auth import LoginRequest, MeOut, Token
+from app.schemas.common import Page
+from app.schemas.role import (
+    PermissionOut,
+    RoleBrief,
+    RoleCreate,
+    RoleOut,
+    RolePermissionSet,
+    RoleUpdate,
+)
+from app.schemas.room import (
+    RoomCreate,
+    RoomOut,
+    RoomStatusChange,
+    RoomTypeBrief,
+    RoomTypeCreate,
+    RoomTypeOut,
+    RoomTypeUpdate,
+    RoomUpdate,
+)
+from app.schemas.user import (
+    UserCreate,
+    UserOut,
+    UserRoleAssign,
+    UserUpdate,
+)
+
+__all__ = [
+    "AuditLogOut",
+    "LoginRequest",
+    "MeOut",
+    "Page",
+    "PermissionOut",
+    "RoleBrief",
+    "RoleCreate",
+    "RoleOut",
+    "RolePermissionSet",
+    "RoleUpdate",
+    "RoomCreate",
+    "RoomOut",
+    "RoomStatusChange",
+    "RoomTypeBrief",
+    "RoomTypeCreate",
+    "RoomTypeOut",
+    "RoomTypeUpdate",
+    "RoomUpdate",
+    "Token",
+    "UserCreate",
+    "UserOut",
+    "UserRoleAssign",
+    "UserUpdate",
+]

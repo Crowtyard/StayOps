@@ -9,7 +9,7 @@
 - role_permissions：精确同步（删除多余映射、补齐缺失映射）；SUPER_ADMIN 动态=全部权限
 - admin：不存在则创建（bcrypt 哈希，创建时校验）；已存在则不改密码（尊重「首次登录后可改密」），仅确保启用与 SUPER_ADMIN 角色
 - room_types：按 name upsert（更新价格/容量/描述）
-- rooms：按 room_number 缺失才创建（status=available）；已存在仅修正房型/楼层，不覆盖房态
+- rooms：按 room_number 缺失才创建（occupancy_status=available / cleaning_status=clean）；已存在仅修正房型/楼层，不覆盖状态
 
 安全：不输出任何密码、哈希、Token。
 """
@@ -22,11 +22,12 @@ from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
 from app.models import (
+    CleaningStatus,
+    OccupancyStatus,
     Permission,
     Role,
     RolePermission,
     Room,
-    RoomStatus,
     RoomType,
     User,
     UserRole,
@@ -51,8 +52,8 @@ PERMISSIONS: dict[str, tuple[str, str]] = {
     "room:read": ("查看房间", "查看房间列表与详情"),
     "room:write": ("编辑房间", "创建与更新房间、变更房态"),
     "room:delete": ("删除房间", "删除房间"),
-    "room:status_cleaning": ("房态-清洁中", "将房态变更为 cleaning"),
-    "room:status_maintenance": ("房态-维修中", "将房态变更为 maintenance"),
+    "room:status_cleaning": ("清洁状态变更", "变更房间清洁状态（cleaning_status）"),
+    "room:status_maintenance": ("置为维修停用", "将房间占用状态置为 out_of_service（维修/停用）"),
     "room_type:read": ("查看房型", "查看房型列表与详情"),
     "room_type:write": ("编辑房型", "创建与更新房型"),
     "room_type:delete": ("删除房型", "删除房型"),
@@ -241,11 +242,12 @@ def seed_rooms(db: Session, types_by_name: dict[str, RoomType]) -> None:
                 room_number=room_number,
                 room_type_id=rt.id,
                 floor=floor,
-                status=RoomStatus.available,
+                occupancy_status=OccupancyStatus.available,
+                cleaning_status=CleaningStatus.clean,
             )
             db.add(room)
         else:
-            # 不覆盖 status（运营可能已变更），仅修正房型与楼层
+            # 不覆盖状态（运营可能已变更），仅修正房型与楼层
             room.room_type_id = rt.id
             room.floor = floor
 
