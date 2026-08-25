@@ -1,0 +1,41 @@
+# StayOps 开发环境骨架（Sprint 1 前仅含 PostgreSQL）
+# 真实凭据通过同目录 .env 加载（.env 已被 .gitignore 忽略）
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: stayops-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-stayops}
+      POSTGRES_USER: ${POSTGRES_USER:-stayops}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+    ports:
+      - "5432:5432"
+    volumes:
+      - stayops_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-stayops} -d ${POSTGRES_DB:-stayops}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # backend:
+  #   build: ../backend
+  #   environment:
+  #     DATABASE_URL: ${DATABASE_URL}
+  #   ports:
+  #     - "8000:8000"
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+
+  # frontend:
+  #   build: ../frontend
+  #   ports:
+  #     - "3000:3000"
+  #   depends_on:
+  #     - backend
+
+volumes:
+  stayops_pgdata:

@@ -1,0 +1,87 @@
+# StayOps 权限规则 — dsh-permission-rules
+# 语法：按顺序匹配，首个命中胜出。工具名 glob，params 键/值 glob。
+# 文档：https://github.com/PerryLink/dsh-permission-rules
+
+rules:
+  # ============ 自动允许：只读与测试命令 ============
+  - match: { tools: [bash, pwsh], params: { command: "git status*" } }
+    action: allow
+    reason: "只读 Git 状态"
+
+  - match: { tools: [bash, pwsh], params: { command: "git diff*" } }
+    action: allow
+    reason: "只读 Diff"
+
+  - match: { tools: [bash, pwsh], params: { command: "git log*" } }
+    action: allow
+    reason: "只读日志"
+
+  - match: { tools: [bash, pwsh], params: { command: "npm test*" } }
+    action: allow
+    reason: "测试"
+
+  - match: { tools: [bash, pwsh], params: { command: "npm run test*" } }
+    action: allow
+    reason: "测试"
+
+  - match: { tools: [bash, pwsh], params: { command: "pnpm test*" } }
+    action: allow
+    reason: "测试"
+
+  - match: { tools: [bash, pwsh], params: { command: "pytest*" } }
+    action: allow
+    reason: "Python 测试"
+
+  - match: { tools: [bash, pwsh], params: { command: "docker compose ps*" } }
+    action: allow
+    reason: "只读容器状态"
+
+  - match: { tools: [bash, pwsh], params: { command: "docker compose logs*" } }
+    action: allow
+    reason: "只读日志"
+
+  # ============ 需要询问：有外部影响或不可逆的操作 ============
+  - match: { tools: [bash, pwsh], params: { command: "git push*" } }
+    action: ask
+    reason: "推送到远程仓库，需人工确认"
+
+  - match: { tools: [bash, pwsh], params: { command: "git reset --hard*" } }
+    action: ask
+    reason: "不可逆的硬重置，需人工确认"
+
+  - match: { tools: [bash, pwsh], params: { command: "docker system prune*" } }
+    action: ask
+    reason: "清理 Docker 资源，需人工确认"
+
+  - match: { tools: [bash, pwsh], params: { command: "setx*" } }
+    action: ask
+    reason: "修改系统级环境变量，需人工确认"
+
+  - match: { tools: [bash, pwsh], params: { command: "[Environment]::SetEnvironmentVariable*" } }
+    action: ask
+    reason: "修改系统级环境变量，需人工确认"
+
+  - match: { tools: [bash, pwsh], params: { command: "winget install*" } }
+    action: ask
+    reason: "安装系统软件，需人工确认"
+
+  - match: { tools: [bash, pwsh], params: { command: "choco install*" } }
+    action: ask
+    reason: "安装系统软件，需人工确认"
+
+  # ============ 禁止：危险破坏性操作 ============
+  - match: { tools: [bash, pwsh], params: { command: "rm -rf /*" } }
+    action: deny
+    reason: "禁止删除根目录"
+
+  - match: { tools: [bash, pwsh], params: { command: "*DROP DATABASE*" } }
+    action: deny
+    reason: "禁止直接删除数据库"
+
+  - match: { tools: [bash, pwsh], params: { command: "Remove-Item -Recurse -Force C:\\*" } }
+    action: deny
+    reason: "禁止递归删除用户目录/系统目录"
+
+  - match: { tools: [bash, pwsh], params: { command: "format*" } }
+    action: deny
+    reason: "禁止格式化磁盘"
