@@ -17,10 +17,22 @@ cp .env.example .env
 
 # 2. 启动 PostgreSQL（需 Docker）
 docker compose up -d postgres
-
-# 3. 启动后端（backend/ 下，待 Sprint 1 实现）
-# 4. 启动前端（frontend/ 下，待 Sprint 1 实现）
 ```
+
+后端（`backend/`，Sprint 1 进行中）：
+
+```powershell
+cd backend
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+.venv\Scripts\python.exe -m alembic upgrade head
+.venv\Scripts\python.exe -m app.seed          # 幂等种子数据
+.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
+```
+
+- 健康检查：`http://localhost:8000/health`
+- 开发管理员：`admin` / `Admin@123456`（仅开发环境）
+- 前端（`frontend/`）：Sprint 1 待实现
 
 ## 文档
 
@@ -35,4 +47,4 @@ docker compose up -d postgres
 
 所有 AI Coding Agent 与开发者必须先阅读 [AGENTS.md](AGENTS.md)。
 
-> 当前状态：Sprint 1 尚未开始（环境准备阶段）。
+> 当前状态：Sprint 1 第一阶段（后端骨架 + 数据层 + 种子数据）已完成，业务 API 与前端待第二阶段。
