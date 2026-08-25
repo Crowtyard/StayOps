@@ -12,7 +12,7 @@
 | pnpm | 10.34.5 | `cmd /c "pnpm --version"` | 同上，需经 `pnpm.cmd` 调用 |
 | Git | 2.55.0.windows.3 | `git --version` | 正常 |
 | Python | 3.11.9 / 3.12.10 | `python --version`、`py -0p` | 已装双版本：`python` 解析到 3.11.9，`py` 启动器默认 3.12.10（见已知问题 4） |
-| Docker | 客户端 29.7.2（Docker Desktop 4.88.0） | `docker --version`（安装目录完整路径） | Docker Desktop 已安装并启动，但 WSL2 未安装导致引擎无法启动（见已知问题 2） |
+| Docker | 客户端 29.7.2（Docker Desktop 4.88.0） | `docker version`、`docker run --rm hello-world` | 已就绪：WSL2 已安装（docker-desktop Running），hello-world 通过；已配置 registry-mirror 解决 Docker Hub 网络问题（见已知问题 2） |
 | DSH（DeepSeek Harness） | 0.1.1-rc.2 | 读取 `Harness\package.json` 与 `node_modules\@deepseek-ai\dsh\package.json` | 无全局 `dsh` CLI（不在 PATH）；`DSH_SHELL=1`，`DSH_HOME=D:\MY SELF\DeepSeek Harness\Data` |
 
 ## 二、环境检查结论
@@ -60,7 +60,7 @@
 ## 三、已知问题
 
 1. **PowerShell 执行策略阻止 npm/pnpm 的 .ps1 启动器**：全部作用域（MachinePolicy/UserPolicy/Process/CurrentUser/LocalMachine）均为 Undefined（Windows 下有效策略为 Restricted），`npm`、`pnpm` 直接调用会报 `SecurityError`。绕过方式：在 pwsh 中改用 `npm.cmd` / `pnpm.cmd`，或将 CurrentUser 策略设为 `RemoteSigned`。
-2. **Docker 引擎无法启动（WSL2 未安装）**：Docker Desktop 4.88.0 已通过 winget 官方源安装并启动，`docker` 客户端 29.7.2 可用（`C:\Program Files\Docker\Docker\resources\bin\docker.exe`），但 **WSL2 未安装**（`wsl --status` 提示未安装），Docker 引擎无法初始化（API 返回 500）。解决步骤：以管理员运行 `wsl --install` → 重启系统 → 打开 Docker Desktop → `docker run --rm hello-world` 验证。在此之前 `docker compose up -d postgres` 不可用。Docker 客户端不在 PATH 是安装后 PATH 未刷新的正常现象，重开终端即可。
+2. **Docker Hub 网络不可达（已解决）**：`auth.docker.io` 在本网络直连与代理均不可达（EOF），镜像无法拉取。已配置 registry-mirror（`~/.docker/daemon.json` → `docker.m.daocloud.io`、`docker.1ms.run`，直连可达），`postgres:16-alpine` 已成功拉取并启动（healthy，`0.0.0.0:5432`）。若镜像源失效需更换。
 3. **无全局 dsh CLI**：`dsh` 命令不在 PATH，DSH 通过 Harness 桌面应用运行；`dsh --version` 无法执行。
 4. **Python 双版本共存**：`python`（PATH 第一个）为 3.11.9，`py` 启动器默认为 3.12.10。创建 venv 或运行脚本时需显式指定版本，避免 3.11/3.12 混用。
 5. **部分 DSH 插件 package.json 为非 UTF-8 编码**：如 `dshmarket` 的 package.json 为 GBK/ANSI 编码，PowerShell `ConvertFrom-Json` 解析报错（`Invalid object passed in`）。脚本读取这些文件时需指定编码（如 `Get-Content -Encoding Default`），不影响插件实际运行。
