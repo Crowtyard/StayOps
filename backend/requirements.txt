@@ -1,5 +1,5 @@
-# StayOps 后端依赖（Python 3.11）
-# bcrypt 固定 4.0.1：passlib 1.7.4 与 bcrypt>=4.1 存在 __about__ 兼容性问题
+# StayOps backend dependencies (Python 3.11)
+# bcrypt pinned 4.0.1: passlib 1.7.4 incompatible with bcrypt>=4.1 (__about__)
 fastapi==0.141.1
 uvicorn==0.52.4
 sqlalchemy==2.0.52

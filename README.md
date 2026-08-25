@@ -1,6 +1,12 @@
-# StayOps
+# StayOps V1.0
+
+```text
+Product:                  StayOps
+Current Development Version: V1.0
+```
 
 精品住宿智能运营系统 —— 面向济南历下区 CBD 中高端住宿项目（约 28 间客房）的内部运营管理系统。
+（代码内部技术标识仍为 `stayops`：包名/数据库名/服务名不携带版本号。）
 
 ## 技术栈
 

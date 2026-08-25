@@ -1,6 +1,9 @@
 # StayOps 开发环境骨架（Sprint 1 前仅含 PostgreSQL）
 # 真实凭据通过同目录 .env 加载（.env 已被 .gitignore 忽略）
 
+# 固定项目名：避免目录重命名（如 StayOps V1.0）导致 compose 项目名变化、容器重建
+name: stayops
+
 services:
   postgres:
     image: postgres:16-alpine
