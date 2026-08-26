@@ -8,6 +8,24 @@
 - `docs/` — 项目文档
 - `tests/` — 测试
 
+## 后端结构（Sprint 2 · S2-T1 更新）
+
+```text
+backend/app/
+  models/            # Guest / Reservation / Stay 新增（Booking 域，枚举 + 关系）
+  schemas/           # guest / reservation / stay / availability 新增
+  core/              # 新增 business_date.py（Property Business Date，Asia/Shanghai）
+                     # 新增 booking_state_machine.py（Reservation / Stay 状态机）
+  services/booking.py   # 新增 service 层：可售性引擎、预订生命周期、
+                        # Check-in/Check-out 事务、权限裁剪序列化
+  api/routes/        # 新增 guests / availability / reservations / stays
+  alembic/versions/16debb5c57f8_add_booking_domain.py   # Booking 域迁移
+```
+
+- 预订域业务集中在 `services/booking.py`（routes 保持薄），决策见 docs/DECISIONS.md（S2-T1 第 9 条）。
+- Double Booking 最终仲裁在数据库（排他约束 `ex_reservations_room_daterange` + btree_gist），应用层预检仅为快速路径。
+- 后端是 PII / 权限的最终边界：响应按 guest:read / reservation:read 裁剪字段（不只是前端隐藏）。
+
 ## 通信架构：HttpOnly Cookie + BFF
 
 浏览器不接触 JWT。前端所有后端调用统一经过 Next.js Route Handler：
@@ -59,8 +77,8 @@ frontend/src/
   - `setup-users.ts` 在测试 `beforeAll` 中以 admin 直连后端创建 FRONT_DESK / HOUSEKEEPING 测试账号（幂等）
   - 凭据仅存 gitignored 的 `frontend/e2e/.env.test-creds`（模板 `test-creds.example`），经环境变量注入 worker
   - 单 worker 串行执行保证共享测试库确定性；不触碰开发环境（127.0.0.1:8000 / localhost:3000）
-- **后端 pytest**（`backend/`，87 用例）：独立测试库 `stayops_test`（与 E2E 同库策略），
-  会话级 DROP/CREATE + 迁移 + seed，用例级事务回滚隔离
+- **后端 pytest**（`backend/`，163 用例 = Sprint 1 基线 87 + S2-T1 Booking 76）：独立测试库 `stayops_test`（与 E2E 同库策略），
+  会话级 DROP/CREATE + 迁移 + seed，用例级事务回滚隔离；并发用例（Double Booking / Check-in / Check-out / 业务单号）用两线程 + 独立 Session 真实提交验证
 
 ## 原则
 

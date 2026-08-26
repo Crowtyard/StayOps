@@ -5,10 +5,14 @@ from fastapi import APIRouter
 from app.api.routes import (
     audit_logs,
     auth,
+    availability,
+    guests,
     permissions,
+    reservations,
     roles,
     room_types,
     rooms,
+    stays,
     users,
 )
 
@@ -20,3 +24,7 @@ api_router.include_router(permissions.router)
 api_router.include_router(room_types.router)
 api_router.include_router(rooms.router)
 api_router.include_router(audit_logs.router)
+api_router.include_router(guests.router)
+api_router.include_router(availability.router)
+api_router.include_router(reservations.router)
+api_router.include_router(stays.router)

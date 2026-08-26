@@ -73,7 +73,7 @@ def test_me_returns_profile_and_permissions(client, admin_token):
         "audit:read",
     ]:
         assert code in codes, f"缺少权限 {code}"
-    assert len(codes) == 17  # SUPER_ADMIN = 全部权限
+    assert len(codes) == 26  # SUPER_ADMIN = 全部权限（Sprint 1 的 17 + Sprint 2 Booking 的 9）
 
 
 def test_me_without_token(client):

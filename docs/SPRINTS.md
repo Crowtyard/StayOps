@@ -76,7 +76,7 @@ Sprint 1 is frozen as the first stable StayOps development baseline.
 
 Future development must build on top of this baseline through subsequent commits.
 
-## Sprint 2（任务规划完成 · 待开发）
+## Sprint 2（S2-T1 已完成）
 
 ```text
 Sprint 2            = APPROVED FOR TASK PLANNING
@@ -84,9 +84,9 @@ Sprint 2            = APPROVED FOR TASK PLANNING
 计划 Release        = v1.0.0-alpha.2
 Sprint 2 PRD        = FINAL
 Sprint 2 Task Spec  = APPROVED
-Sprint 2 Coding     = NOT STARTED
-S2-T1               = READY TO START
-S2-T2               = NOT STARTED
+Sprint 2 Coding     = IN PROGRESS（S2-T1 完成）
+S2-T1               = COMPLETE · QA PASS · CHECKPOINTED
+S2-T2               = READY TO START
 S2-T3               = NOT STARTED
 DSH                 = IDLE
 Kun                 = PROJECT MANAGER + QA
@@ -99,4 +99,4 @@ Kun                 = PROJECT MANAGER + QA
 - S2-T2.md — Booking Operations UI（前端）
 - S2-T3.md — Integration & E2E（全链路验收）
 
-Sprint 2 Coding 尚未开始；`v1.0.0-alpha.1` 冻结不动，`v1.0.0-alpha.2` 仅在 Sprint 2 Final Acceptance 全部 PASS 后创建。
+Sprint 2 进展：S2-T1（Booking Domain Foundation）已完成并通过独立 QA（pytest 167 / alembic 无 drift / S2T1-BLK-01 已修复关闭）；`v1.0.0-alpha.1` 冻结不动，`v1.0.0-alpha.2` 仅在 Sprint 2 Final Acceptance 全部 PASS 后创建。

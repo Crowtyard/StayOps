@@ -60,6 +60,16 @@ PERMISSIONS: dict[str, tuple[str, str]] = {
     "audit:read": ("查看审计日志", "查看审计日志"),
     "audit:write": ("写入审计日志", "写入审计日志"),
     "audit:delete": ("删除审计日志", "删除审计日志"),
+    # Sprint 2（S2-T1）：Booking 域权限
+    "guest:read": ("查看客人", "查看客人档案与联系方式"),
+    "guest:write": ("编辑客人", "创建与更新客人档案"),
+    "reservation:read": ("查看预订", "查看预订列表与详情"),
+    "reservation:write": ("编辑预订", "创建与更新预订"),
+    "reservation:cancel": ("取消预订", "取消 CONFIRMED 状态的预订"),
+    "reservation:no_show": ("标记未到店", "将 CONFIRMED 预订标记为未到店"),
+    "stay:read": ("查看入住", "查看入住列表与详情"),
+    "stay:check_in": ("办理入住", "办理预订入住并创建 Stay"),
+    "stay:check_out": ("办理退房", "办理退房"),
 }
 
 ROLES: dict[str, str] = {
@@ -72,6 +82,20 @@ ROLES: dict[str, str] = {
 }
 
 # 角色 -> 权限码列表；SUPER_ADMIN 特殊处理为「全部权限」
+# Sprint 2（S2-T1）：MANAGER / FRONT_DESK 获得全部 9 个 Booking 权限；
+# HOUSEKEEPING / MAINTENANCE / FINANCE 不获得 Booking 权限（总纲 §8 角色矩阵）
+BOOKING_PERMISSIONS: list[str] = [
+    "guest:read",
+    "guest:write",
+    "reservation:read",
+    "reservation:write",
+    "reservation:cancel",
+    "reservation:no_show",
+    "stay:read",
+    "stay:check_in",
+    "stay:check_out",
+]
+
 ROLE_PERMISSIONS: dict[str, list[str]] = {
     "SUPER_ADMIN": [],
     "MANAGER": [
@@ -84,8 +108,15 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
         "room_type:write",
         "audit:read",
         "audit:write",
+        *BOOKING_PERMISSIONS,
     ],
-    "FRONT_DESK": ["room:read", "room:write", "room_type:read", "audit:read"],
+    "FRONT_DESK": [
+        "room:read",
+        "room:write",
+        "room_type:read",
+        "audit:read",
+        *BOOKING_PERMISSIONS,
+    ],
     "HOUSEKEEPING": ["room:read", "room:status_cleaning"],
     "MAINTENANCE": ["room:read", "room:status_maintenance"],
     "FINANCE": ["audit:read", "room:read"],

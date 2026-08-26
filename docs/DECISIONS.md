@@ -78,3 +78,50 @@ venv 因启动器硬编码旧路径而重建；requirements.txt 统一为 UTF-8 
 8. **E2E 与 pytest 共用 stayops_test 且互斥**：两者会话开始时都会 DROP/CREATE 该库，因此禁止并行运行（实测并行会互相打断并造成 E2E 误失败）。本地并行执行测试时应错开。
 9. **next dev 自动改 tsconfig**：E2E dev server（NEXT_DIST_DIR=.next-e2e）首次运行会把 `.next-e2e/**` 类型路径写入 tsconfig include（与 `.next/**` 同理），该改动保留以支持 E2E 目录下的 typed routes 类型生成；eslint 与 .gitignore 同步忽略 `.next-e2e/`。
 10. **依赖版本事实（前端测试）**：Vitest 4.1.11 / @playwright/test 1.62.1（浏览器 chromium-1234 已本地安装）/ jsdom 30（要求 Node ≥ 22，本项目 Node 24 满足）。
+
+## 2026-08-26 — Sprint 2 S2-T1：Booking Domain Foundation
+
+1. **Reservation / Stay 分离，一个 Reservation 至多一个 Stay**。背景：Reservation = 未来住宿计划，Stay = 实际入住事实，二者生命周期不同（取消/未到店只影响 Reservation；退房只影响 Stay）。决策：两个独立模型，`stays.reservation_id` UNIQUE 约束 + Check-in 事务内状态校验（SELECT FOR UPDATE 后仅 CONFIRMED → CHECKED_IN 才创建 Stay）双保险。后果：数据模型与状态机各成体系，历史可追溯（提前退房后 Reservation=COMPLETED、Stay=CHECKED_OUT 各自保留）。
+
+2. **未来 Reservation 不修改 Room 当前房态（解耦）**。背景：`occupancy_status` 只描述现场状态；把未来预订提前置 `reserved` 会与现场事实冲突且随日期漂移。决策：创建/修改 Reservation 不触碰 `rooms.occupancy_status`；未来可售性完全由 Reservation 日期区间 + Availability Engine 决定。后果：可售性与现场状态两个维度独立，WALK_IN/提前到店改期流程简单。
+
+3. **日期区间统一 `[check_in_date, check_out_date)`**。含入住日、不含退房日；紧邻允许（8/30→9/1 与 9/1→9/3 共存）、重叠禁止；`check_out_date <= check_in_date` → 422。数据库排他约束用 `daterange(..., '[)')` 与业务语义完全一致。
+
+4. **Double Booking 数据库级最终仲裁：daterange + EXCLUDE USING gist + btree_gist + 部分约束**。背景：应用层 `SELECT → 判断 → INSERT` 存在竞态窗口，不能作为最终保护。决策：`EXCLUDE USING gist (room_id WITH =, daterange(check_in_date, check_out_date, '[)') WITH &&) WHERE (status NOT IN ('CANCELLED','NO_SHOW','COMPLETED'))`；`room_id WITH =` 需要 `CREATE EXTENSION btree_gist`。部分约束只作用于仍占用日期区间的 CONFIRMED / CHECKED_IN，CANCELLED / NO_SHOW / COMPLETED 自动从索引移除（提前退房释放剩余日期，REV-01）。应用层预检（Availability）仅为快速失败与友好报错。后果：并发 Double Booking 必然 1 SUCCESS + 1 CONFLICT；排他约束冲突（psycopg2 pgcode `23P01`）在 service 层统一映射为 409「该房间在所选日期区间已被预订」，不泄漏 500。
+
+5. **Reservation `COMPLETED` 状态仅由 Stay Check-out 事务触发（REV-01）**。状态机转换表保留 `CHECKED_IN → COMPLETED` 边，但 reservations 路由绝不提供任何 Update / Action 端点写 COMPLETED；唯一写点位于 `app/services/booking.py::check_out_stay` 的同一数据库事务内。后果：任何普通 API 无法手工把 Reservation 置为 COMPLETED，状态一致性有保证。
+
+6. **Check-in / Check-out 事务化**。Check-in 单事务：Reservation CONFIRMED→CHECKED_IN + Stay CREATE ACTIVE + Room occupancy→occupied + Audit `reservation.check_in`；Check-out 单事务：Stay ACTIVE→CHECKED_OUT + Reservation CHECKED_IN→COMPLETED + Room occupancy→available + Room cleaning→dirty + Audit `stay.check_out`。任一步失败全部回滚（service 层 catch HTTPException → rollback 后重抛；IntegrityError → rollback → 409）。并发用 `SELECT ... FOR UPDATE` 串行化 + 状态校验 + `stays.reservation_id` 唯一约束。后果：pytest 显式构造审计写入失败验证无半状态；并发 Check-in / Check-out 均 1 SUCCESS + 1 CONFLICT。
+
+7. **PII / 权限边界（REV-02 / REV-FINAL-04）**。`guest:read` 门控 Guest 身份/联系方式（name/phone/email/Guest notes）；`reservation:read` 门控 Reservation 数据（reservation_no、日期、房号/房型、source、status、agreed_total_amount、currency、Reservation notes）；`agreed_total_amount` 不是 Guest PII，Sprint 2 不新增 `reservation:financial_read`。实现：`GET /guests*` 无 guest:read 整体 403；`GET /reservations*` / `GET /stays*` 的响应由 service 层序列化按权限裁剪字段（无 guest:read 仅保留 guest_id；无 reservation:read 不含嵌套 reservation 摘要），路由使用 `response_model_exclude_none=True` 保证缺失键不出现在 JSON。后果：HOUSEKEEPING（两者皆无）从任何 Booking 出口都得不到身份、联系方式和金额。
+
+8. **业务单号：PG Sequence 原子生成 + UNIQUE 约束（REV-04）**。格式 `RSV{YYYYMMDD}-{NNNN}` / `STY{YYYYMMDD}-{NNNN}`（日期 = Property Business Date，NNNN = 独立 Sequence `nextval` 结果，4 位起、可自然超长）。禁止 SELECT MAX+1。Sequence 消耗不受回滚影响（可能产生空洞，业务可接受）。并发创建必然无重复编号，UNIQUE 约束为最终兜底。
+
+9. **新增 service 层（`app/services/booking.py`）**。背景：Check-in / Check-out 事务、可售性引擎、权限裁剪序列化被多个路由复用，routes 内联会导致重复与不一致。决策：预订域业务集中到 service 层，routes 保持薄（鉴权依赖 + 参数 + 调 service + 序列化）；可售性/事务逻辑单点维护。其余 Sprint 1 路由风格保持不变。
+
+10. **Property Business Date（REV-FINAL-01/02/08）与固定时区实现**。统一 `Asia/Shanghai`：Check-in 资格（business_date ∈ [check_in, check_out)）、No-show 资格（business_date >= check_in）、Availability 的「今天」、WALK_IN 默认 check_in_date。实现 `app/core/business_date.py`：由于本环境无 PyPI 网络、无法安装 `tzdata`（Windows Python 无系统 tzdata，`ZoneInfo('Asia/Shanghai')` 会失败），采用固定偏移 `timezone(timedelta(hours=8), name='Asia/Shanghai')`——上海自 1991 年起无夏令时，固定 UTC+8 与现代业务日期完全等价，且不依赖宿主机时区；SQL 侧时间转换用 PG 内置 `timezone('Asia/Shanghai', ...)`。时间戳（actual_check_in_at / actual_check_out_at / created_at / updated_at）一律 timezone-aware（timestamptz）。后果：跨平台、跨宿主机时区一致；测试日期全部动态生成（禁止硬编码年月日）。
+
+11. **Reservation PATCH 编辑范围与重校验（REV-FINAL-05）**。仅 CONFIRMED 可修改：guest_id、room_id、room_type_id、check_in_date、check_out_date、source、external_reference、agreed_total_amount、currency、notes；修改 room_id / room_type_id / check_in_date / check_out_date 时在同一事务内重新执行 Availability 预检 + Room/RoomType 一致性 + 排他约束（UPDATE 时数据库自动重校验，23P01 → 409）。CHECKED_IN / CANCELLED / NO_SHOW / COMPLETED 经 PATCH 修改任何核心字段 → 409。`status` 字段不进入 Update schema：**PATCH 携带 status → 422（strict schema 显式拒绝，见下方 S2T1-BLK-01 修订），状态只能经专用 action 端点变更**。此为入住前预订修改，不属于换房/延住工作流。
+
+12. **Room / Room Type 一致性（REV-FINAL-06）：选择 422**。`reservation.room_type_id` 必须等于 `room.room_type_id`，创建与 PATCH 均校验。错误码按任务书默认取 **422**（输入组合不合法，与日期非法同级；409 保留给状态/资源占用类冲突，语义边界更清晰）。
+
+13. **查询契约与 Dashboard / Room Detail 组合策略（REV-FINAL-07）**。不新增聚合 API：`GET /guests?search=`（name OR phone）；`GET /reservations` 支持 status/room_id/guest_id/room_type_id/source/check_in_date/check_out_date/search（search 覆盖 reservation_no 与 Guest name/phone，命中结果仍遵守 guest:read 裁剪）；`GET /stays` 支持 status/room_id/planned_check_out_date。今日到店/离店/在住/未来 7 天由 T2 组合既有 List API 计算；`GET /availability` 返回全量房间 + 可售性标注（28 间规模，不分页），T2 Room Detail 可组合 `GET /rooms/{id}` + `GET /stays?room_id=` + `GET /reservations?room_id=`。Sprint 1 核心响应不变。
+
+14. **Concurrent Check-out 并发保证（REV-FINAL-08）**。`SELECT ... FOR UPDATE` 锁定 stay 行：第二个事务阻塞至第一个提交后读到 CHECKED_OUT → 409，不产生第二次有效退房与重复审计；最终 Stay=CHECKED_OUT、Reservation=COMPLETED、Room=available+dirty。并发测试用两线程 + 独立 Session 真实提交验证（Check-in 同理，另由 `stays.reservation_id` 唯一约束兜底）。
+
+15. **Check-out 将 Room cleaning_status 无条件置 dirty**。背景：房间清洁状态机 `clean → dirty` 是唯一合法入边，但退房时房间可能处于 cleaning/inspection/rework/dirty（在住期间保洁介入）。决策：Check-out 事务内无条件置 `dirty`（不走手动状态接口的状态机校验），保证「退房即脏房」业务不变式；手动状态接口的状态机语义保持不变。已在 DECISIONS 记录以明确该例外。
+
+16. **迁移内 Enum 类型创建方式**。`op.create_table` 编译时会通过 `_on_table_create` 自动为列上的 Enum 发 `CREATE TYPE`，与显式 `Enum.create(checkfirst=True)` 叠加会触发 `DuplicateObject` 回滚。决策：迁移内使用 `sa.dialects.postgresql.ENUM(..., create_type=False)` + 显式 `.create(checkfirst=True)` / `.drop(checkfirst=True)`，与既有 migration（`9e3f9d00338c`）的显式建类型风格一致。
+
+## 2026-08-27 — S2T1-BLK-01 修订：Reservation PATCH 严格输入校验
+
+背景：原先实现（ADR #11 初版）采用 Pydantic 默认 `extra="ignore"`——`status` 与未知字段被静默忽略、空 PATCH `{}` 返回伪成功 200、混合 payload（status + notes）出现 Partial Success + Silent Ignore。S2-T1 Independent QA（Defect S2T1-BLK-01）判定此类「API 伪成功」不允许，与 APPROVED Task Spec（状态只能经专用 action 端点变更）不符。
+
+决策（修订 ADR #11）：
+- `ReservationUpdate` 使用 strict request schema：`ConfigDict(extra="forbid")` —— 未知字段（含不属于 schema 的 `status`）一律 **422**，不得静默忽略；
+- schema `model_validator` 拒绝空 payload：`PATCH {}` 一律 **422**，不得返回伪成功 200（service 层 no-op 分支同样改为显式 422，防御双保险）；
+- `status` 不属于 `ReservationUpdate`，普通 PATCH 携带 `status` → **422**；状态只能经 `cancel / no-show / check-in / check-out` 专用 action 端点改变；
+- 校验在请求解析阶段原子失败：混合 payload 任何字段都不会被部分应用（无 Partial Success）；
+- 合法 PATCH 行为（CONFIRMED 全字段编辑、room/room_type/dates 重校验、终态 409）保持不变。
+
+后果：PATCH 不再存在 Silent Ignore 路径；pytest 增加严格校验用例（status / 未知字段 / 混合 payload / 空 payload / 合法 notes），总数由 163 增至 168。

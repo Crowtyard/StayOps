@@ -1,6 +1,6 @@
 # StayOps API
 
-> Sprint 1 第二阶段已实现。统一前缀 `/api/v1`，JSON 请求/响应，JWT（Bearer）认证。
+> Sprint 1 第二阶段已实现，Sprint 2 S2-T1 扩展 Booking 域。统一前缀 `/api/v1`，JSON 请求/响应，JWT（Bearer）认证。
 
 ## 约定
 
@@ -30,7 +30,7 @@
 | PUT | /roles/{id} | 更新角色 | role:write |
 | DELETE | /roles/{id} | 删除角色（级联清理关联） | role:delete |
 | POST | /roles/{id}/permissions | 设置角色权限（整体替换，空=清空） | role:write |
-| GET | /permissions | 权限列表（分页，17 个） | role:read |
+| GET | /permissions | 权限列表（分页，26 个 = Sprint 1 的 17 + Booking 的 9） | role:read |
 | GET | /room-types | 房型列表（分页，含 room_count） | room_type:read |
 | POST | /room-types | 创建房型 | room_type:write |
 | GET | /room-types/{id} | 房型详情 | room_type:read |
@@ -43,6 +43,21 @@
 | DELETE | /rooms/{id} | 删除房间 | room:delete |
 | POST | /rooms/{id}/status | 房态变更（状态机校验，非法 409；写审计） | room:write 或 room:status_cleaning / room:status_maintenance（对应目标房态） |
 | GET | /audit-logs | 审计日志列表（分页，`?action=` / `?user_id=` / `?resource_type=` 筛选） | audit:read |
+| GET | /guests | 客人列表（分页，`?search=` 匹配 name OR phone） | guest:read |
+| POST | /guests | 创建客人 | guest:write |
+| GET | /guests/{id} | 客人详情 | guest:read |
+| PATCH | /guests/{id} | 更新客人 | guest:write |
+| GET | /availability | 可售性查询（`?check_in_date=&check_out_date=&room_type_id=`，返回全量房间 + 可售标注） | reservation:read |
+| GET | /reservations | 预订列表（分页，筛选见下） | reservation:read |
+| POST | /reservations | 创建预订（CONFIRMED） | reservation:write |
+| GET | /reservations/{id} | 预订详情 | reservation:read |
+| PATCH | /reservations/{id} | 修改预订（仅 CONFIRMED） | reservation:write |
+| POST | /reservations/{id}/cancel | 取消预订（CONFIRMED → CANCELLED） | reservation:cancel |
+| POST | /reservations/{id}/no-show | 标记未到店（CONFIRMED → NO_SHOW，需 business_date ≥ check_in_date） | reservation:no_show |
+| POST | /reservations/{id}/check-in | 办理入住（单事务：Reservation CHECKED_IN + Stay ACTIVE + Room occupied + 审计） | stay:check_in |
+| GET | /stays | 入住列表（分页，`?status=` / `?room_id=` / `?planned_check_out_date=`） | stay:read |
+| GET | /stays/{id} | 入住详情 | stay:read |
+| POST | /stays/{id}/check-out | 办理退房（单事务：Stay CHECKED_OUT + Reservation COMPLETED + Room available+dirty + 审计） | stay:check_out |
 
 ## 认证与权限
 
@@ -80,6 +95,78 @@
 | GET | /api/auth/me | 读 Cookie 调后端 /auth/me；401 时清 Cookie |
 | POST | /api/auth/logout | 清 Cookie |
 | * | /api/bff/{...path} | 通用代理 → `BACKEND_API_URL/api/v1/{...path}`：附加 Bearer、透传查询串/请求体/状态码/`detail`、转发 X-Forwarded-For；后端不可达 502 |
+
+## Booking 域（Sprint 2 · S2-T1）
+
+### Property Business Date
+
+- 所有业务日期判断统一使用 **Asia/Shanghai（UTC+8）当前日期**（`business_date`）：Check-in 资格、No-show 资格、Availability 的「今天」、WALK_IN 默认 check_in_date。
+- 日期区间统一 `[check_in_date, check_out_date)`：包含入住日、不含退房日；紧邻允许、重叠 409；`check_out_date <= check_in_date` → 422。
+- 时间戳（actual_check_in_at / actual_check_out_at / created_at / updated_at）一律 timezone-aware。
+
+### Reservation / Stay 状态机
+
+```text
+Reservation: CONFIRMED ── CANCELLED / NO_SHOW / CHECKED_IN ──(仅 Check-out 事务)── COMPLETED
+Stay:        ACTIVE ── CHECKED_OUT（终态）
+```
+
+- 状态只能经专用 action 端点变更（cancel / no-show / check-in / check-out）；PATCH 不含 status 字段。
+- Check-in 资格：`status = CONFIRMED` 且 `business_date ∈ [check_in_date, check_out_date)`；未来提前入住 409、已过 check_out_date 409。
+- No-show 资格：`status = CONFIRMED` 且 `business_date >= check_in_date`；未来预订 409。
+- `CHECKED_IN → COMPLETED` 只能由 Stay Check-out 事务触发（REV-01）。
+
+### PII 与权限裁剪（REV-02 / REV-FINAL-04）
+
+- `GET /guests*` 无 `guest:read` → 整体 403。
+- 无 `guest:read` 时，任何响应（reservations / stays 等）不含 `name / phone / email / Guest notes / guest_name`，仅保留 `guest_id` 供关系关联。
+- 无 `reservation:read` 时，不含 `reservation_no`、日期、房号/房型、source、status、`agreed_total_amount`、currency、Reservation notes（含嵌套）。
+- 实现：service 层按权限构建响应字段；路由 `response_model_exclude_none=True` —— 被裁剪字段与 null 字段（如未退房的 `actual_check_out_at`）以「键缺失」呈现，而不是 null。
+- HOUSEKEEPING 两者皆无：Booking 端点全部 403，仅能经 Rooms API 看到房态（如 dirty）。
+
+### 409 场景清单（Booking 域）
+
+Double Booking（含并发撞排他约束 23P01）、blocked / out_of_service 房间、区间含业务日期当天时 occupied / reserved 房间、Active Stay 重叠、Dirty room Check-in、Occupied room Check-in、Check-in 日期资格不符（提前/过期）、未来预订 No-show、CANCELLED / NO_SHOW 后续操作、已 Check-in 重复 Check-in、非 ACTIVE Stay Check-out、已退房重复 Check-out、非法状态机转换、非 CONFIRMED 状态 PATCH。422：日期非法（co <= ci / 格式错误）、Room / Room Type 不一致（REV-FINAL-06）。
+
+### 响应示例
+
+`GET /api/v1/availability?check_in_date=2026-08-30&check_out_date=2026-09-01`（日期为示例，实现一律动态）：
+
+```json
+{
+  "business_date": "2026-08-26",
+  "check_in_date": "2026-08-30",
+  "check_out_date": "2026-09-01",
+  "total": 28,
+  "available_count": 27,
+  "items": [
+    {
+      "room_id": 13,
+      "room_number": "203",
+      "room_type_id": 3,
+      "room_type_name": "豪华大床房",
+      "floor": 2,
+      "available": true,
+      "reason": null
+    },
+    {
+      "room_id": 1,
+      "room_number": "101",
+      "room_type_id": 1,
+      "room_type_name": "标准大床房",
+      "floor": 1,
+      "available": false,
+      "reason": "该房间在所选日期区间已被预订"
+    }
+  ]
+}
+```
+
+`POST /api/v1/reservations/{id}/check-in` 返回 `{"reservation": {...}, "stay": {...}}`（Stay 含 `stay_no`、`actual_check_in_at`、`planned_check_out_date`，供退房流程使用）。
+
+### 业务单号
+
+`reservation_no` / `stay_no` 服务端生成：`RSV{YYYYMMDD}-{NNNN}` / `STY{YYYYMMDD}-{NNNN}`（日期 = Property Business Date；NNNN = PG Sequence 原子取号，唯一约束兜底）。禁止客户端传入。
 
 ## 示例
 
