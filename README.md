@@ -25,7 +25,7 @@ cp .env.example .env
 docker compose up -d postgres
 ```
 
-后端（`backend/`，Sprint 1 进行中）：
+后端（`backend/`，Sprint 1 已完成）：
 
 ```powershell
 cd backend
@@ -50,7 +50,26 @@ pnpm.cmd dev                        # http://localhost:3000
 
 > 前后端需分别启动；后端需先运行在 `http://127.0.0.1:8000`（见上文）。前端不接触 Token：登录后 JWT 只存在 HttpOnly Cookie，其余 API 统一走 `/api/bff/*` 由服务端附加 Bearer 转发。
 
-前端质量命令：`pnpm.cmd lint`、`pnpm.cmd typecheck`、`pnpm.cmd build`。
+前端质量命令：`pnpm.cmd lint`、`pnpm.cmd typecheck`、`pnpm.cmd test`（Vitest）、`pnpm.cmd build`。
+
+## 测试
+
+```powershell
+# 后端 pytest（独立测试库 stayops_test，87 用例）
+cd backend
+.venv\Scripts\python.exe -m pytest -q
+
+# 前端单元/组件测试（Vitest，74 用例）
+cd frontend
+pnpm.cmd test
+
+# Playwright E2E（独立 stayops_test 库 + 专用端口 8001/3001，10 用例；不触碰开发数据）
+cd frontend
+Copy-Item e2e\test-creds.example e2e\.env.test-creds   # 首次：填入测试库凭据（gitignored）
+pnpm.cmd test:e2e
+```
+
+详见 [tests/README.md](tests/README.md)、[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
 ## 文档
 
@@ -65,4 +84,4 @@ pnpm.cmd dev                        # http://localhost:3000
 
 所有 AI Coding Agent 与开发者必须先阅读 [AGENTS.md](AGENTS.md)。
 
-> 当前状态：Sprint 1 后端（骨架 + 认证 + RBAC + 房态双维度状态机 + 审计）已完成；前端 T3a（登录/首页概览/房态棋盘/房间详情 + BFF 认证链路）已完成；T3b（用户/角色/房型/审计管理页面）待开发。
+> 当前状态：Sprint 1 完成（T1 环境 → T2 后端认证/RBAC/双维度房态/审计 → T3a 前端核心链路 → T3b 管理页面 + Vitest/Playwright 测试体系），等待验收。

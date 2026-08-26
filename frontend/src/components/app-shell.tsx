@@ -34,13 +34,14 @@ export function useUser(): MeOut | null {
   return useContext(UserContext);
 }
 
+/** 供测试环境注入用户上下文（页面组件经 useUser 读取） */
+export { UserContext };
+
 interface NavItem {
   href: string;
   label: string;
   icon: React.ReactNode;
   permission?: string;
-  /** T3b 阶段实现的页面（导航可见，页面暂未开放） */
-  upcoming?: boolean;
 }
 
 const NAV_ITEMS: NavItem[] = [
@@ -51,28 +52,24 @@ const NAV_ITEMS: NavItem[] = [
     label: "房型",
     icon: <IconTag />,
     permission: "room_type:read",
-    upcoming: true,
   },
   {
     href: "/settings/users",
     label: "用户",
     icon: <IconUsers />,
     permission: "user:read",
-    upcoming: true,
   },
   {
     href: "/settings/roles",
     label: "角色与权限",
     icon: <IconShield />,
     permission: "role:read",
-    upcoming: true,
   },
   {
     href: "/settings/audit-logs",
     label: "审计日志",
     icon: <IconAudit />,
     permission: "audit:read",
-    upcoming: true,
   },
 ];
 
@@ -144,18 +141,6 @@ export default function AppShell({ user, offline, children }: AppShellProps) {
           >
             <span className="[&>svg]:size-5">{item.icon}</span>
             <span className="flex-1">{item.label}</span>
-            {item.upcoming ? (
-              <span
-                className={`rounded px-1.5 py-0.5 text-[10px] leading-none ring-1 ring-inset ${
-                  active
-                    ? "bg-white/15 text-white ring-white/30"
-                    : "bg-gray-100 text-gray-500 ring-gray-300"
-                }`}
-                title="该页面将在 T3b 阶段实现"
-              >
-                T3b
-              </span>
-            ) : null}
           </Link>
         );
       })}

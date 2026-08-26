@@ -22,7 +22,7 @@ Browser ──→ /api/auth/login|logout|me（认证 BFF，读写 HttpOnly Cooki
 - 401 前端清状态跳 /login；403 显示“无权限”，不与登录失效混淆
 - 服务端直连后端（Server Components 登录守卫 / 认证 BFF）时不经过 `/api/bff`
 
-## 前端结构（T3a）
+## 前端结构（T3b）
 
 ```text
 frontend/src/
@@ -32,15 +32,35 @@ frontend/src/
     login/page.tsx                        # 登录页
     (main)/layout.tsx                     # 受保护布局：服务端登录守卫 + AppShell
     (main)/dashboard|rooms|rooms/[id]     # 首页概览 / 房态棋盘 / 房间详情
+    (main)/settings/{users,roles,room-types,audit-logs}/page.tsx   # 管理页（T3b）
   components/                             # AppShell(侧边导航+顶栏+手机Drawer)、状态徽标、
-                                          # 确认对话框、Loading/Empty/Error 视图
+                                          # 确认对话框、Modal、Loading/Empty/Error/Forbidden 视图
+  components/settings/                    # 四个管理页视图 + 共享工具（分页加载/表单/表格）
   lib/api/                                # 统一 API Client（client.ts + 各资源模块 + 错误归一化）
   lib/server/                             # 服务端 Cookie 读取 / 后端直连 Client
+  test/setup.ts                           # Vitest 全局 setup（jest-dom + RTL cleanup）
 ```
 
 - 页面数据由 Client Component 在挂载后经 `/api/bff` 拉取（Loading/Empty/Error 三态）；
   登录态由服务端布局读取 Cookie 校验（未登录 307 → /login）
-- 导航按 `auth/me` 返回的权限 code 动态显示；`/settings/*` 页面在 T3b 实现（导航已预留）
+- 导航按 `auth/me` 返回的权限 code 动态显示；403 统一渲染“无权限访问该页面”（不跳登录，与 401 区分）
+- 管理页写操作权限（user:write / role:write / room_type:write 等）由后端 RBAC 裁决，前端仅按权限显隐按钮
+
+## 测试架构（T3b）
+
+- **Vitest 单元/组件测试**（`frontend/vitest.config.mts`，jsdom + @testing-library/react，`pnpm test`）：
+  测试文件与源码同目录（`src/**/__tests__/*.test.ts(x)`）；API 层经 `vi.mock` 替换为假实现、
+  真实 `ApiError` 语义保留；`next/navigation` / `next/link` 按需 mock。
+- **Playwright E2E**（`frontend/playwright.config.ts`，`pnpm test:e2e`）：
+  - 独立测试库 `stayops_test`：后端 webServer 直接运行单进程入口 `frontend/e2e/run_test_backend.py` ——
+    `prepare_test_db.py` DROP/CREATE 测试库 → alembic upgrade → 幂等 seed（28 间种子房）→
+    在本进程内于 `127.0.0.1:8001` 启动 FastAPI（`DATABASE_URL` 指向测试库）
+  - E2E 前端：`node node_modules/next/dist/bin/next dev -p 3001`（`BACKEND_API_URL=http://127.0.0.1:8001`，`NEXT_DIST_DIR=.next-e2e` 独立构建目录）
+  - `setup-users.ts` 在测试 `beforeAll` 中以 admin 直连后端创建 FRONT_DESK / HOUSEKEEPING 测试账号（幂等）
+  - 凭据仅存 gitignored 的 `frontend/e2e/.env.test-creds`（模板 `test-creds.example`），经环境变量注入 worker
+  - 单 worker 串行执行保证共享测试库确定性；不触碰开发环境（127.0.0.1:8000 / localhost:3000）
+- **后端 pytest**（`backend/`，87 用例）：独立测试库 `stayops_test`（与 E2E 同库策略），
+  会话级 DROP/CREATE + 迁移 + seed，用例级事务回滚隔离
 
 ## 原则
 

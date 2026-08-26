@@ -65,3 +65,16 @@ venv 因启动器硬编码旧路径而重建；requirements.txt 统一为 UTF-8 
 8. **首页概览口径**：全部统计来自真实 `GET /rooms`（page_size=100）实时计算——总房/可售/已预订/在住/锁房/停用（占用维度）+ 待清扫/清扫中/待检查（清洁维度）；禁止伪造营业额/ADR/RevPAR。
 9. **房态筛选**：占用/清洁/房型走后端查询参数（后端筛选优先）；楼层后端无筛选参数，客户端过滤（28 间房一次拉全量）。
 10. **路由类型**：启用 Next 16 typed routes（`next typegen` 生成 `PageProps`/`LayoutProps`），`tsc --noEmit` 全量校验；`/rooms/[id]` 动态渲染 + 客户端按 id 重新挂载（`key={id}`），刷新不 404。
+
+## 2026-08-26 — Sprint 1 第三阶段 T3b：管理页面与测试体系
+
+1. **管理页结构**：四个设置页视图放 `components/settings/`，共享工具（`usePageFetch` 分页加载、403/网络/可重试错误归一化、表单字段、表格外壳）放 `components/settings/shared.tsx`；通用表单对话框 `components/modal.tsx`（Esc/遮罩/右上角关闭）。列表接口一律 `page_size=100` 一次拉全量（本项目规模 ~28 房 / 个位数员工，暂不做前端分页 UI；审计页展示“共 N 条，显示前 N 条”）。
+2. **403 语义**：设置页加载遇 403 → 渲染 Forbidden「无权限访问该页面」且不跳登录；401 → 跳 /login（与 T3a 决策 4 的 401/403 区分一致）。权限判定唯一裁决点在后端（前端按钮显隐仅改善 UI）。
+3. **用户管理**：创建用户时角色经 `POST /users/{id}/roles` 二次分配（后端 `UserCreate` 无角色字段，严格按现有 OpenAPI 能力，未扩展后端）；编辑时密码留空 = 不修改；对当前登录用户禁用「停用/删除」按钮（后端 400 自我保护兜底）；未持有 role:read 时隐藏角色分配区块（分配按钮仍可用则仅更新基础信息）。
+4. **角色权限修改**：按 `role:write` 显隐「查看 / 修改权限」；`GET /permissions` 全量勾选 + `POST /roles/{id}/permissions` 整体替换（与后端“空=清空”语义一致）；SUPER_ADMIN 的动态全权限由后端保证，前端不特殊处理。
+5. **审计页**：表格列 = 时间/操作人/Action/Resource/IP，details 点「详情」展开为格式化 JSON 子行（不整块 JSON 塞表格单元格）；筛选 = 操作类型（action）+ 资源类型（resource_type）下拉，选项来自当前已加载数据出现的值（与后端精确匹配参数一致）；user_id 筛选未在 UI 暴露（无对应选择控件需求，API 保留）。
+6. **Vitest 基础设施**：jsdom + @testing-library/react + @vitejs/plugin-react；配置 `vitest.config.mts`（ESM 原生加载，规避 Vitest 4 对 CJS 加载 ESM 配置的告警）；`@/*` 别名用 `resolve.alias` 手写，不引入 vite-tsconfig-paths；测试与源码同目录（`src/**/__tests__/*.test.ts(x)`），随 `tsc --noEmit` 一起强类型校验；`src/test/setup.ts` 引入 jest-dom + RTL cleanup。API 层用 `vi.mock` 部分替换（`importOriginal` 保留真实 `ApiError` 类与类型），`next/navigation`/`next/link` 按文件 mock；`UserContext` 从 app-shell 导出供测试注入用户。
+7. **Playwright E2E 隔离（不碰 dev 数据）**：独立测试库 `stayops_test` + 专用后端 `127.0.0.1:8001` + 前端 `localhost:3001`。后端 webServer 直接运行单进程入口 `e2e/run_test_backend.py`：先执行 `prepare_test_db.py`（DROP/CREATE → alembic upgrade → 幂等 seed，与 pytest conftest 同策略），随后在本进程内 `uvicorn.run`（不经过 `.cmd` 包装，避免产生 Playwright 无法回收的孤儿进程导致下次运行被 prepare DROP 掉连接）；前端 `node node_modules/next/dist/bin/next dev -p 3001` 以 `NEXT_DIST_DIR=.next-e2e` 隔离构建目录（next.config.ts 读取该环境变量，默认仍 `.next`）；`reuseExistingServer: false` 保证每次运行都是全新实例 + 全新测试库（避免复用陈旧进程导致用例不确定）。E2E 测试账号（FRONT_DESK / HOUSEKEEPING）由 `e2e/setup-users.ts` 在测试 `beforeAll` 中以 admin 直连后端幂等创建（放在 beforeAll 而非 globalSetup，规避 globalSetup 与 webServer 的启动顺序竞态）；凭据只存 gitignored `e2e/.env.test-creds`（模板 `test-creds.example`，配置加载时注入 worker 环境变量）；`workers=1` 串行执行保证共享测试库确定性。
+8. **E2E 与 pytest 共用 stayops_test 且互斥**：两者会话开始时都会 DROP/CREATE 该库，因此禁止并行运行（实测并行会互相打断并造成 E2E 误失败）。本地并行执行测试时应错开。
+9. **next dev 自动改 tsconfig**：E2E dev server（NEXT_DIST_DIR=.next-e2e）首次运行会把 `.next-e2e/**` 类型路径写入 tsconfig include（与 `.next/**` 同理），该改动保留以支持 E2E 目录下的 typed routes 类型生成；eslint 与 .gitignore 同步忽略 `.next-e2e/`。
+10. **依赖版本事实（前端测试）**：Vitest 4.1.11 / @playwright/test 1.62.1（浏览器 chromium-1234 已本地安装）/ jsdom 30（要求 Node ≥ 22，本项目 Node 24 满足）。

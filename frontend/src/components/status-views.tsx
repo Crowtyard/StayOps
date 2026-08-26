@@ -33,6 +33,24 @@ export interface ErrorViewProps {
   onRetry?: () => void;
 }
 
+export function Forbidden({ text = "无权限访问该页面" }: { text?: string }) {
+  return (
+    <div
+      className="flex flex-col items-center gap-3 py-16 text-center"
+      role="alert"
+      aria-live="assertive"
+    >
+      <span className="flex size-10 items-center justify-center rounded-full bg-amber-100 text-amber-600">
+        <IconAlert className="size-5" />
+      </span>
+      <p className="text-sm text-gray-900">{text}</p>
+      <p className="text-xs text-gray-500">
+        如需访问，请联系管理员为您分配相应权限
+      </p>
+    </div>
+  );
+}
+
 export function ErrorView({ message, offline, onRetry }: ErrorViewProps) {
   const text =
     message ?? (offline ? "服务暂时不可用，请稍后重试" : "加载失败，请稍后重试");

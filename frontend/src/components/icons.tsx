@@ -138,3 +138,47 @@ export function IconBuilding({ className }: IconProps) {
     </Svg>
   );
 }
+
+export function IconPlus({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <path d="M12 5v14M5 12h14" />
+    </Svg>
+  );
+}
+
+export function IconPencil({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <path d="M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17l-1 3Z" />
+      <path d="m13.5 6.5 3 3" />
+    </Svg>
+  );
+}
+
+export function IconTrash({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <path d="M4 7h16M9 7V4.5A1.5 1.5 0 0 1 10.5 3h3A1.5 1.5 0 0 1 15 4.5V7" />
+      <path d="M6.5 7 7.3 20a1 1 0 0 0 1 .9h7.4a1 1 0 0 0 1-.9L17.5 7" />
+      <path d="M10 11v6M14 11v6" />
+    </Svg>
+  );
+}
+
+export function IconChevronDown({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <path d="m6 9 6 6 6-6" />
+    </Svg>
+  );
+}
+
+export function IconEye({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" />
+      <circle cx="12" cy="12" r="2.8" />
+    </Svg>
+  );
+}

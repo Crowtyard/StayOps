@@ -1,0 +1,12 @@
+# E2E 测试凭据模板（可入库）。
+# 使用：复制为同目录 .env.test-creds 并填入真实值（该文件已被 .gitignore 忽略，不会入库）。
+# 说明：
+#   - E2E_ADMIN_*：种子超级管理员（仅开发环境）
+#   - E2E_FRONT_DESK_* / E2E_HOUSEKEEPING_*：E2E 专用测试账号，
+#     由 frontend/e2e/setup-users.ts（测试 beforeAll）在每次运行前幂等创建并分配角色
+E2E_ADMIN_USERNAME=admin
+E2E_ADMIN_PASSWORD=change-me
+E2E_FRONT_DESK_USERNAME=e2e_frontdesk
+E2E_FRONT_DESK_PASSWORD=change-me
+E2E_HOUSEKEEPING_USERNAME=e2e_housekeeping
+E2E_HOUSEKEEPING_PASSWORD=change-me
