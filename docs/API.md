@@ -36,10 +36,10 @@
 | GET | /room-types/{id} | 房型详情 | room_type:read |
 | PUT | /room-types/{id} | 更新房型 | room_type:write |
 | DELETE | /room-types/{id} | 删除房型（有房间时 409） | room_type:delete |
-| GET | /rooms | 房间列表（分页，`?status=` / `?room_type_id=` 筛选） | room:read |
-| POST | /rooms | 创建房间（status 可选，默认 available） | room:write |
+| GET | /rooms | 房间列表（分页，`?occupancy_status=` / `?cleaning_status=` / `?room_type_id=` 筛选） | room:read |
+| POST | /rooms | 创建房间（occupancy_status 默认 available，cleaning_status 默认 clean） | room:write |
 | GET | /rooms/{id} | 房间详情 | room:read |
-| PUT | /rooms/{id} | 更新房间基础信息（不含 status） | room:write |
+| PUT | /rooms/{id} | 更新房间基础信息（不含状态） | room:write |
 | DELETE | /rooms/{id} | 删除房间 | room:delete |
 | POST | /rooms/{id}/status | 房态变更（状态机校验，非法 409；写审计） | room:write 或 room:status_cleaning / room:status_maintenance（对应目标房态） |
 | GET | /audit-logs | 审计日志列表（分页，`?action=` / `?user_id=` / `?resource_type=` 筛选） | audit:read |
@@ -51,24 +51,40 @@
 - 角色权限映射见种子（`backend/app/seed.py`）；SUPER_ADMIN 动态拥有全部权限
 - 账号禁用后旧 Token 立即失效（403）
 
-## 房态状态机
+## 房态状态机（双维度）
 
-`rooms.status ∈ available / occupied / cleaning / maintenance / out_of_service`，仅通过 `POST /rooms/{id}/status` 变更（PUT 不接收 status）。
+`rooms.occupancy_status` / `rooms.cleaning_status` 相互独立，仅通过 `POST /rooms/{id}/status` 变更（body 至少提供一个维度；PUT 不接收状态字段）。非法转换 409。
 
-| 当前状态 | 允许转换到 |
-|---|---|
-| available | occupied / cleaning / maintenance / out_of_service |
-| occupied | available / cleaning / out_of_service |
-| cleaning | available / out_of_service |
-| maintenance | available / out_of_service |
-| out_of_service | available / occupied / cleaning / maintenance |
+| 维度 | 当前状态 | 允许转换到 |
+|---|---|---|
+| 占用 | available | reserved / occupied / blocked / out_of_service |
+| 占用 | reserved | available / occupied / blocked / out_of_service |
+| 占用 | occupied | available / reserved / out_of_service |
+| 占用 | blocked | available / out_of_service |
+| 占用 | out_of_service | available / blocked |
+| 清洁 | clean | dirty |
+| 清洁 | dirty | cleaning |
+| 清洁 | cleaning | clean / inspection / rework |
+| 清洁 | inspection | clean / rework |
+| 清洁 | rework | cleaning |
 
-同一状态转换视为非法；非法转换返回 409（决策见 `docs/DECISIONS.md`）。
+同一状态转换视为非法（409）；两维度互不约束（如 reserved+dirty 合法）。鉴权：`room:write` 可改任意维度；`room:status_cleaning` 仅清洁维度；`room:status_maintenance` 仅把占用置为 out_of_service；无 `room:write` 不允许同时改两维度（403）。
+
+## 前端 BFF 端点（Next.js Route Handler，T3a）
+
+浏览器不接触 JWT；前端统一经以下端点（同源 `http://localhost:3000`）：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | /api/auth/login | 转发后端登录，成功写 HttpOnly Cookie `stayops_token`，返回用户+角色+权限（同 `MeOut`） |
+| GET | /api/auth/me | 读 Cookie 调后端 /auth/me；401 时清 Cookie |
+| POST | /api/auth/logout | 清 Cookie |
+| * | /api/bff/{...path} | 通用代理 → `BACKEND_API_URL/api/v1/{...path}`：附加 Bearer、透传查询串/请求体/状态码/`detail`、转发 X-Forwarded-For；后端不可达 502 |
 
 ## 示例
 
 ```powershell
-# 登录
+# 登录（直连后端）
 curl.exe -X POST http://localhost:8000/api/v1/auth/login `
   -H "Content-Type: application/json" `
   -d '{"username":"admin","password":"Admin@123456"}'
@@ -77,9 +93,11 @@ curl.exe -X POST http://localhost:8000/api/v1/auth/login `
 curl.exe "http://localhost:8000/api/v1/rooms?page=1&page_size=20" `
   -H "Authorization: Bearer <access_token>"
 
-# 变更房态
-curl.exe -X POST http://localhost:8000/api/v1/rooms/1/status `
-  -H "Authorization: Bearer <access_token>" `
+# 变更房态（经前端 BFF，Cookie 认证）
+curl.exe -c cookies.txt -X POST http://localhost:3000/api/auth/login `
   -H "Content-Type: application/json" `
-  -d '{"status":"occupied"}'
+  -d '{"username":"admin","password":"Admin@123456"}'
+curl.exe -b cookies.txt -X POST http://localhost:3000/api/bff/rooms/1/status `
+  -H "Content-Type: application/json" `
+  -d '{"occupancy_status":"occupied"}'
 ```

@@ -38,7 +38,19 @@ python -m venv .venv
 
 - 健康检查：`http://localhost:8000/health`
 - 开发管理员：`admin` / `Admin@123456`（仅开发环境）
-- 前端（`frontend/`）：Sprint 1 待实现
+
+前端（`frontend/`，Next.js 16 + TypeScript strict + Tailwind；认证采用 HttpOnly Cookie + BFF，详见 [docs/DECISIONS.md](docs/DECISIONS.md)）：
+
+```powershell
+cd frontend
+pnpm.cmd install
+Copy-Item .env.example .env.local   # BACKEND_API_URL / NEXT_PUBLIC_APP_NAME
+pnpm.cmd dev                        # http://localhost:3000
+```
+
+> 前后端需分别启动；后端需先运行在 `http://127.0.0.1:8000`（见上文）。前端不接触 Token：登录后 JWT 只存在 HttpOnly Cookie，其余 API 统一走 `/api/bff/*` 由服务端附加 Bearer 转发。
+
+前端质量命令：`pnpm.cmd lint`、`pnpm.cmd typecheck`、`pnpm.cmd build`。
 
 ## 文档
 
@@ -53,4 +65,4 @@ python -m venv .venv
 
 所有 AI Coding Agent 与开发者必须先阅读 [AGENTS.md](AGENTS.md)。
 
-> 当前状态：Sprint 1 第一阶段（后端骨架 + 数据层 + 种子数据）已完成，业务 API 与前端待第二阶段。
+> 当前状态：Sprint 1 后端（骨架 + 认证 + RBAC + 房态双维度状态机 + 审计）已完成；前端 T3a（登录/首页概览/房态棋盘/房间详情 + BFF 认证链路）已完成；T3b（用户/角色/房型/审计管理页面）待开发。

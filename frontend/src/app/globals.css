@@ -1,0 +1,16 @@
+@import "tailwindcss";
+
+@theme inline {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue",
+    Arial, sans-serif;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  @apply bg-gray-50 text-gray-900 antialiased;
+}
