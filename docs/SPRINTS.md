@@ -76,4 +76,27 @@ Sprint 1 is frozen as the first stable StayOps development baseline.
 
 Future development must build on top of this baseline through subsequent commits.
 
-Sprint 2 has not started.
+## Sprint 2（任务规划完成 · 待开发）
+
+```text
+Sprint 2            = APPROVED FOR TASK PLANNING
+正式名称            = Booking & Stay Core Flow（预订、入住与退房核心链路）
+计划 Release        = v1.0.0-alpha.2
+Sprint 2 PRD        = FINAL
+Sprint 2 Task Spec  = APPROVED
+Sprint 2 Coding     = NOT STARTED
+S2-T1               = READY TO START
+S2-T2               = NOT STARTED
+S2-T3               = NOT STARTED
+DSH                 = IDLE
+Kun                 = PROJECT MANAGER + QA
+```
+
+任务书（docs/tasks/sprint-02/）：
+
+- README.md — 总纲：Golden Path、不可违反架构规则、RBAC、错误语义、Out of Scope、回归基线、Git 规则
+- S2-T1.md — Booking Domain Foundation（后端）
+- S2-T2.md — Booking Operations UI（前端）
+- S2-T3.md — Integration & E2E（全链路验收）
+
+Sprint 2 Coding 尚未开始；`v1.0.0-alpha.1` 冻结不动，`v1.0.0-alpha.2` 仅在 Sprint 2 Final Acceptance 全部 PASS 后创建。
