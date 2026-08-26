@@ -85,3 +85,13 @@ pnpm.cmd test:e2e
 所有 AI Coding Agent 与开发者必须先阅读 [AGENTS.md](AGENTS.md)。
 
 > 当前状态：Sprint 1 完成（T1 环境 → T2 后端认证/RBAC/双维度房态/审计 → T3a 前端核心链路 → T3b 管理页面 + Vitest/Playwright 测试体系），等待验收。
+
+## Current Release
+
+Version: v1.0.0-alpha.1
+
+Status: Sprint 1 Final Acceptance PASS
+
+This is the first stable Alpha development baseline of StayOps.
+
+Not intended for production deployment.

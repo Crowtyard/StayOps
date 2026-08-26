@@ -59,3 +59,21 @@ FINANCE
 - ✅ T2：认证 + RBAC + 业务 API + 房态双维度状态机 + 审计（28 间种子房）
 - ✅ T3a：前端核心链路——Next.js 16 + TS strict + Tailwind；认证 BFF（/api/auth/*，HttpOnly Cookie）+ 通用代理（/api/bff/*）；统一 API Client；权限化统一 Layout（侧边导航/顶栏/手机 Drawer）；/login、/dashboard（真实房态概览）、/rooms（双维度棋盘+筛选）、/rooms/[id]（真实状态机修改+确认框）；Loading/Empty/Error 与离线态。质量：`pnpm lint` / `pnpm typecheck` / `pnpm build` 全过；curl 冒烟真实复验通过（登录→HttpOnly Cookie→me→28 间房→详情→合法/非法状态转换→审计链路、RBAC 403、401/403 区分、离线 502）。Playwright 冒烟**尚未实施**（仓库无 Playwright 配置或测试文件，此前“Playwright 冒烟全过”的描述不实，已更正），归入 T3b。
 - ✅ T3b：管理页面 + 前端测试体系——/settings/users（创建/编辑/启用停用/分配角色/删除）、/settings/roles（CRUD + 权限查看与修改，role:write 可改权限）、/settings/room-types（CRUD，删除有房间房型显示后端 409）、/settings/audit-logs（操作类型/资源类型筛选 + details 展开，不整块 JSON 塞表格）；导航移除 T3b 占位角标；403 统一“无权限访问该页面”且不跳登录。Vitest（jsdom + Testing Library）：11 个测试文件 74 条用例全过（Auth 登录成功/失败/网络、RBAC 导航显隐、Rooms 28 房展示/reserved+dirty 双维度/合法与非法转换/确认框、Audit 展开与筛选、四个 Settings 视图）。Playwright E2E 正式入库（10 条用例，独立 stayops_test 库 + 专用后端 127.0.0.1:8001 + 前端 localhost:3001，不碰 dev 数据）：管理员登录→Dashboard→房态→28 房→合法状态修改→刷新保持、blocked 确认框、FRONT_DESK/HOUSEKEEPING 导航收窄 + 直连 403 + 无权限 UI、退出后守卫、四个管理页真实读取、房态变更→审计日志真实记录。质量门禁：`pnpm lint` / `pnpm typecheck` / `pnpm test`（Vitest 74 用例）/ `pnpm build` / `pnpm test:e2e`（Playwright 10 用例）/ 后端 `pytest`（87 用例）全部通过。
+
+## Sprint 1 Release Baseline
+
+Status: FINAL ACCEPTANCE PASS
+
+Final Acceptance Commit:
+
+a8b13ce2d00f1e8d48512d57fba93e56506d8e07
+
+Release:
+
+v1.0.0-alpha.1
+
+Sprint 1 is frozen as the first stable StayOps development baseline.
+
+Future development must build on top of this baseline through subsequent commits.
+
+Sprint 2 has not started.
