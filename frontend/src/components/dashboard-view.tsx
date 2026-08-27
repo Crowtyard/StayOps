@@ -1,11 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ApiError, api } from "@/lib/api";
-import type { RoomOut } from "@/lib/api/types";
+import type { ReservationOut, RoomOut, StayOut } from "@/lib/api/types";
+import { addDays, businessDate } from "@/lib/booking";
 import { ErrorView, Loading } from "@/components/status-views";
+import { useUser } from "@/components/app-shell";
 
 interface Stats {
   total: number;
@@ -87,6 +89,8 @@ interface StatCard {
 
 export default function DashboardView() {
   const router = useRouter();
+  const user = useUser();
+  const permissions = useMemo(() => new Set(user?.permissions ?? []), [user]);
   const [rooms, setRooms] = useState<RoomOut[] | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -198,6 +202,200 @@ export default function DashboardView() {
           </p>
         </div>
       </div>
+
+      <BookingOverview permissions={permissions} />
+    </div>
+  );
+}
+
+/**
+ * 预订运营概览（S2-T2）：组合既有 List API，不新增聚合接口。
+ * - reservation:read → 今日到店 / 未来 7 天预订（GET /reservations?status=CONFIRMED）
+ * - stay:read → 今日离店 / 当前在住（GET /stays?status=ACTIVE）
+ * - 无权限不渲染区块；PII 按 guest:read 裁剪（后端已裁剪，前端双保险）
+ */
+function BookingOverview({ permissions }: { permissions: Set<string> }) {
+  const canReadReservation = permissions.has("reservation:read");
+  const canReadStay = permissions.has("stay:read");
+  const canReadGuest = permissions.has("guest:read");
+
+  const [confirmed, setConfirmed] = useState<ReservationOut[] | null>(null);
+  const [activeStays, setActiveStays] = useState<StayOut[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!canReadReservation && !canReadStay) return;
+    let cancelled = false;
+
+    const jobs: Promise<void>[] = [];
+    if (canReadReservation) {
+      jobs.push(
+        (async () => {
+          // 分页拉全 CONFIRMED（本物业规模分页有限；循环翻页不假设数据量）
+          const all: ReservationOut[] = [];
+          let page = 1;
+          for (;;) {
+            const result = await api.reservations.list({
+              status: "CONFIRMED",
+              page,
+              page_size: 100,
+            });
+            all.push(...result.items);
+            if (result.page * result.page_size >= result.total) break;
+            page += 1;
+          }
+          if (!cancelled) setConfirmed(all);
+        })(),
+      );
+    }
+    if (canReadStay) {
+      jobs.push(
+        (async () => {
+          const all: StayOut[] = [];
+          let page = 1;
+          for (;;) {
+            const result = await api.stays.list({
+              status: "ACTIVE",
+              page,
+              page_size: 100,
+            });
+            all.push(...result.items);
+            if (result.page * result.page_size >= result.total) break;
+            page += 1;
+          }
+          if (!cancelled) setActiveStays(all);
+        })(),
+      );
+    }
+    Promise.all(jobs).catch(() => {
+      if (!cancelled) setLoadError("预订/在住概览加载失败");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [canReadReservation, canReadStay]);
+
+  if (!canReadReservation && !canReadStay) return null;
+
+  const today = businessDate();
+  const horizon = addDays(today, 7);
+  const arriving =
+    confirmed?.filter((r) => r.check_in_date === today) ?? [];
+  const nextSevenDays =
+    confirmed?.filter(
+      (r) => r.check_in_date >= today && r.check_in_date < horizon,
+    ) ?? [];
+  const departing =
+    activeStays?.filter((s) => s.planned_check_out_date === today) ?? [];
+  const inHouse = activeStays ?? [];
+
+  const cards = [
+    canReadReservation
+      ? { label: "今日到店", value: arriving.length }
+      : null,
+    canReadStay ? { label: "今日离店", value: departing.length } : null,
+    canReadStay ? { label: "当前在住", value: inHouse.length } : null,
+    canReadReservation
+      ? { label: "未来 7 天预订", value: nextSevenDays.length }
+      : null,
+  ].filter((c): c is { label: string; value: number } => c !== null);
+
+  const loading = confirmed === null && activeStays === null;
+
+  return (
+    <div className="mt-6">
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-gray-900">预订运营概览</h2>
+        <span className="text-xs text-gray-400">
+          业务日期 {today}（Asia/Shanghai）
+        </span>
+      </div>
+
+      {loadError ? (
+        <p
+          role="alert"
+          className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 ring-1 ring-inset ring-red-200"
+        >
+          {loadError}
+        </p>
+      ) : loading ? (
+        <p className="text-sm text-gray-400">正在加载预订与在住数据…</p>
+      ) : (
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {cards.map((card) => (
+            <div
+              key={card.label}
+              className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm"
+            >
+              <p className="text-xs text-gray-500">{card.label}</p>
+              <p className="mt-1.5 text-2xl font-semibold tabular-nums text-gray-900">
+                {card.value}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {!loading && !loadError ? (
+        <div className="mt-3 grid gap-3 lg:grid-cols-2">
+          {canReadReservation ? (
+            <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+              <h3 className="text-sm font-semibold text-gray-900">今日到店</h3>
+              {arriving.length === 0 ? (
+                <p className="mt-2 text-sm text-gray-400">今日无到店预订</p>
+              ) : (
+                <ul className="mt-2 list-none space-y-1.5">
+                  {arriving.slice(0, 5).map((r) => (
+                    <li key={r.id} className="text-sm">
+                      <Link
+                        href={`/reservations/${r.id}`}
+                        className="text-gray-700 hover:underline"
+                      >
+                        {r.reservation_no} · 房间{" "}
+                        {r.room_number ?? `#${r.room_id}`}
+                      </Link>
+                      {canReadGuest && r.guest_name ? (
+                        <span className="text-gray-500"> · {r.guest_name}</span>
+                      ) : null}
+                    </li>
+                  ))}
+                  {arriving.length > 5 ? (
+                    <li className="text-xs text-gray-400">
+                      还有 {arriving.length - 5} 条…
+                    </li>
+                  ) : null}
+                </ul>
+              )}
+            </div>
+          ) : null}
+          {canReadStay ? (
+            <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+              <h3 className="text-sm font-semibold text-gray-900">今日离店</h3>
+              {departing.length === 0 ? (
+                <p className="mt-2 text-sm text-gray-400">今日无离店入住</p>
+              ) : (
+                <ul className="mt-2 list-none space-y-1.5">
+                  {departing.slice(0, 5).map((s) => (
+                    <li key={s.id} className="text-sm">
+                      <Link
+                        href={`/stays/${s.id}`}
+                        className="text-gray-700 hover:underline"
+                      >
+                        {s.stay_no} · 房间 {s.room_number ?? `#${s.room_id}`}
+                      </Link>
+                    </li>
+                  ))}
+                  {departing.length > 5 ? (
+                    <li className="text-xs text-gray-400">
+                      还有 {departing.length - 5} 条…
+                    </li>
+                  ) : null}
+                </ul>
+              )}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }

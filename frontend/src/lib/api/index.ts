@@ -6,10 +6,14 @@
 
 import { browserTransport, type Transport } from "./client";
 import { createAuditLogsApi, type AuditLogsApi } from "./audit-logs";
+import { createAvailabilityApi, type AvailabilityApi } from "./availability";
+import { createGuestsApi, type GuestsApi } from "./guests";
 import { createPermissionsApi, type PermissionsApi } from "./permissions";
+import { createReservationsApi, type ReservationsApi } from "./reservations";
 import { createRolesApi, type RolesApi } from "./roles";
 import { createRoomsApi, type RoomsApi } from "./rooms";
 import { createRoomTypesApi, type RoomTypesApi } from "./room-types";
+import { createStaysApi, type StaysApi } from "./stays";
 import { createUsersApi, type UsersApi } from "./users";
 
 export interface ApiClient {
@@ -19,6 +23,10 @@ export interface ApiClient {
   roles: RolesApi;
   permissions: PermissionsApi;
   auditLogs: AuditLogsApi;
+  guests: GuestsApi;
+  reservations: ReservationsApi;
+  stays: StaysApi;
+  availability: AvailabilityApi;
 }
 
 export function createApiClient(transport: Transport): ApiClient {
@@ -29,6 +37,10 @@ export function createApiClient(transport: Transport): ApiClient {
     roles: createRolesApi(transport),
     permissions: createPermissionsApi(transport),
     auditLogs: createAuditLogsApi(transport),
+    guests: createGuestsApi(transport),
+    reservations: createReservationsApi(transport),
+    stays: createStaysApi(transport),
+    availability: createAvailabilityApi(transport),
   };
 }
 

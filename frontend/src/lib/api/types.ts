@@ -199,3 +199,187 @@ export interface AuditLogListParams extends PageParams {
   user_id?: number;
   resource_type?: string;
 }
+
+/* ------------------------------------------------------------------ */
+/* Booking 域（S2-T1 后端契约，字段以实际 OpenAPI 为准）                */
+/* ------------------------------------------------------------------ */
+
+export type ReservationStatus =
+  | "CONFIRMED"
+  | "CANCELLED"
+  | "NO_SHOW"
+  | "CHECKED_IN"
+  | "COMPLETED";
+
+export type ReservationSource =
+  | "DIRECT"
+  | "PHONE"
+  | "WECHAT"
+  | "WALK_IN"
+  | "OTA"
+  | "CORPORATE"
+  | "OTHER";
+
+export type StayStatus = "ACTIVE" | "CHECKED_OUT";
+
+export interface GuestOut {
+  id: number;
+  name: string;
+  phone: string | null;
+  email: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GuestCreate {
+  name: string;
+  phone?: string | null;
+  email?: string | null;
+  notes?: string | null;
+}
+
+export interface GuestUpdate {
+  name?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  notes?: string | null;
+}
+
+export interface GuestListParams extends PageParams {
+  search?: string;
+}
+
+/**
+ * 预订响应。后端使用 response_model_exclude_none：
+ * 被权限裁剪的字段与 null 字段以「键缺失」呈现（不在 JSON 中），
+ * 因此除必填字段外一律可选。guest_name 仅 guest:read 时存在；
+ * room_number / room_type_name / amount 等仅 reservation:read 时存在。
+ */
+export interface ReservationOut {
+  id: number;
+  reservation_no: string;
+  guest_id: number;
+  guest_name?: string | null;
+  room_id: number;
+  room_number?: string | null;
+  room_type_id: number;
+  room_type_name?: string | null;
+  check_in_date: string;
+  check_out_date: string;
+  status: ReservationStatus;
+  source: ReservationSource;
+  external_reference?: string | null;
+  /** Decimal 以字符串序列化，如 "428.00" */
+  agreed_total_amount?: string | null;
+  currency?: string | null;
+  notes?: string | null;
+  created_by?: number | null;
+  updated_by?: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  stay_id?: number | null;
+}
+
+export interface ReservationSummary {
+  reservation_no: string;
+  check_in_date: string;
+  check_out_date: string;
+  status: ReservationStatus;
+  source: ReservationSource;
+  agreed_total_amount: string;
+  currency: string;
+}
+
+export interface StayOut {
+  id: number;
+  stay_no: string;
+  reservation_id: number;
+  room_id: number;
+  room_number?: string | null;
+  status: StayStatus;
+  actual_check_in_at: string;
+  planned_check_out_date: string;
+  actual_check_out_at?: string | null;
+  created_by?: number | null;
+  updated_by?: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  guest_id?: number | null;
+  guest_name?: string | null;
+  reservation?: ReservationSummary | null;
+}
+
+export interface CheckInOut {
+  reservation: ReservationOut;
+  stay: StayOut;
+}
+
+export interface ReservationCreate {
+  guest_id: number;
+  room_id: number;
+  room_type_id: number;
+  check_in_date: string;
+  check_out_date: string;
+  source?: ReservationSource;
+  external_reference?: string | null;
+  agreed_total_amount: number | string;
+  currency?: string;
+  notes?: string | null;
+}
+
+/** PATCH 只提交发生变化的字段；status 不得经 PATCH 修改（后端 strict schema，携带即 422） */
+export interface ReservationUpdate {
+  guest_id?: number;
+  room_id?: number;
+  room_type_id?: number;
+  check_in_date?: string;
+  check_out_date?: string;
+  source?: ReservationSource;
+  external_reference?: string | null;
+  agreed_total_amount?: number | string;
+  currency?: string;
+  notes?: string | null;
+}
+
+export interface ReservationListParams extends PageParams {
+  status?: ReservationStatus;
+  room_id?: number;
+  guest_id?: number;
+  room_type_id?: number;
+  source?: ReservationSource;
+  check_in_date?: string;
+  check_out_date?: string;
+  search?: string;
+}
+
+export interface StayListParams extends PageParams {
+  status?: StayStatus;
+  room_id?: number;
+  planned_check_out_date?: string;
+}
+
+export interface AvailabilityItem {
+  room_id: number;
+  room_number: string;
+  room_type_id: number;
+  room_type_name?: string | null;
+  floor: number;
+  available: boolean;
+  reason?: string | null;
+}
+
+export interface AvailabilityOut {
+  business_date: string;
+  check_in_date: string;
+  check_out_date: string;
+  total: number;
+  available_count: number;
+  items: AvailabilityItem[];
+}
+
+export interface AvailabilityParams {
+  check_in_date: string;
+  check_out_date: string;
+  room_type_id?: number;
+}

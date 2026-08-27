@@ -13,6 +13,7 @@ import { logout } from "@/lib/api";
 import type { MeOut } from "@/lib/api/types";
 import {
   IconAudit,
+  IconBooking,
   IconBuilding,
   IconHome,
   IconLogout,
@@ -20,6 +21,7 @@ import {
   IconRefresh,
   IconRooms,
   IconShield,
+  IconStay,
   IconTag,
   IconUsers,
   IconX,
@@ -47,6 +49,13 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { href: "/dashboard", label: "首页", icon: <IconHome /> },
   { href: "/rooms", label: "房态", icon: <IconRooms />, permission: "room:read" },
+  {
+    href: "/reservations",
+    label: "预订",
+    icon: <IconBooking />,
+    permission: "reservation:read",
+  },
+  { href: "/stays", label: "在住", icon: <IconStay />, permission: "stay:read" },
   {
     href: "/settings/room-types",
     label: "房型",

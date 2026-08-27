@@ -7,8 +7,11 @@ import { ApiError, api } from "@/lib/api";
 import type {
   CleaningStatus,
   OccupancyStatus,
+  ReservationOut,
   RoomOut,
+  StayOut,
 } from "@/lib/api/types";
+import { businessDate } from "@/lib/booking";
 import {
   CLEANING_DIMENSION_LABEL,
   CLEANING_META,
@@ -48,9 +51,16 @@ export default function RoomDetailView({ id }: { id: string }) {
   const [message, setMessage] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
+  // Booking 关联（S2-T2）：当前 Stay / 下一笔 Reservation（PII 按权限）
+  const [activeStay, setActiveStay] = useState<StayOut | null>(null);
+  const [nextReservation, setNextReservation] = useState<ReservationOut | null>(null);
+
   const canWrite = permissions.has("room:write");
   const canClean = permissions.has("room:status_cleaning");
   const canMaintain = permissions.has("room:status_maintenance");
+  const canReadStay = permissions.has("stay:read");
+  const canReadReservation = permissions.has("reservation:read");
+  const canReadGuest = permissions.has("guest:read");
 
   const occupancyOptions = useMemo<OccupancyStatus[]>(() => {
     if (canWrite) return OCCUPANCY_STATUSES;
@@ -92,6 +102,46 @@ export default function RoomDetailView({ id }: { id: string }) {
     setMessage(null);
     setReloadKey((k) => k + 1);
   }, []);
+
+  // 当前 Stay（stay:read）与下一笔 Reservation（reservation:read）摘要；
+  // 调用失败（403/网络）静默隐藏区块，不阻塞房间详情主体
+  useEffect(() => {
+    if (!room || (!canReadStay && !canReadReservation)) return;
+    let cancelled = false;
+    if (canReadStay) {
+      api.stays
+        .list({ room_id: room.id, status: "ACTIVE", page: 1, page_size: 10 })
+        .then((page) => {
+          if (!cancelled) setActiveStay(page.items[0] ?? null);
+        })
+        .catch(() => {
+          if (!cancelled) setActiveStay(null);
+        });
+    }
+    if (canReadReservation) {
+      api.reservations
+        .list({
+          room_id: room.id,
+          status: "CONFIRMED",
+          page: 1,
+          page_size: 100,
+        })
+        .then((page) => {
+          if (cancelled) return;
+          const today = businessDate();
+          const upcoming = page.items
+            .filter((r) => r.check_in_date >= today)
+            .sort((a, b) => a.check_in_date.localeCompare(b.check_in_date));
+          setNextReservation(upcoming[0] ?? null);
+        })
+        .catch(() => {
+          if (!cancelled) setNextReservation(null);
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [room, canReadStay, canReadReservation, reloadKey]);
 
   async function submitChange(
     dimension: "occupancy" | "cleaning",
@@ -275,6 +325,81 @@ export default function RoomDetailView({ id }: { id: string }) {
             </p>
           ) : null}
         </div>
+      </div>
+
+      {/* Booking 关联（S2-T2）：当前 Stay / 下一笔 Reservation，PII 按权限 */}
+      <div className="mt-5 grid gap-4 sm:grid-cols-2">
+        {canReadStay && activeStay && activeStay.room_id === room.id ? (
+          <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+            <h2 className="text-sm font-semibold text-gray-900">当前在住</h2>
+            <dl className="mt-2 space-y-1 text-sm text-gray-700">
+              <div>
+                <dt className="inline text-xs text-gray-500">入住单号：</dt>
+                <dd className="inline">
+                  <Link
+                    href={`/stays/${activeStay.id}`}
+                    className="font-medium hover:underline"
+                  >
+                    {activeStay.stay_no}
+                  </Link>
+                </dd>
+              </div>
+              <div>
+                <dt className="inline text-xs text-gray-500">实际入住：</dt>
+                <dd className="inline">
+                  {formatDateTime(activeStay.actual_check_in_at)}
+                </dd>
+              </div>
+              <div>
+                <dt className="inline text-xs text-gray-500">计划退房：</dt>
+                <dd className="inline">{activeStay.planned_check_out_date}</dd>
+              </div>
+            </dl>
+          </div>
+        ) : !canReadStay && room.occupancy_status === "occupied" ? (
+          <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+            <h2 className="text-sm font-semibold text-gray-900">当前有客</h2>
+            <p className="mt-2 text-sm text-gray-500">房间正在被客人使用</p>
+          </div>
+        ) : null}
+
+        {canReadReservation &&
+        nextReservation &&
+        nextReservation.room_id === room.id ? (
+          <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+            <h2 className="text-sm font-semibold text-gray-900">下一笔预订</h2>
+            <dl className="mt-2 space-y-1 text-sm text-gray-700">
+              <div>
+                <dt className="inline text-xs text-gray-500">预订号：</dt>
+                <dd className="inline">
+                  <Link
+                    href={`/reservations/${nextReservation.id}`}
+                    className="font-medium hover:underline"
+                  >
+                    {nextReservation.reservation_no}
+                  </Link>
+                </dd>
+              </div>
+              <div>
+                <dt className="inline text-xs text-gray-500">日期：</dt>
+                <dd className="inline">
+                  {nextReservation.check_in_date} →{" "}
+                  {nextReservation.check_out_date}
+                </dd>
+              </div>
+              <div>
+                <dt className="inline text-xs text-gray-500">来源：</dt>
+                <dd className="inline">{nextReservation.source}</dd>
+              </div>
+              {canReadGuest && nextReservation.guest_name ? (
+                <div>
+                  <dt className="inline text-xs text-gray-500">客人：</dt>
+                  <dd className="inline">{nextReservation.guest_name}</dd>
+                </div>
+              ) : null}
+            </dl>
+          </div>
+        ) : null}
       </div>
 
       <ConfirmDialog

@@ -182,3 +182,40 @@ export function IconEye({ className }: IconProps) {
     </Svg>
   );
 }
+
+export function IconBooking({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <rect x="3.5" y="5" width="17" height="16" rx="1.5" />
+      <path d="M3.5 9.5h17M8 3v4M16 3v4" />
+      <path d="m9 13.5 2 2 4-4" />
+    </Svg>
+  );
+}
+
+export function IconStay({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <path d="M4 20v-7.5a1.5 1.5 0 0 1 1.5-1.5h13a1.5 1.5 0 0 1 1.5 1.5V20" />
+      <path d="M3 20h18M4 15.5v-3a1.5 1.5 0 0 1 1.5-1.5H8a1.5 1.5 0 0 1 1.5 1.5v3" />
+      <path d="M16 13v-3a1.5 1.5 0 0 1 1.5-1.5h1A1.5 1.5 0 0 1 20 10v3" />
+    </Svg>
+  );
+}
+
+export function IconSearch({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <circle cx="11" cy="11" r="6.5" />
+      <path d="m20 20-4.2-4.2" />
+    </Svg>
+  );
+}
+
+export function IconBack({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <path d="M19 12H5M11 6l-6 6 6 6" />
+    </Svg>
+  );
+}

@@ -40,7 +40,7 @@ Browser ──→ /api/auth/login|logout|me（认证 BFF，读写 HttpOnly Cooki
 - 401 前端清状态跳 /login；403 显示“无权限”，不与登录失效混淆
 - 服务端直连后端（Server Components 登录守卫 / 认证 BFF）时不经过 `/api/bff`
 
-## 前端结构（T3b）
+## 前端结构（T3b / S2-T2）
 
 ```text
 frontend/src/
@@ -50,25 +50,38 @@ frontend/src/
     login/page.tsx                        # 登录页
     (main)/layout.tsx                     # 受保护布局：服务端登录守卫 + AppShell
     (main)/dashboard|rooms|rooms/[id]     # 首页概览 / 房态棋盘 / 房间详情
+    (main)/reservations                   # S2-T2：预订列表（筛选/分页）
+    (main)/reservations/new               # S2-T2：新建预订（Guest 搜索创建 + Availability）
+    (main)/reservations/[id]              # S2-T2：预订详情（编辑/Cancel/No-show/Check-in）
+    (main)/stays                          # S2-T2：在住列表（stay:read 导航落点）
+    (main)/stays/[id]                     # S2-T2：在住详情（Check-out）
     (main)/settings/{users,roles,room-types,audit-logs}/page.tsx   # 管理页（T3b）
   components/                             # AppShell(侧边导航+顶栏+手机Drawer)、状态徽标、
                                           # 确认对话框、Modal、Loading/Empty/Error/Forbidden 视图
+  components/booking/                     # S2-T2：guest-picker（搜索/创建）、availability-picker（可售房间）、
+                                          # reservation-form（新建/编辑共用）、shared（字段/提示条）
   components/settings/                    # 四个管理页视图 + 共享工具（分页加载/表单/表格）
-  lib/api/                                # 统一 API Client（client.ts + 各资源模块 + 错误归一化）
+  lib/api/                                # 统一 API Client（client.ts + guests/reservations/stays/
+                                          # availability 等资源模块 + 错误归一化）
+  lib/booking.ts                          # S2-T2：业务日期（Asia/Shanghai）、日期校验、状态标签、金额展示
   lib/server/                             # 服务端 Cookie 读取 / 后端直连 Client
   test/setup.ts                           # Vitest 全局 setup（jest-dom + RTL cleanup）
 ```
 
 - 页面数据由 Client Component 在挂载后经 `/api/bff` 拉取（Loading/Empty/Error 三态）；
   登录态由服务端布局读取 Cookie 校验（未登录 307 → /login）
-- 导航按 `auth/me` 返回的权限 code 动态显示；403 统一渲染“无权限访问该页面”（不跳登录，与 401 区分）
+- 导航按 `auth/me` 返回的权限 code 动态显示（S2-T2 新增：`reservation:read` → 预订、`stay:read` → 在住）；403 统一渲染“无权限访问该页面”（不跳登录，与 401 区分）
 - 管理页写操作权限（user:write / role:write / room_type:write 等）由后端 RBAC 裁决，前端仅按权限显隐按钮
+- Booking 操作（cancel / no-show / check-in / check-out）按 Reservation.status 值 + 权限显隐按钮，前端不复制后端状态机；后端 409 detail 原样展示
+- PII 双边界：后端响应已按 guest:read / reservation:read 裁剪（裁剪字段以键缺失呈现，见 S2-T1），前端再按权限隐藏对应区块（不渲染 Guest 姓名/联系方式/金额）
 
-## 测试架构（T3b）
+## 测试架构（T3b / S2-T2）
 
 - **Vitest 单元/组件测试**（`frontend/vitest.config.mts`，jsdom + @testing-library/react，`pnpm test`）：
   测试文件与源码同目录（`src/**/__tests__/*.test.ts(x)`）；API 层经 `vi.mock` 替换为假实现、
   真实 `ApiError` 语义保留；`next/navigation` / `next/link` 按需 mock。
+  S2-T2 新增 Booking 域用例（139 = Sprint 1 基线 74 + S2-T2 新增 65），测试日期一律基于
+  Asia/Shanghai 业务日期动态生成（`businessDate()` / `addDays`，禁止硬编码年月日）。
 - **Playwright E2E**（`frontend/playwright.config.ts`，`pnpm test:e2e`）：
   - 独立测试库 `stayops_test`：后端 webServer 直接运行单进程入口 `frontend/e2e/run_test_backend.py` ——
     `prepare_test_db.py` DROP/CREATE 测试库 → alembic upgrade → 幂等 seed（28 间种子房）→

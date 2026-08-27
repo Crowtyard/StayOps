@@ -55,11 +55,11 @@ pnpm.cmd dev                        # http://localhost:3000
 ## 测试
 
 ```powershell
-# 后端 pytest（独立测试库 stayops_test，87 用例）
+# 后端 pytest（独立测试库 stayops_test，167 用例 = 87 基线 + 76 Booking + 4 严格 PATCH）
 cd backend
 .venv\Scripts\python.exe -m pytest -q
 
-# 前端单元/组件测试（Vitest，74 用例）
+# 前端单元/组件测试（Vitest，139 用例 = 74 基线 + 65 Booking UI）
 cd frontend
 pnpm.cmd test
 
@@ -70,6 +70,13 @@ pnpm.cmd test:e2e
 ```
 
 详见 [tests/README.md](tests/README.md)、[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+
+## 预订运营（Sprint 2 · S2-T2）
+
+- 页面：`/reservations`（列表/筛选/分页）、`/reservations/new`（Guest 搜索创建 + Availability 选房）、`/reservations/[id]`（CONFIRMED 编辑、Cancel / No-show / Check-in）、`/stays`（在住列表）、`/stays/[id]`（Check-out）
+- 扩展：`/dashboard`（今日到店 / 今日离店 / 当前在住 / 未来 7 天预订）、`/rooms/[id]`（当前 Stay / 下一笔预订）
+- 导航按权限显示：`reservation:read` → 预订、`stay:read` → 在住；HOUSEKEEPING 等角色不可见且直连 403
+- 业务日期统一 Asia/Shanghai；日期区间 `[check_in_date, check_out_date)`；409/422 展示后端原文
 
 ## 文档
 

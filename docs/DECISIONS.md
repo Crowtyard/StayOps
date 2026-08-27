@@ -124,4 +124,26 @@ venv 因启动器硬编码旧路径而重建；requirements.txt 统一为 UTF-8 
 - 校验在请求解析阶段原子失败：混合 payload 任何字段都不会被部分应用（无 Partial Success）；
 - 合法 PATCH 行为（CONFIRMED 全字段编辑、room/room_type/dates 重校验、终态 409）保持不变。
 
-后果：PATCH 不再存在 Silent Ignore 路径；pytest 增加严格校验用例（status / 未知字段 / 混合 payload / 空 payload / 合法 notes），总数由 163 增至 168。
+后果：PATCH 不再存在 Silent Ignore 路径；pytest 增加严格校验用例（status / 未知字段 / 混合 payload / 空 payload / 合法 notes），总数由 163 增至 167。
+
+## 2026-08-27 — Sprint 2 S2-T2：Booking Operations UI
+
+1. **页面与组件分层沿用 Sprint 1 模式**。`app/(main)/**` 页面保持薄包装（metadata + 视图组件），业务视图放 `components/`（reservations-view / new-reservation-view / reservation-detail-view / stays-view / stay-detail-view），Booking 共享交互组件放 `components/booking/`（guest-picker / availability-picker / reservation-form / shared）。所有数据经统一 API Client（新增 guests / reservations / stays / availability 模块）走 BFF，浏览器不接触 Token。
+
+2. **新增 `/stays` 列表页（超出任务书「新增页面」清单的补充）**。背景：导航契约要求 `stay:read → 在住入口`，而任务书页面清单只有 `/stays/[id]` 详情页；T1 已交付 `GET /stays`（status/room_id/planned_check_out_date 筛选）供 T2 消费。决策：新增轻量 `/stays` 列表页作为导航落点（真实分页 + 后端筛选），不新增任何后端接口。后果：在住入口可用，Stay List 查询契约（REV-FINAL-07）被完整消费。
+
+3. **前端业务日期与日期算术**。`lib/booking.ts::businessDate()` 用 `Intl.DateTimeFormat(..., { timeZone: "Asia/Shanghai" })` 取 Property Business Date（IANA 时区，不依赖宿主机时区）；`addDays` 用 `Date.UTC` 纯日期算术（规避 `+08:00` 字符串解析的 UTC 偏移陷阱——曾导致 date+1 得同日的 bug，已由 Vitest 用例锁住）。所有测试日期动态生成（禁止硬编码年月日）。
+
+4. **Availability 选择器交互**。新建/编辑表单必须先以当前日期 + 房型查询真实 `GET /availability`；选择器展示全部房间（不可用房间灰显 + 后端原因原文）；无可用房间展示 Empty 态且表单校验阻止提交（未选房间 → 「请选择可用房间」）。选择房间自动带出 `room_type_id`（Room / Room Type 联动），房型筛选变化清空房间选择强制重新挑选；最终一致性仍由后端 422 裁决。
+
+5. **PII 双保险渲染（REV-02）**。后端已裁剪字段（`response_model_exclude_none` → 键缺失），前端再按 `auth/me` 权限隐藏：无 `guest:read` 不渲染 name/phone/email/guest_name（仅显示 `ID {guest_id}`）；无 `reservation:read` 不渲染预订摘要区块；HOUSEKEEPING 在 Room Detail 只看到「当前有客」非身份摘要（由 `occupancy_status=occupied` 派生，不依赖 Booking API）。任何 PII 不写入 localStorage/sessionStorage/console。
+
+6. **Booking 操作按钮：status 值 + 权限显隐，不复制状态机**。前端仅按 `Reservation.status` 的具体值与 `auth/me` 权限决定按钮显隐（CONFIRMED：编辑/Cancel/No-show/Check-in；CHECKED_IN/COMPLETED：查看入住记录），不内置转换表；非法操作由后端 409 裁决并原样展示 detail（dirty / occupied / 日期资格 / 已退房 / 已取消等），不转成通用错误。所有写操作经确认对话框 + 提交期间按钮禁用（防重复提交），并发安全仍由后端保证。
+
+7. **编辑表单只提交变更字段**。后端 strict PATCH（S2T1-BLK-01）拒绝空 payload 与未知字段：编辑模式 `buildPayload()` 对比 initial 仅收集发生变化的字段，无变更时提示「没有需要保存的变更」且不发请求；`status` 字段不存在于表单 schema。
+
+8. **WALK_IN 日期约束（UI 层）**。`source = WALK_IN` 时 `check_in_date` 自动置为业务日期今天并禁用输入（与后端「WALK_IN 入住日期必须为业务日期今天」一致），切换其它来源后可重新编辑；后端 422 仍为最终裁决。
+
+9. **Dashboard / Room Detail 组合策略（REV-FINAL-07 消费）**。Dashboard 新增「预订运营概览」：今日到店 = `GET /reservations?status=CONFIRMED` 客户端过滤 check_in=today；今日离店/当前在住 = `GET /stays?status=ACTIVE`；未来 7 天 = CONFIRMED 且 today ≤ check_in < today+7；循环翻页拉全（不假设数据量）。Room Detail 组合 `GET /rooms/{id}` + `GET /stays?room_id&status=ACTIVE` + `GET /reservations?room_id&status=CONFIRMED`（客户端取 check_in ≥ today 的最近一笔）。不新增后端聚合 API，Sprint 1 核心响应不变。
+
+10. **前端查询新鲜度（React 19 + Next 16 lint 规则约束）**。Next 16 的 `react-hooks/set-state-in-effect` 禁止 effect 内同步 setState：查询结果携带其查询键（availability-picker 的 `{key, data}`、guest-picker 的 `{query, items}`），渲染期由 state 派生判断新鲜度（参数变化后旧结果立即失效显示加载态），effect 仅在异步回调中 setState。
