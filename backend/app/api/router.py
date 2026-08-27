@@ -7,6 +7,7 @@ from app.api.routes import (
     auth,
     availability,
     guests,
+    housekeeping,
     permissions,
     reservations,
     roles,
@@ -28,3 +29,5 @@ api_router.include_router(guests.router)
 api_router.include_router(availability.router)
 api_router.include_router(reservations.router)
 api_router.include_router(stays.router)
+api_router.include_router(housekeeping.router)
+api_router.include_router(housekeeping.assignees_router)

@@ -101,3 +101,22 @@ Kun                     = PROJECT MANAGER + QA
 - S2-T3.md — Integration & E2E（全链路验收）
 
 Sprint 2 进展：S2-T1（Booking Domain Foundation）、S2-T2（Booking Operations UI）、S2-T3（Integration & E2E）全部完成并通过独立 QA；Sprint 2 Final Acceptance PASS（pytest 167 / Vitest 139 / Playwright 29 全绿）；`v1.0.0-alpha.1` 冻结不动，`v1.0.0-alpha.2` 已创建为 Sprint 2 Release Commit。
+
+## Sprint 3（COMPLETE）
+
+```text
+Sprint 3                = COMPLETE
+正式名称                = Housekeeping Operations & Room Turnover（保洁运营与翻房闭环）
+Release                 = v1.0.0-alpha.3（RELEASED）
+开发模式                = FAST TRACK + REUSE FIRST + ONE SPRINT / ONE DSH SESSION
+Sprint 3 Coding         = IMPLEMENTATION COMPLETE（单会话一次完成）
+Sprint 3 Fast QA        = PASS（Kun 独立重跑 pytest 202 / Vitest 170 / Playwright 36 全绿）
+DSH                     = STOPPED
+Kun                     = PROJECT MANAGER + QA
+```
+
+任务书：`docs/tasks/sprint-03/README.md`（单文档，不再拆分 S3-T1/T2/T3）。
+
+Sprint 3 范围：退房自动生成 Housekeeping Task（同一事务）→ 派单 → 开始清扫 → 提交验房 → 通过/返工 → 房间翻房闭环；Active Task 数据库级唯一（部分唯一索引）；Task 状态与 Room.cleaning_status 原子联动；保洁工作台（`/housekeeping` / `/housekeeping/[id]`）；Dashboard 与 Room Detail 集成；Check-in clean gating 保持；保洁域 RBAC / 审计 / 并发安全 / 无 PII。
+
+Sprint 3 进展：DSH 单会话完成全部实现（Implementation Complete，无 commit）；Kun Fast QA 独立重跑正式测试全绿（pytest 202 / Vitest 170 / Playwright 36，Sprint 2 基线 167 / 139 / 29 全部保留），代码审查确认 Checkout 原子性、Active Task 数据库级部分唯一索引、Task ↔ Room 原子联动、RBAC / PII / Check-in gating；`v1.0.0-alpha.2` 冻结不动，`v1.0.0-alpha.3` 已创建为 Sprint 3 Release Commit。

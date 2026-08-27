@@ -1,5 +1,15 @@
 # StayOps Agent Rules
 
+## 核心工程原则（Sprint 3 起生效，所有 Sprint 默认遵守）
+
+**Principle A · Product Design Is Ours**：外部开源项目只是实现参考，不是产品规格。它们不能决定 StayOps 做什么、页面如何设计，不能擅自改变我们的产品流程。Product Requirement / User Flow / Information Architecture / UI-UX / Scope 以 Sprint 指令与现有项目需求为最高权威。
+
+**Principle B · Reuse Before Build**：写新代码前按顺序判断——① StayOps 已有可复用实现？② Python / FastAPI / PostgreSQL / Next.js / 浏览器原生能力能否解决？③ 已安装依赖能否解决？④ 成熟开源项目有没有经过验证的实现模式？⑤ 都不适合才写最小必要的新代码。禁止为了“架构漂亮”重造已有轮子。
+
+**Principle C · Do Not Reinvent Solved Engineering Problems**：数据库约束、并发安全、事务、状态机、幂等、权限检查、审计、测试隔离、E2E 数据准备等工程问题优先学习成熟实现（只借鉴 HOW TO IMPLEMENT，不得让开源项目改变 WHAT STAYOPS SHOULD DO）。
+
+**Principle D · Safety Beats Less Code**：Reuse First 不等于减少必要安全机制。不得为了少代码牺牲 RBAC、PII 保护、事务安全、数据库完整性、校验、审计、并发保护、错误语义、测试。
+
 1. 开始任何开发任务前先阅读：
 
    - `docs/PRD.md`

@@ -2,6 +2,44 @@
 
 All notable changes to StayOps will be documented in this file.
 
+## [v1.0.0-alpha.3] - 2026-08-28
+
+### Added
+
+- Sprint 3: Housekeeping Operations & Room Turnover（保洁运营与翻房闭环）
+- HousekeepingTask 模型（Migration `77ec5f0c543e`：PG 枚举 hk_task_status / hk_task_source / hk_task_priority、Sequence housekeeping_task_no_seq、部分唯一索引 uq_housekeeping_tasks_active_room）
+- Checkout 自动生成翻房任务（同一退房事务，失败整体回滚）
+- Task 状态机（PENDING → IN_PROGRESS → INSPECTION → COMPLETED；INSPECTION → REWORK → IN_PROGRESS；取消）
+- Task ↔ Room.cleaning_status 原子联动（与审计同事务）
+- Active Task 数据库级唯一（一个 Room 至多一个进行中任务，并发创建 409）
+- 手动任务创建（dirty 房间）+ 派单 / 改派 / 取消派单（GET /housekeeping/assignees 候选人端点）
+- 保洁工作台 `/housekeeping` 与任务详情 `/housekeeping/[id]`；导航「保洁」
+- Dashboard 保洁运营概览（待清扫 / 清扫中 / 待验房 / 返工）；Room Detail 保洁任务摘要
+- Housekeeping RBAC（5 个新权限，共 31 个权限码；MANAGER 全部、FRONT_DESK read+write、HOUSEKEEPING read+work+inspect）
+- Housekeeping 审计（create / assign / update / start / submit_inspection / pass / rework / cancel，无 PII）
+- Check-in clean gating 保持（dirty / cleaning / inspection / rework → 409）
+- Formal Playwright E2E：翻房 Golden Path / Rework 闭环 / 手动任务 / gating / 保洁 RBAC / 并发 / PII
+
+### Verified
+
+- Backend pytest: 202 passed（167 Sprint 2 基线保留）
+- Frontend Vitest: 170 passed（139 Sprint 2 基线保留）
+- Playwright E2E: 36 passed（29 Sprint 2 基线保留）
+- Clean-environment bootstrap verified（空库 → alembic → seed → 全链路）
+
+### Known Issues
+
+（沿用既有非阻塞四项，本轮未改变）
+
+- `/rooms/9999` returns an HTTP 200 page while the underlying BFF resource returns 404.
+- Starlette/httpx TestClient deprecation warning remains.
+- Playwright E2E credentials require local gitignored configuration.
+- `/health` does not currently include PostgreSQL readiness checks.
+
+### Status
+
+Sprint 3 implementation complete; Kun Fast QA PASS（pytest 202 / Vitest 170 / Playwright 36 全绿）; `v1.0.0-alpha.3` released（Tag-only release convention）。
+
 ## [v1.0.0-alpha.2] - 2026-08-27
 
 ### Added

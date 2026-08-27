@@ -1,6 +1,6 @@
 # StayOps API
 
-> Sprint 1 第二阶段已实现，Sprint 2 S2-T1 扩展 Booking 域。统一前缀 `/api/v1`，JSON 请求/响应，JWT（Bearer）认证。
+> Sprint 1 第二阶段已实现，Sprint 2 S2-T1 扩展 Booking 域，Sprint 3 扩展 Housekeeping 域。统一前缀 `/api/v1`，JSON 请求/响应，JWT（Bearer）认证。
 
 ## 约定
 
@@ -30,7 +30,7 @@
 | PUT | /roles/{id} | 更新角色 | role:write |
 | DELETE | /roles/{id} | 删除角色（级联清理关联） | role:delete |
 | POST | /roles/{id}/permissions | 设置角色权限（整体替换，空=清空） | role:write |
-| GET | /permissions | 权限列表（分页，26 个 = Sprint 1 的 17 + Booking 的 9） | role:read |
+| GET | /permissions | 权限列表（分页，31 个 = Sprint 1 的 17 + Booking 的 9 + Housekeeping 的 5） | role:read |
 | GET | /room-types | 房型列表（分页，含 room_count） | room_type:read |
 | POST | /room-types | 创建房型 | room_type:write |
 | GET | /room-types/{id} | 房型详情 | room_type:read |
@@ -57,7 +57,17 @@
 | POST | /reservations/{id}/check-in | 办理入住（单事务：Reservation CHECKED_IN + Stay ACTIVE + Room occupied + 审计） | stay:check_in |
 | GET | /stays | 入住列表（分页，`?status=` / `?room_id=` / `?planned_check_out_date=`） | stay:read |
 | GET | /stays/{id} | 入住详情 | stay:read |
-| POST | /stays/{id}/check-out | 办理退房（单事务：Stay CHECKED_OUT + Reservation COMPLETED + Room available+dirty + 审计） | stay:check_out |
+| POST | /stays/{id}/check-out | 办理退房（单事务：Stay CHECKED_OUT + Reservation COMPLETED + Room available+dirty + **Housekeeping Task PENDING 自动创建** + 审计） | stay:check_out |
+| GET | /housekeeping/tasks | 保洁任务列表（分页，`?status=` / `?room_id=` / `?assigned_to_user_id=` / `?priority=` / `?source=` / `?search=`（task_no OR room_no，非 PII）） | housekeeping_task:read |
+| POST | /housekeeping/tasks | 手动创建任务（仅 dirty 且非 occupied 房间；已有进行中任务 409） | housekeeping_task:write |
+| GET | /housekeeping/tasks/{id} | 任务详情（无 Guest / Reservation 数据） | housekeeping_task:read |
+| PATCH | /housekeeping/tasks/{id} | 派单/改派/取消派单（`assigned_to_user_id` 显式 null）/ priority / notes；仅进行中任务；strict schema（含 status 的 payload → 422，空 payload → 422） | housekeeping_task:write |
+| POST | /housekeeping/tasks/{id}/start | 开始清扫（PENDING/REWORK → IN_PROGRESS；Room → cleaning；单事务） | housekeeping_task:work |
+| POST | /housekeeping/tasks/{id}/submit-inspection | 提交验房（IN_PROGRESS → INSPECTION；Room → inspection；单事务） | housekeeping_task:work |
+| POST | /housekeeping/tasks/{id}/pass | 验收通过（INSPECTION → COMPLETED；Room → clean；单事务） | housekeeping_task:inspect |
+| POST | /housekeeping/tasks/{id}/rework | 返工（INSPECTION → REWORK；Room → rework；单事务） | housekeeping_task:inspect |
+| POST | /housekeeping/tasks/{id}/cancel | 取消任务（进行中 → CANCELLED；Room → dirty；单事务） | housekeeping_task:cancel |
+| GET | /housekeeping/assignees | 派单候选人（持有 housekeeping_task:work 的在职用户；不要求 user:read） | housekeeping_task:write |
 
 ## 认证与权限
 
@@ -166,7 +176,63 @@ Double Booking（含并发撞排他约束 23P01）、blocked / out_of_service �
 
 ### 业务单号
 
-`reservation_no` / `stay_no` 服务端生成：`RSV{YYYYMMDD}-{NNNN}` / `STY{YYYYMMDD}-{NNNN}`（日期 = Property Business Date；NNNN = PG Sequence 原子取号，唯一约束兜底）。禁止客户端传入。
+`reservation_no` / `stay_no` / `task_no` 服务端生成：`RSV{YYYYMMDD}-{NNNN}` / `STY{YYYYMMDD}-{NNNN}` / `HKT{YYYYMMDD}-{NNNN}`（日期 = Property Business Date；NNNN = PG Sequence 原子取号，唯一约束兜底）。禁止客户端传入。
+
+## Housekeeping 域（Sprint 3）
+
+### 状态机（后端唯一权威，非法跳转 409）
+
+```text
+PENDING → IN_PROGRESS → INSPECTION → COMPLETED（终态）
+                ▲             │
+                └─ REWORK ◄───┘
+任意进行中状态 → CANCELLED（终态）
+```
+
+状态只能经专用 action 端点变更（start / submit-inspection / pass / rework / cancel）；PATCH 不含 status 字段。
+
+### Task ↔ Room.cleaning_status 原子联动（与审计同事务，任一步失败全部回滚）
+
+```text
+PENDING → dirty   IN_PROGRESS → cleaning   INSPECTION → inspection
+REWORK  → rework  COMPLETED    → clean     CANCELLED   → dirty
+```
+
+### Checkout 集成
+
+退房事务原子完成：`Stay CHECKED_OUT + Reservation COMPLETED + Room available+dirty + HousekeepingTask PENDING（source=CHECKOUT）+ housekeeping.create 审计`；任务创建失败 → 整个退房 rollback。
+
+### Active Task 唯一
+
+一个 Room 至多一个进行中任务（PENDING/IN_PROGRESS/INSPECTION/REWORK），数据库部分唯一索引最终仲裁；并发重复创建 → 409「该房间已有进行中的保洁任务」。
+
+### 409 场景清单（Housekeeping 域）
+
+非 dirty 房间手动创建、occupied 房间手动创建（不做住中保洁）、Active Task 重复（含并发）、非法状态转换（start/submit/pass/rework/cancel 的目标状态不合法）、终态任务 PATCH。422：未知字段（含 status）、空 payload、被指派人不存在/停用。
+
+### 响应示例
+
+`GET /api/v1/housekeeping/tasks/{id}`（`response_model_exclude_none`：null 字段以键缺失呈现）：
+
+```json
+{
+  "id": 1,
+  "task_no": "HKT20260827-0001",
+  "room_id": 12,
+  "room_number": "203",
+  "status": "IN_PROGRESS",
+  "priority": "URGENT",
+  "source": "CHECKOUT",
+  "assigned_to_user_id": 9,
+  "assignee_name": "保洁小王",
+  "notes": null,
+  "started_at": "2026-08-27T22:00:00+08:00",
+  "created_at": "2026-08-27T21:59:00+08:00",
+  "updated_at": "2026-08-27T22:00:00+08:00"
+}
+```
+
+（示例日期仅为文档说明；自动化测试一律动态日期。任务响应不含任何 Guest / Reservation 数据。）
 
 ## 示例
 

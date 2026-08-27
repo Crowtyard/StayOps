@@ -3,6 +3,12 @@
 from app.models.audit import AuditLog
 from app.models.base import Base
 from app.models.guest import Guest
+from app.models.housekeeping import (
+    HousekeepingTask,
+    HousekeepingTaskPriority,
+    HousekeepingTaskSource,
+    HousekeepingTaskStatus,
+)
 from app.models.reservation import Reservation, ReservationSource, ReservationStatus
 from app.models.room import (
     CleaningStatus,
@@ -17,6 +23,10 @@ __all__ = [
     "AuditLog",
     "Base",
     "Guest",
+    "HousekeepingTask",
+    "HousekeepingTaskPriority",
+    "HousekeepingTaskSource",
+    "HousekeepingTaskStatus",
     "Permission",
     "Reservation",
     "ReservationSource",

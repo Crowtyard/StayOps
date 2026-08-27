@@ -15,6 +15,7 @@ import {
   IconAudit,
   IconBooking,
   IconBuilding,
+  IconCleaning,
   IconHome,
   IconLogout,
   IconMenu,
@@ -56,6 +57,12 @@ const NAV_ITEMS: NavItem[] = [
     permission: "reservation:read",
   },
   { href: "/stays", label: "在住", icon: <IconStay />, permission: "stay:read" },
+  {
+    href: "/housekeeping",
+    label: "保洁",
+    icon: <IconCleaning />,
+    permission: "housekeeping_task:read",
+  },
   {
     href: "/settings/room-types",
     label: "房型",

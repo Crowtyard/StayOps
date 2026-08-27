@@ -219,3 +219,13 @@ export function IconBack({ className }: IconProps) {
     </Svg>
   );
 }
+
+export function IconCleaning({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <path d="m7 3 3 3 2-3 2 3 3-3v7a3 3 0 0 1-3 3H10a3 3 0 0 1-3-3V3Z" />
+      <path d="M10 13v3a4 4 0 0 1-4 4h-1a1 1 0 0 0-1 1v.5a1 1 0 0 0 1 1h2.5" />
+      <path d="M7 13v3a4 4 0 0 0 4 4h3" />
+    </Svg>
+  );
+}

@@ -66,3 +66,18 @@ Sprint 2 S2-T3 新增（19 条；辅助集中在 `booking-helpers.ts`，
   已退房 409（UI 原文 + BFF 状态码）、404 语义、401 BFF
 - `regression.spec.ts`（1 条，房间 103）：Sprint 1 补充冒烟（登录 / BFF /
   房态棋盘 / 状态修改 / 审计 / 登出守卫），与既有 10 条互补
+
+Sprint 3 新增（7 条；辅助集中在 `housekeeping-helpers.ts`；房间号段 105-110 / 209 / 210，
+不与 Sprint 1/2 用例重叠）：
+
+- `housekeeping.spec.ts`（3 条）：翻房 Golden Path UI 全链路（FRONT_DESK 预订→入住→退房 →
+  自动任务 PENDING → UI 派单 → HOUSEKEEPING 开始清扫/提交验房/通过 → 房间 clean →
+  下一笔入住 SUCCESS，房间 210）；Rework 闭环（INSPECTION → 返工 → 重新清扫 → 通过，
+  每步 Task 与 Room.cleaning_status 一致，房间 209）；手动任务（FRONT_DESK 创建 dirty 房任务 →
+  重复创建 409 → admin 取消 → 房间回置 dirty，房间 109）
+- `housekeeping-safety.spec.ts`（4 条，HTTP 层）：Check-in clean gating
+  （dirty/cleaning/inspection/rework → 409、clean → SUCCESS → 自动任务 → 完成链，
+  房间 105-109）；RBAC 矩阵（FRONT_DESK 创建/派单、不可 start/cancel；HOUSEKEEPING
+  执行工作流、不可创建/修改/取消；MAINTENANCE 403；assignees 端点）；并发
+  （Duplicate Active Task / Concurrent Start / PASS vs REWORK 各 1 SUCCESS + 1 × 409，
+  无矛盾终态）；PII（任务响应与审计无 Guest 身份/联系方式/预订数据）

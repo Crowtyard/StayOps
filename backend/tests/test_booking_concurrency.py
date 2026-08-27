@@ -17,7 +17,15 @@ from fastapi import HTTPException
 from sqlalchemy import delete, func, select
 
 from app.database import SessionLocal
-from app.models import AuditLog, Guest, Reservation, Room, RoomType, Stay
+from app.models import (
+    AuditLog,
+    Guest,
+    HousekeepingTask,
+    Reservation,
+    Room,
+    RoomType,
+    Stay,
+)
 from app.schemas.reservation import ReservationCreate
 from app.services import booking
 from tests.booking_helpers import d, today
@@ -37,6 +45,8 @@ def _create_room_and_guest(db, room_number: str) -> tuple[int, int]:
 
 
 def _delete_room_and_guest(db, room_id: int, guest_id: int) -> None:
+    # Sprint 3：Check-out 会为房间生成保洁任务（FK RESTRICT），先清理任务
+    db.execute(delete(HousekeepingTask).where(HousekeepingTask.room_id == room_id))
     db.execute(delete(Stay).where(Stay.room_id == room_id))
     db.execute(delete(Reservation).where(Reservation.room_id == room_id))
     db.execute(delete(Guest).where(Guest.id == guest_id))

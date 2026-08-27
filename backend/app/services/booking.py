@@ -42,6 +42,7 @@ from app.models import (
     User,
 )
 from app.schemas.reservation import ReservationCreate, ReservationUpdate
+from app.services.housekeeping import create_checkout_task
 
 # 业务单号使用的 PG Sequence（Migration 创建）
 RESERVATION_NO_SEQ = "reservation_no_seq"
@@ -747,6 +748,11 @@ def check_out_stay(
         write_audit_log(
             db, user, "stay.check_out", "stay", stay.id, details, request
         )
+
+        # Sprint 3：退房自动生成翻房任务（PENDING，source=CHECKOUT），
+        # 与退房同事务：任务创建失败 -> 整个退房 rollback（原子不变式）
+        create_checkout_task(db, room, stay, user, request)
+
         _commit_or_conflict(
             db,
             generic_detail="该入住记录已退房，请勿重复操作",

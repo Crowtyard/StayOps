@@ -6,12 +6,17 @@ import { useRouter } from "next/navigation";
 import { ApiError, api } from "@/lib/api";
 import type {
   CleaningStatus,
+  HousekeepingTaskOut,
   OccupancyStatus,
   ReservationOut,
   RoomOut,
   StayOut,
 } from "@/lib/api/types";
 import { businessDate } from "@/lib/booking";
+import {
+  HK_PRIORITY_META,
+  HK_TASK_STATUS_META,
+} from "@/lib/housekeeping";
 import {
   CLEANING_DIMENSION_LABEL,
   CLEANING_META,
@@ -20,7 +25,7 @@ import {
   OCCUPANCY_META,
   OCCUPANCY_STATUSES,
 } from "@/lib/status";
-import { CleaningBadge, OccupancyBadge } from "@/components/status-badge";
+import { CleaningBadge, OccupancyBadge, StatusBadge } from "@/components/status-badge";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { ErrorView, Loading } from "@/components/status-views";
 import { useUser } from "@/components/app-shell";
@@ -55,12 +60,16 @@ export default function RoomDetailView({ id }: { id: string }) {
   const [activeStay, setActiveStay] = useState<StayOut | null>(null);
   const [nextReservation, setNextReservation] = useState<ReservationOut | null>(null);
 
+  // Housekeeping 关联（S3）：进行中保洁任务（无 housekeeping_task:read 不请求）
+  const [activeTask, setActiveTask] = useState<HousekeepingTaskOut | null>(null);
+
   const canWrite = permissions.has("room:write");
   const canClean = permissions.has("room:status_cleaning");
   const canMaintain = permissions.has("room:status_maintenance");
   const canReadStay = permissions.has("stay:read");
   const canReadReservation = permissions.has("reservation:read");
   const canReadGuest = permissions.has("guest:read");
+  const canReadHousekeepingTask = permissions.has("housekeeping_task:read");
 
   const occupancyOptions = useMemo<OccupancyStatus[]>(() => {
     if (canWrite) return OCCUPANCY_STATUSES;
@@ -142,6 +151,27 @@ export default function RoomDetailView({ id }: { id: string }) {
       cancelled = true;
     };
   }, [room, canReadStay, canReadReservation, reloadKey]);
+
+  // 进行中保洁任务摘要（housekeeping_task:read）；403/网络静默隐藏，不阻塞主体
+  useEffect(() => {
+    if (!room || !canReadHousekeepingTask) return;
+    let cancelled = false;
+    api.housekeeping
+      .list({ room_id: room.id, page: 1, page_size: 10 })
+      .then((page) => {
+        if (cancelled) return;
+        const active = page.items.find((t) =>
+          ["PENDING", "IN_PROGRESS", "INSPECTION", "REWORK"].includes(t.status),
+        );
+        setActiveTask(active ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setActiveTask(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [room, canReadHousekeepingTask, reloadKey]);
 
   async function submitChange(
     dimension: "occupancy" | "cleaning",
@@ -397,6 +427,41 @@ export default function RoomDetailView({ id }: { id: string }) {
                   <dd className="inline">{nextReservation.guest_name}</dd>
                 </div>
               ) : null}
+            </dl>
+          </div>
+        ) : null}
+
+        {/* 保洁任务摘要（S3）：仅 housekeeping_task:read；不含任何 PII */}
+        {canReadHousekeepingTask &&
+        activeTask &&
+        activeTask.room_id === room.id ? (
+          <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold text-gray-900">保洁任务</h2>
+              <StatusBadge meta={HK_TASK_STATUS_META[activeTask.status]} />
+            </div>
+            <dl className="mt-2 space-y-1 text-sm text-gray-700">
+              <div>
+                <dt className="inline text-xs text-gray-500">任务号：</dt>
+                <dd className="inline">
+                  <Link
+                    href={`/housekeeping/${activeTask.id}`}
+                    className="font-medium hover:underline"
+                  >
+                    {activeTask.task_no}
+                  </Link>
+                </dd>
+              </div>
+              <div>
+                <dt className="inline text-xs text-gray-500">优先级：</dt>
+                <dd className="inline">
+                  {HK_PRIORITY_META[activeTask.priority].label}
+                </dd>
+              </div>
+              <div>
+                <dt className="inline text-xs text-gray-500">保洁员：</dt>
+                <dd className="inline">{activeTask.assignee_name ?? "未指派"}</dd>
+              </div>
             </dl>
           </div>
         ) : null}

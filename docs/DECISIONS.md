@@ -163,3 +163,25 @@ venv 因启动器硬编码旧路径而重建；requirements.txt 统一为 UTF-8 
 6. **审计无 PII 断言方式**。Golden Path 完成后以 admin 打开 `/settings/audit-logs` 验证 `guest.create / reservation.create / reservation.check_in / stay.check_out` 存在；details 无 PII 通过按资源 ID 精确取审计 JSON（断言不含 Guest 手机号/邮箱/notes/金额等可辨识标记值），UI 与 API 双层。
 
 7. **PII 三层断言方式（REV-02）**。HOUSEKEEPING 专项：UI 层断言 Room 详情仅出现 dirty / occupied / 当前有客；网络层收集页面加载期间全部 `/api/bff/*` 响应体断言不含 PII 标记值；直连 API 层断言 guests / reservations / stays / availability 全部 403（带合法查询参数以区分 422 与 403）。
+
+## 2026-08-27 — Sprint 3：Housekeeping Operations & Room Turnover
+
+1. **HousekeepingTask 模型与 PII 边界**。Task 只关联 Room 与（可空）assignee 用户，**不关联 Guest / Reservation**——保洁运营不需要住客身份；响应与审计因此天然无 PII（name/phone/email/notes/reservation_no/amount 均不出现）。Checkout 的可追溯性由 `housekeeping.create` 审计携带 `stay_id / stay_no` 完成。
+
+2. **Active Task 数据库级唯一：部分唯一索引**。一个 Room 至多一个进行中任务（PENDING / IN_PROGRESS / INSPECTION / REWORK），实现为 `CREATE UNIQUE INDEX uq_housekeeping_tasks_active_room ON (room_id) WHERE status IN (...)`——与 Booking 排他约束同思路（谓词限定 + 数据库最终仲裁）；应用层预检仅为快速路径，并发重复创建由唯一冲突（23505）映射 409「该房间已有进行中的保洁任务」。
+
+3. **Task 状态机 + Room.cleaning_status 原子联动**。`PENDING→dirty、IN_PROGRESS→cleaning、INSPECTION→inspection、REWORK→rework、COMPLETED→clean、CANCELLED→dirty`；每次 action（start / submit-inspection / pass / rework / cancel）在单事务内完成 Task 状态 + 房态 + 审计，任一步失败全部回滚（`SELECT FOR UPDATE` 串行化并发转换）。任务驱动的房态写入不经过手动房态状态机（与 Checkout 无条件置 dirty 的既有决策同理由）；手动房态接口的状态机语义保持不变。
+
+4. **Checkout 自动建任务（原子不变式）**。`create_checkout_task` 在退房事务内被调用（只 flush 不 commit）：Stay CHECKED_OUT + Reservation COMPLETED + Room available+dirty + Task PENDING 要么全部生效、要么全部回滚，不存在「已退房但没有翻房任务」。任务创建失败由退房事务整体回滚（pytest 显式回滚用例验证）。
+
+5. **状态只能经 action 端点变更，PATCH 严格化（沿用 S2T1-BLK-01 修订）**。PATCH 仅限 priority / assigned_to_user_id / notes；strict schema（extra=forbid，空 payload 422，`assigned_to_user_id` 显式 null = 取消派单）；终态任务 PATCH → 409。非法状态转换 409 且 detail 可读（如「仅待验房的任务可通过验收」）。
+
+6. **CANCELLED 回置 dirty**。取消即翻房未完成，房间回到待清扫（dirty），并释放 Active Task 名额（可再次创建任务）。REWORK 后重新 start 不覆盖首次 `started_at`（保留首次开始时间）。
+
+7. **派单候选人端点 `GET /housekeeping/assignees`**。FRONT_DESK 按 Sprint 3 矩阵拥有 `housekeeping_task:write`（可派单）但无 `user:read`；为不扩大 user:read 范围（会破坏 Sprint 1 RBAC 边界），新增轻量候选人端点：以 `housekeeping_task:write` 门控，返回持有 `housekeeping_task:work` 的在职用户（id / display_name / username，员工身份非 Guest PII）。
+
+8. **业务单号 task_no**。`HKT{YYYYMMDD}-{NNNN}`：PG Sequence `housekeeping_task_no_seq` 原子取号 + UNIQUE 约束（与 reservation_no / stay_no 同模式，禁止 SELECT MAX+1）。
+
+9. **工作台交互原则**。`/housekeeping` 状态视图 + 任务卡片；start / submit 一键直达，pass / rework / cancel 经确认对话框（与既有 ConfirmDialog 体系一致）；不引入 Kanban / 企业级仪表盘（外部 PMS 常见但超出本物业规模需求）；前端仅按 Task.status + 权限显隐按钮，状态机唯一权威在后端。
+
+10. **测试口径**。pytest 202（167 基线 + 35 新增：模型/状态机/RBAC/审计/派单/唯一性/Checkout 自动任务/回滚/房态同步/PII/并发/迁移往返/seed 矩阵）；Vitest 170（139 基线 + 31 新增）；Playwright 36（29 基线 + housekeeping 2 spec 7 条）。并发用例沿用「两线程 + 独立 Session 真实提交」（pytest）与「两个 APIRequestContext + Promise.all」（E2E）双重口径。E2E 房间号段：S3 使用 105-110、209、210，不与 Sprint 1/2 用例重叠。

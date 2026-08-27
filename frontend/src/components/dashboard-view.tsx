@@ -204,6 +204,90 @@ export default function DashboardView() {
       </div>
 
       <BookingOverview permissions={permissions} />
+      <HousekeepingOverview permissions={permissions} />
+    </div>
+  );
+}
+
+/**
+ * 保洁运营概览（Sprint 3）：组合既有 List API（GET /housekeeping/tasks），
+ * 不新增聚合接口。无 housekeeping_task:read 不请求、不显示。
+ * 显示：待清扫 / 清扫中 / 待验房 / 返工（进行中任务按状态计数）。
+ */
+function HousekeepingOverview({ permissions }: { permissions: Set<string> }) {
+  const canRead = permissions.has("housekeeping_task:read");
+
+  const [tasks, setTasks] = useState<import("@/lib/api/types").HousekeepingTaskOut[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!canRead) return;
+    let cancelled = false;
+    api.housekeeping
+      .list({ page: 1, page_size: 100 })
+      .then((result) => {
+        if (!cancelled) setTasks(result.items);
+      })
+      .catch(() => {
+        if (!cancelled) setLoadError("保洁任务概览加载失败");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [canRead]);
+
+  if (!canRead) return null;
+
+  const counts = {
+    PENDING: 0,
+    IN_PROGRESS: 0,
+    INSPECTION: 0,
+    REWORK: 0,
+  };
+  for (const task of tasks ?? []) {
+    if (task.status in counts) counts[task.status as keyof typeof counts] += 1;
+  }
+
+  const cards = [
+    { label: "待清扫", value: counts.PENDING },
+    { label: "清扫中", value: counts.IN_PROGRESS },
+    { label: "待验房", value: counts.INSPECTION },
+    { label: "返工", value: counts.REWORK },
+  ];
+
+  return (
+    <div className="mt-6">
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-gray-900">保洁运营概览</h2>
+        <Link href="/housekeeping" className="text-xs text-gray-500 hover:underline">
+          进入保洁工作台 →
+        </Link>
+      </div>
+
+      {loadError ? (
+        <p
+          role="alert"
+          className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 ring-1 ring-inset ring-red-200"
+        >
+          {loadError}
+        </p>
+      ) : tasks === null ? (
+        <p className="text-sm text-gray-400">正在加载保洁任务…</p>
+      ) : (
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {cards.map((card) => (
+            <div
+              key={card.label}
+              className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm"
+            >
+              <p className="text-xs text-gray-500">{card.label}</p>
+              <p className="mt-1.5 text-2xl font-semibold tabular-nums text-gray-900">
+                {card.value}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -383,3 +383,70 @@ export interface AvailabilityParams {
   check_out_date: string;
   room_type_id?: number;
 }
+
+/* ------------------------------------------------------------------ */
+/* Housekeeping 域（Sprint 3 后端契约，字段以实际 OpenAPI 为准）         */
+/* ------------------------------------------------------------------ */
+
+export type HousekeepingTaskStatus =
+  | "PENDING"
+  | "IN_PROGRESS"
+  | "INSPECTION"
+  | "REWORK"
+  | "COMPLETED"
+  | "CANCELLED";
+
+export type HousekeepingTaskPriority = "NORMAL" | "URGENT";
+
+export type HousekeepingTaskSource = "CHECKOUT" | "MANUAL";
+
+/**
+ * 保洁任务响应。后端使用 response_model_exclude_none：
+ * null 字段（如未派单的 assignee_name、未开始的 started_at）以键缺失呈现。
+ * 任务不含任何 Guest / Reservation 数据（Housekeeping 域无 PII）。
+ */
+export interface HousekeepingTaskOut {
+  id: number;
+  task_no: string;
+  room_id: number;
+  room_number: string;
+  status: HousekeepingTaskStatus;
+  priority: HousekeepingTaskPriority;
+  source: HousekeepingTaskSource;
+  assigned_to_user_id?: number | null;
+  assignee_name?: string | null;
+  notes?: string | null;
+  started_at?: string | null;
+  submitted_for_inspection_at?: string | null;
+  completed_at?: string | null;
+  cancelled_at?: string | null;
+  created_by?: number | null;
+  updated_by?: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+/** PATCH 只提交发生变化的字段；assigned_to_user_id 传 null = 取消派单；
+ *  status 不得经 PATCH 修改（后端 strict schema，携带即 422） */
+export interface HousekeepingTaskUpdate {
+  priority?: HousekeepingTaskPriority;
+  assigned_to_user_id?: number | null;
+  notes?: string | null;
+}
+
+export interface HousekeepingTaskListParams extends PageParams {
+  status?: HousekeepingTaskStatus;
+  room_id?: number;
+  assigned_to_user_id?: number;
+  priority?: HousekeepingTaskPriority;
+  source?: HousekeepingTaskSource;
+  search?: string;
+}
+
+/** 可派单候选人（GET /housekeeping/assignees，housekeeping_task:write；
+ *  仅员工身份信息，不含任何 Guest PII） */
+export interface HousekeepingAssigneeOut {
+  id: number;
+  display_name: string;
+  username: string;
+}

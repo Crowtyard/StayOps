@@ -55,15 +55,15 @@ pnpm.cmd dev                        # http://localhost:3000
 ## 测试
 
 ```powershell
-# 后端 pytest（独立测试库 stayops_test，167 用例 = 87 基线 + 76 Booking + 4 严格 PATCH）
+# 后端 pytest（独立测试库 stayops_test，202 用例 = 87 基线 + 76 Booking + 4 严格 PATCH + 35 Housekeeping）
 cd backend
 .venv\Scripts\python.exe -m pytest -q
 
-# 前端单元/组件测试（Vitest，139 用例 = 74 基线 + 65 Booking UI）
+# 前端单元/组件测试（Vitest，170 用例 = 74 基线 + 65 Booking UI + 31 Housekeeping UI）
 cd frontend
 pnpm.cmd test
 
-# Playwright E2E（独立 stayops_test 库 + 专用端口 8001/3001，29 用例 = Sprint 1 基线 10 + S2-T3 新增 19；不触碰开发数据）
+# Playwright E2E（独立 stayops_test 库 + 专用端口 8001/3001，36 用例 = Sprint 1 基线 10 + S2-T3 新增 19 + S3 新增 7；不触碰开发数据）
 cd frontend
 Copy-Item e2e\test-creds.example e2e\.env.test-creds   # 首次：填入测试库凭据（gitignored）
 pnpm.cmd test:e2e
@@ -73,7 +73,10 @@ pnpm.cmd test:e2e
 > E2E 覆盖（S2-T3）：Golden Path（预订→重叠 409→当天入住/退房→审计无 PII）、
 > Early Checkout（COMPLETED 释放剩余日期）、Booking RBAC、PII 三层防护（HOUSEKEEPING）、
 > 并发专项（Double Booking / 并发 Check-in / Check-out 各 1 SUCCESS + 1 × 409）、
-> 失败处理（409/404/401 语义）；详见 [frontend/e2e/README.md](frontend/e2e/README.md)。
+> 失败处理（409/404/401 语义）。
+> E2E 覆盖（S3）：翻房 Golden Path（退房自动任务 → 派单 → 清扫链 → 通过 → 下一笔入住成功）、
+> Rework 闭环、手动任务与取消、Check-in clean gating、保洁 RBAC / 并发 / PII；
+> 详见 [frontend/e2e/README.md](frontend/e2e/README.md)。
 
 详见 [tests/README.md](tests/README.md)、[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
@@ -83,6 +86,14 @@ pnpm.cmd test:e2e
 - 扩展：`/dashboard`（今日到店 / 今日离店 / 当前在住 / 未来 7 天预订）、`/rooms/[id]`（当前 Stay / 下一笔预订）
 - 导航按权限显示：`reservation:read` → 预订、`stay:read` → 在住；HOUSEKEEPING 等角色不可见且直连 403
 - 业务日期统一 Asia/Shanghai；日期区间 `[check_in_date, check_out_date)`；409/422 展示后端原文
+
+## 保洁运营（Sprint 3）
+
+- 页面：`/housekeeping`（保洁运营工作台：待清扫/清扫中/待验房/返工/已完成状态视图、任务卡片、快捷操作、新建任务）、`/housekeeping/[id]`（任务详情：派单/优先级/备注 + 操作确认）
+- 退房自动生成翻房任务（同一事务）：`Check-out → Task PENDING → 派单 → 开始清扫 → 提交验房 → 通过/返工 → COMPLETED + Room clean`，下一笔预订即可入住
+- Active Task 数据库级唯一（部分唯一索引）；Task 状态与 Room.cleaning_status 原子联动
+- 导航按权限显示：`housekeeping_task:read` → 保洁；RBAC：MANAGER 全部、FRONT_DESK read+write、HOUSEKEEPING read+work+inspect
+- 任务不保存任何 Guest PII；Check-in 要求 `cleaning_status = clean`（dirty/cleaning/inspection/rework → 409）
 
 ## 文档
 
@@ -97,14 +108,18 @@ pnpm.cmd test:e2e
 
 所有 AI Coding Agent 与开发者必须先阅读 [AGENTS.md](AGENTS.md)。
 
-> 当前状态：Sprint 1 完成并冻结（v1.0.0-alpha.1）；Sprint 2 完成（Booking & Stay Core Flow：Guest / Reservation / Availability / Stay / Check-in / Check-out / Early Checkout / Booking RBAC / PII 防护 / Dashboard-Room Detail 集成 / 并发保护 / 正式 E2E），Final Acceptance PASS（pytest 167 / Vitest 139 / Playwright 29）。
+> 当前状态：Sprint 1 完成并冻结（v1.0.0-alpha.1）；Sprint 2 完成（Booking & Stay Core Flow），Final Acceptance PASS；
+> Sprint 3 完成（Housekeeping Operations & Room Turnover：退房自动翻房任务 / 派单 / 清扫链 / 返工闭环 / 保洁工作台 / 保洁 RBAC / 并发安全），
+> Kun Fast QA PASS，v1.0.0-alpha.3 已发布。
 
 ## Current Release
 
-Version: v1.0.0-alpha.2
+Version: v1.0.0-alpha.3
 
-Status: Sprint 2 Final Acceptance PASS
+Status: Sprint 3 Fast QA PASS
 
-This is the second stable Alpha development baseline of StayOps（Booking & Stay Core Flow）。
+This is the third stable Alpha development baseline of StayOps（Housekeeping Operations & Room Turnover）。
+
+Sprint 3 implementation complete; Kun Fast QA PASS（pytest 202 / Vitest 170 / Playwright 36 全绿）; v1.0.0-alpha.3 released.
 
 Not intended for production deployment.

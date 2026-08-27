@@ -70,6 +70,12 @@ PERMISSIONS: dict[str, tuple[str, str]] = {
     "stay:read": ("查看入住", "查看入住列表与详情"),
     "stay:check_in": ("办理入住", "办理预订入住并创建 Stay"),
     "stay:check_out": ("办理退房", "办理退房"),
+    # Sprint 3：Housekeeping 域权限
+    "housekeeping_task:read": ("查看保洁任务", "查看保洁任务列表与详情"),
+    "housekeeping_task:write": ("编辑保洁任务", "手动创建保洁任务、派单与修改"),
+    "housekeeping_task:work": ("执行保洁任务", "开始清扫与提交验房"),
+    "housekeeping_task:inspect": ("验收保洁任务", "验房通过或返工"),
+    "housekeeping_task:cancel": ("取消保洁任务", "取消进行中的保洁任务"),
 }
 
 ROLES: dict[str, str] = {
@@ -96,6 +102,19 @@ BOOKING_PERMISSIONS: list[str] = [
     "stay:check_out",
 ]
 
+# Sprint 3：Housekeeping 域角色矩阵（SUPER_ADMIN 动态全部）
+#   MANAGER     = read + write + work + inspect + cancel
+#   FRONT_DESK  = read + write
+#   HOUSEKEEPING= read + work + inspect
+#   MAINTENANCE / FINANCE = 无
+HK_TASK_ALL: list[str] = [
+    "housekeeping_task:read",
+    "housekeeping_task:write",
+    "housekeeping_task:work",
+    "housekeeping_task:inspect",
+    "housekeeping_task:cancel",
+]
+
 ROLE_PERMISSIONS: dict[str, list[str]] = {
     "SUPER_ADMIN": [],
     "MANAGER": [
@@ -109,6 +128,7 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
         "audit:read",
         "audit:write",
         *BOOKING_PERMISSIONS,
+        *HK_TASK_ALL,
     ],
     "FRONT_DESK": [
         "room:read",
@@ -116,8 +136,16 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
         "room_type:read",
         "audit:read",
         *BOOKING_PERMISSIONS,
+        "housekeeping_task:read",
+        "housekeeping_task:write",
     ],
-    "HOUSEKEEPING": ["room:read", "room:status_cleaning"],
+    "HOUSEKEEPING": [
+        "room:read",
+        "room:status_cleaning",
+        "housekeeping_task:read",
+        "housekeeping_task:work",
+        "housekeeping_task:inspect",
+    ],
     "MAINTENANCE": ["room:read", "room:status_maintenance"],
     "FINANCE": ["audit:read", "room:read"],
 }
