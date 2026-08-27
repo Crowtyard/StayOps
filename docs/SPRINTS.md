@@ -76,20 +76,19 @@ Sprint 1 is frozen as the first stable StayOps development baseline.
 
 Future development must build on top of this baseline through subsequent commits.
 
-## Sprint 2（S2-T1、S2-T2 已完成）
+## Sprint 2（COMPLETE）
 
 ```text
-Sprint 2                = APPROVED FOR TASK PLANNING
+Sprint 2                = COMPLETE
 正式名称                = Booking & Stay Core Flow（预订、入住与退房核心链路）
-计划 Release            = v1.0.0-alpha.2
+Release                 = v1.0.0-alpha.2（RELEASED）
 Sprint 2 PRD            = FINAL
 Sprint 2 Task Spec      = APPROVED
-Sprint 2 Coding         = IN PROGRESS（S2-T1、S2-T2 完成）
+Sprint 2 Coding         = COMPLETE（S2-T1、S2-T2、S2-T3 全部完成）
 S2-T1                   = COMPLETE · QA PASS · CHECKPOINTED
 S2-T2                   = COMPLETE · QA PASS · CHECKPOINTED
-S2-T3                   = READY TO START
-Sprint 2 Final Acceptance = NOT STARTED
-v1.0.0-alpha.2          = NOT CREATED
+S2-T3                   = COMPLETE · QA PASS · CHECKPOINTED
+Sprint 2 Final Acceptance = PASS
 DSH                     = IDLE
 Kun                     = PROJECT MANAGER + QA
 ```
@@ -101,4 +100,4 @@ Kun                     = PROJECT MANAGER + QA
 - S2-T2.md — Booking Operations UI（前端）
 - S2-T3.md — Integration & E2E（全链路验收）
 
-Sprint 2 进展：S2-T1（Booking Domain Foundation）已完成并通过独立 QA（pytest 167 / alembic 无 drift / S2T1-BLK-01 已修复关闭）；S2-T2（Booking Operations UI）已完成并通过独立 QA（lint/typecheck/build 全绿、Vitest 139 / 0 failed、真实浏览器 Golden Path/RBAC/PII/编辑/错误语义全链路 PASS、S2T2-BLK-01 已修复关闭）；`v1.0.0-alpha.1` 冻结不动，`v1.0.0-alpha.2` 仅在 Sprint 2 Final Acceptance 全部 PASS 后创建。
+Sprint 2 进展：S2-T1（Booking Domain Foundation）、S2-T2（Booking Operations UI）、S2-T3（Integration & E2E）全部完成并通过独立 QA；Sprint 2 Final Acceptance PASS（pytest 167 / Vitest 139 / Playwright 29 全绿）；`v1.0.0-alpha.1` 冻结不动，`v1.0.0-alpha.2` 已创建为 Sprint 2 Release Commit。

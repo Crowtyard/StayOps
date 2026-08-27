@@ -90,8 +90,20 @@ frontend/src/
   - `setup-users.ts` 在测试 `beforeAll` 中以 admin 直连后端创建 FRONT_DESK / HOUSEKEEPING 测试账号（幂等）
   - 凭据仅存 gitignored 的 `frontend/e2e/.env.test-creds`（模板 `test-creds.example`），经环境变量注入 worker
   - 单 worker 串行执行保证共享测试库确定性；不触碰开发环境（127.0.0.1:8000 / localhost:3000）
-- **后端 pytest**（`backend/`，163 用例 = Sprint 1 基线 87 + S2-T1 Booking 76）：独立测试库 `stayops_test`（与 E2E 同库策略），
-  会话级 DROP/CREATE + 迁移 + seed，用例级事务回滚隔离；并发用例（Double Booking / Check-in / Check-out / 业务单号）用两线程 + 独立 Session 真实提交验证
+  - S2-T3 新增 7 个 spec（辅助集中在 `e2e/booking-helpers.ts`，动态日期 = Asia/Shanghai）：
+    `golden-path`（预订 → 重叠 409 → 当天入住/退房 → 审计无 PII，房间 203）、
+    `early-checkout`（REV-FINAL-03：COMPLETED 释放剩余日期，房间 204）、
+    `booking-rbac`（SUPER_ADMIN / FRONT_DESK / HOUSEKEEPING 导航与 403）、
+    `booking-pii`（HOUSEKEEPING 三层无 PII：UI / 网络响应 / 直连 403，房间 201）、
+    `concurrency`（Double Booking / 并发 Check-in / 并发 Check-out 各 1 SUCCESS + 1 × 409，
+    两个独立 APIRequestContext + Promise.all，房间 301-303）、
+    `failures`（dirty/occupied/未来入住/已取消/已退房 409 + 404/401 语义，房间 304-308）、
+    `regression`（Sprint 1 补充冒烟，房间 103；与既有 10 条互补，不替代）
+  - 各 spec 使用专属房间号段保证用例间确定性；既有 auth/rbac/rooms/settings 4 个 spec 与
+    `playwright.config.ts` 隔离机制保持不变
+- **后端 pytest**（`backend/`，167 用例 = Sprint 1 基线 87 + S2-T1 Booking 76 + S2T1-BLK-01 严格 PATCH 4）：独立测试库 `stayops_test`（与 E2E 同库策略），
+  会话级 DROP/CREATE + 迁移 + seed，用例级事务回滚隔离；并发用例（Double Booking / Check-in / Check-out / 业务单号）用两线程 + 独立 Session 真实提交验证。
+  pytest 与 Playwright E2E 共享 `stayops_test` 且互斥（不得并行运行）。
 
 ## 原则
 

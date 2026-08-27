@@ -147,3 +147,19 @@ venv 因启动器硬编码旧路径而重建；requirements.txt 统一为 UTF-8 
 9. **Dashboard / Room Detail 组合策略（REV-FINAL-07 消费）**。Dashboard 新增「预订运营概览」：今日到店 = `GET /reservations?status=CONFIRMED` 客户端过滤 check_in=today；今日离店/当前在住 = `GET /stays?status=ACTIVE`；未来 7 天 = CONFIRMED 且 today ≤ check_in < today+7；循环翻页拉全（不假设数据量）。Room Detail 组合 `GET /rooms/{id}` + `GET /stays?room_id&status=ACTIVE` + `GET /reservations?room_id&status=CONFIRMED`（客户端取 check_in ≥ today 的最近一笔）。不新增后端聚合 API，Sprint 1 核心响应不变。
 
 10. **前端查询新鲜度（React 19 + Next 16 lint 规则约束）**。Next 16 的 `react-hooks/set-state-in-effect` 禁止 effect 内同步 setState：查询结果携带其查询键（availability-picker 的 `{key, data}`、guest-picker 的 `{query, items}`），渲染期由 state 派生判断新鲜度（参数变化后旧结果立即失效显示加载态），effect 仅在异步回调中 setState。
+
+## 2026-08-27 — Sprint 2 S2-T3：Integration & E2E
+
+1. **E2E 目录扩展与隔离机制沿用**。新增 `golden-path / early-checkout / booking-rbac / booking-pii / concurrency / failures / regression` 七个 spec，全部复用既有隔离体系（`stayops_test` 库、8001/3001 端口、`workers=1` 串行、`run_test_backend.py` 单进程引导、gitignored 凭据）；`playwright.config.ts` 与既有 4 个 spec（auth/rbac/rooms/settings，10 条）未改动。辅助能力集中在新增 `e2e/booking-helpers.ts`（动态日期、直连后端 API 会话、UI 预订/入住/退房流程），不改动 `helpers.ts`，保证 Sprint 1 回归零扰动。
+
+2. **动态日期实现（REV-03）**。E2E 日期一律基于 Property Business Date（Asia/Shanghai）动态生成：`Intl.DateTimeFormat`（IANA 时区，与宿主机时区无关）+ `Date.UTC` 纯日期算术；Golden Path / Early Checkout 使用 `check_in = today`、`check_out = today + 2`，当天创建、当天入住、当天退房。禁止硬编码年月日。
+
+3. **并发验证方式（REV-FINAL-08，HTTP 口径）**。并发用例使用两个独立 Playwright `APIRequestContext`（各自 Bearer 登录）+ `Promise.all` 并发 POST，走真实 FastAPI(8001) → 真实 PostgreSQL（排他约束 / SELECT FOR UPDATE 行锁），验证 Double Booking / 并发 Check-in / 并发 Check-out 均为 1 SUCCESS + 1 × 409；最终一致状态与「无重复退房审计」按资源 ID 精确断言。与后端 pytest 的两线程验证互为补充（pytest 为服务层口径，E2E 为 HTTP 全链路口径）。
+
+4. **用例间数据隔离策略**。E2E 每次运行由 `prepare_test_db.py` 重建测试库；`workers=1` 串行执行，各 spec 使用专属房间号段（golden-path=203、early-checkout=204、pii=201、rbac=205、concurrency=301/302/303、failures=304-308、regression=103），既有 rooms.spec（101/102）与 settings.spec（104）不受影响；不依赖 dev 库或手工残留数据。
+
+5. **重叠预订 409 的双层验证**。Golden Path 在 UI 层验证 Availability 对已占用日期区间的房间禁用并展示原因原文，再经 BFF `POST /reservations` 实测 409「该房间在所选日期区间已被预订」（应用层预检或数据库排他约束裁决，均为真实后端），后端 detail 原样到达测试断言。
+
+6. **审计无 PII 断言方式**。Golden Path 完成后以 admin 打开 `/settings/audit-logs` 验证 `guest.create / reservation.create / reservation.check_in / stay.check_out` 存在；details 无 PII 通过按资源 ID 精确取审计 JSON（断言不含 Guest 手机号/邮箱/notes/金额等可辨识标记值），UI 与 API 双层。
+
+7. **PII 三层断言方式（REV-02）**。HOUSEKEEPING 专项：UI 层断言 Room 详情仅出现 dirty / occupied / 当前有客；网络层收集页面加载期间全部 `/api/bff/*` 响应体断言不含 PII 标记值；直连 API 层断言 guests / reservations / stays / availability 全部 403（带合法查询参数以区分 422 与 403）。

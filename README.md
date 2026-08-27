@@ -63,11 +63,17 @@ cd backend
 cd frontend
 pnpm.cmd test
 
-# Playwright E2E（独立 stayops_test 库 + 专用端口 8001/3001，10 用例；不触碰开发数据）
+# Playwright E2E（独立 stayops_test 库 + 专用端口 8001/3001，29 用例 = Sprint 1 基线 10 + S2-T3 新增 19；不触碰开发数据）
 cd frontend
 Copy-Item e2e\test-creds.example e2e\.env.test-creds   # 首次：填入测试库凭据（gitignored）
 pnpm.cmd test:e2e
 ```
+
+> pytest 与 Playwright E2E 共享 `stayops_test` 库且互斥，两者不得并行运行。
+> E2E 覆盖（S2-T3）：Golden Path（预订→重叠 409→当天入住/退房→审计无 PII）、
+> Early Checkout（COMPLETED 释放剩余日期）、Booking RBAC、PII 三层防护（HOUSEKEEPING）、
+> 并发专项（Double Booking / 并发 Check-in / Check-out 各 1 SUCCESS + 1 × 409）、
+> 失败处理（409/404/401 语义）；详见 [frontend/e2e/README.md](frontend/e2e/README.md)。
 
 详见 [tests/README.md](tests/README.md)、[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
@@ -91,14 +97,14 @@ pnpm.cmd test:e2e
 
 所有 AI Coding Agent 与开发者必须先阅读 [AGENTS.md](AGENTS.md)。
 
-> 当前状态：Sprint 1 完成（T1 环境 → T2 后端认证/RBAC/双维度房态/审计 → T3a 前端核心链路 → T3b 管理页面 + Vitest/Playwright 测试体系），等待验收。
+> 当前状态：Sprint 1 完成并冻结（v1.0.0-alpha.1）；Sprint 2 完成（Booking & Stay Core Flow：Guest / Reservation / Availability / Stay / Check-in / Check-out / Early Checkout / Booking RBAC / PII 防护 / Dashboard-Room Detail 集成 / 并发保护 / 正式 E2E），Final Acceptance PASS（pytest 167 / Vitest 139 / Playwright 29）。
 
 ## Current Release
 
-Version: v1.0.0-alpha.1
+Version: v1.0.0-alpha.2
 
-Status: Sprint 1 Final Acceptance PASS
+Status: Sprint 2 Final Acceptance PASS
 
-This is the first stable Alpha development baseline of StayOps.
+This is the second stable Alpha development baseline of StayOps（Booking & Stay Core Flow）。
 
 Not intended for production deployment.
