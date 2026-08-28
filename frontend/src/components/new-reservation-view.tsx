@@ -6,26 +6,63 @@
  * - Guest 搜索 / 创建、日期、来源、金额、币种、备注
  * - 成功跳转 /reservations/[id]；409/422 展示后端原文
  * - 权限：reservation:write（页面 403 → Forbidden）
+ * - Sprint 4 快速新建预填：/front-desk 空白日期格 →
+ *   ?room_id=&room_type_id=&check_in_date=&check_out_date= 预填表单，
+ *   复用现有表单，不新造第二套；Backend Availability 仍重新验证
  */
 
-import { useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ApiError, api } from "@/lib/api";
 import type { ReservationCreate, ReservationUpdate } from "@/lib/api/types";
-import { Forbidden } from "@/components/status-views";
+import { Forbidden, Loading } from "@/components/status-views";
 import { useUser } from "@/components/app-shell";
 import ReservationForm from "@/components/booking/reservation-form";
 import { SectionCard } from "@/components/booking/shared";
 
-export default function NewReservationView() {
+function parseIdParam(value: string | null): number | null {
+  if (!value) return null;
+  const id = Number(value);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+function NewReservationContent() {
   const router = useRouter();
   const user = useUser();
   const permissions = useMemo(() => new Set(user?.permissions ?? []), [user]);
   const [forbidden, setForbidden] = useState(false);
 
+  const searchParams = useSearchParams();
+  const roomIdParam = parseIdParam(searchParams.get("room_id"));
+  const roomTypeIdParam = parseIdParam(searchParams.get("room_type_id"));
+  const checkInParam = searchParams.get("check_in_date") ?? undefined;
+  const checkOutParam = searchParams.get("check_out_date") ?? undefined;
+
+  // 预填只给了 room_id 时补全 room_type_id（Room/RoomType 联动需要）
+  const [derivedRoomTypeId, setDerivedRoomTypeId] = useState<number | null>(
+    roomTypeIdParam,
+  );
+  useEffect(() => {
+    if (roomIdParam === null || derivedRoomTypeId !== null) return;
+    if (!permissions.has("room:read")) return;
+    let cancelled = false;
+    api.rooms
+      .get(roomIdParam)
+      .then((room) => {
+        if (!cancelled) setDerivedRoomTypeId(room.room_type_id);
+      })
+      .catch(() => {
+        // 房间不存在/无权限：预填房间失效，走普通新建流程
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [roomIdParam, derivedRoomTypeId, permissions]);
+
   const canReadReservation = permissions.has("reservation:read");
   const canWriteReservation = permissions.has("reservation:write");
+  const hasRoomRead = permissions.has("room:read");
 
   async function handleSubmit(payload: ReservationCreate | ReservationUpdate) {
     try {
@@ -45,6 +82,31 @@ export default function NewReservationView() {
     return <Forbidden text="无权限新建预订" />;
   }
 
+  // 预填房间的房型未就绪时等待一次定向请求（毫秒级），避免表单校验误判
+  const roomPrefillPending =
+    roomIdParam !== null &&
+    roomTypeIdParam === null &&
+    derivedRoomTypeId === null &&
+    hasRoomRead;
+  if (roomPrefillPending) {
+    return <Loading text="正在准备快速新建预填…" />;
+  }
+
+  const roomTypeId = roomTypeIdParam ?? derivedRoomTypeId;
+  const prefill =
+    roomIdParam !== null && roomTypeId !== null
+      ? {
+          roomId: roomIdParam,
+          roomTypeId,
+          checkIn: checkInParam,
+          checkOut: checkOutParam,
+        }
+      : {
+          // 房间预填不可用（无 room:read 或房间不存在）时仅预填日期
+          checkIn: checkInParam,
+          checkOut: checkOutParam,
+        };
+
   return (
     <div className="mx-auto max-w-4xl">
       <Link
@@ -63,11 +125,21 @@ export default function NewReservationView() {
       <SectionCard title="预订信息">
         <ReservationForm
           mode="create"
+          prefill={prefill}
           permissions={permissions}
           submitLabel="创建预订"
           onSubmit={handleSubmit}
         />
       </SectionCard>
     </div>
+  );
+}
+
+export default function NewReservationView() {
+  // useSearchParams 需要 Suspense 边界（Next 16 静态预渲染约束）
+  return (
+    <Suspense fallback={<Loading text="正在加载新建预订…" />}>
+      <NewReservationContent />
+    </Suspense>
   );
 }

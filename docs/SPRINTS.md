@@ -120,3 +120,22 @@ Kun                     = PROJECT MANAGER + QA
 Sprint 3 范围：退房自动生成 Housekeeping Task（同一事务）→ 派单 → 开始清扫 → 提交验房 → 通过/返工 → 房间翻房闭环；Active Task 数据库级唯一（部分唯一索引）；Task 状态与 Room.cleaning_status 原子联动；保洁工作台（`/housekeeping` / `/housekeeping/[id]`）；Dashboard 与 Room Detail 集成；Check-in clean gating 保持；保洁域 RBAC / 审计 / 并发安全 / 无 PII。
 
 Sprint 3 进展：DSH 单会话完成全部实现（Implementation Complete，无 commit）；Kun Fast QA 独立重跑正式测试全绿（pytest 202 / Vitest 170 / Playwright 36，Sprint 2 基线 167 / 139 / 29 全部保留），代码审查确认 Checkout 原子性、Active Task 数据库级部分唯一索引、Task ↔ Room 原子联动、RBAC / PII / Check-in gating；`v1.0.0-alpha.2` 冻结不动，`v1.0.0-alpha.3` 已创建为 Sprint 3 Release Commit。
+
+## Sprint 4（COMPLETE）
+
+```text
+Sprint 4                = COMPLETE
+正式名称                = Front Desk Command Center & Room Diary（前台运营指挥台与房态日历）
+Release                 = v1.0.0-alpha.4（RELEASED）
+开发模式                = FAST TRACK + REUSE FIRST + ONE SPRINT / ONE DSH SESSION（不拆 T1/T2/T3）
+Sprint 4 Coding         = IMPLEMENTATION COMPLETE（单会话一次完成）
+Sprint 4 Fast QA        = PASS（Kun 独立重跑 pytest 220 / Vitest 240 / Playwright 46×2 全绿 + D1 修复复审）
+DSH                     = STOPPED
+Kun                     = PROJECT MANAGER + QA
+```
+
+任务书：`docs/tasks/sprint-04/README.md`（单文档，不拆 S4-T1/T2/T3）。
+
+Sprint 4 范围：`/front-desk` 前台运营工作台 —— Today Summary（到店/离店/在住/空净房/需关注，卡片点击进右侧 Drawer）；Room Diary（28 房 × 1/7/14/30 天时间线，楼层分组 + 楼层/房型筛选，左侧房间栏 sticky，双状态占用+清洁不合并，时间线严格 `[check_in, check_out)` 无 off-by-one）；Reservation Drawer（Check-in/Edit/Cancel/No-show/Full Detail，全部复用 Sprint 2 API；脏房到店明确显示「房间尚未准备完成」+ 保洁任务）；点击空白日期格快速新建（复用 `/reservations/new` 预填，Availability 仍重新验证）；统一搜索（房号/Guest name/phone/reservation_no，PII 受 guest:read 约束）；Attention Center 三条固定规则（脏房到店 / 超期在住 / 锁房未来预订）；Room Quick View；Housekeeping 集成（只消费 Alpha.3）；Mobile（<768px FrontDeskTodayBoard，不渲染完整 Room Diary）；Backend 最小扩展 `overlap_from` / `overlap_to`（Reservation List 日期窗口重叠查询，只读）；写操作后 targeted refetch + 60s 轮询。Alpha.4 不做拖拽排房。
+
+Sprint 4 进展：DSH 单会话完成全部实现（Implementation Complete，无 commit）；Kun Fast QA 第一轮 FAILED（Blocking Defect D1：并发双订偶发 DeadlockDetected 逃逸 500），DSH 已修复并按 Fast Review 收窄分类（仅 23P01/40P01/40001 → 409，其它 OperationalError 原样 re-raise）；Kun Fast QA 复审（S4-D1 Re-QA）PASS：pytest 220 / Vitest 240 / Playwright 连续两轮 46 全绿，独立并发压测 100 轮（50 服务层 + 50 真实 HTTP）0 × 500 且每轮 exactly 1 条；`v1.0.0-alpha.3` 冻结不动，`v1.0.0-alpha.4` 已创建为 Sprint 4 Release Commit。

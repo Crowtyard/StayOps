@@ -229,3 +229,13 @@ export function IconCleaning({ className }: IconProps) {
     </Svg>
   );
 }
+
+export function IconDesk({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <path d="M12 4a6 6 0 0 0-6 6v1.5a2 2 0 0 0-2 2V19a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5.5a2 2 0 0 0-2-2V10a6 6 0 0 0-6-6Z" />
+      <path d="M10 21v-4a2 2 0 0 1 4 0v4" />
+      <path d="M8 8.5h.01M12 8.5h.01M16 8.5h.01" />
+    </Svg>
+  );
+}

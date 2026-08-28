@@ -2,6 +2,63 @@
 
 All notable changes to StayOps will be documented in this file.
 
+## [v1.0.0-alpha.4] - 2026-08-28
+
+### Added
+
+- Sprint 4: Front Desk Command Center & Room Diary（前台运营指挥台与房态日历，`/front-desk`）
+- Today Summary（今日到店 / 今日离店 / 当前在住 / 空净房 / 需关注，卡片点击 → 右侧 Drawer）
+- Room Diary：28 间房全量（无分页）× 1/7/14/30 天时间线；楼层分组、楼层/房型筛选、
+  左侧房间栏固定（sticky）+ 日期区横向滚动（键盘可聚焦）；房间双状态（占用 + 清洁）同时展示
+- Reservation Timeline 严格 `[check_in_date, check_out_date)`（无 off-by-one；相邻预订首尾相接）；
+  默认只展示 CONFIRMED / CHECKED_IN（CANCELLED / NO_SHOW / COMPLETED 不作为占用条）
+- 预订条：Guest name（guest:read）/ status / source；tooltip 受 RBAC/PII 控制
+- Reservation Quick View Drawer（Room/Guest/Dates/Nights/Source/Amount/状态/占用/清洁/保洁任务 +
+  Check-in / Edit / Cancel / No-show / Full Detail，全部复用 Sprint 2 API）
+- §11 未准备房间：今日到店且非 clean → 隐藏 Check-in 主操作，显示「房间尚未准备完成」+
+  Active HousekeepingTask（Task No/status/assignee）+ 查看保洁任务（后端 409 仍为最终权威）
+- 点击空白日期格：新建预订（复用 `/reservations/new` 并预填 room_id / check_in /
+  check_out=check_in+1，Backend Availability 仍重新验证）/ 查看房间
+- 统一搜索：房号（本地匹配）/ Guest name / phone / reservation_no（复用现有 search API）；
+  结果点击定位房间 / 定位日期 / 打开 Drawer；无 guest:read 时姓名/手机号搜索受限
+- Attention Center 三条固定规则（A 脏房到店 / B 超期在住 / C 锁房未来预订），
+  每项给出房间 / 问题 / 业务 / 下一步（无通用 Rule Engine）
+- Room Quick View Drawer（双状态 + current stay + active housekeeping task +
+  next reservation + 完整房间详情）
+- Mobile（<768px）FrontDeskTodayBoard（不渲染完整 Room Diary）；768–1023 紧凑 Diary、≥1024 完整
+- 写操作后 targeted refetch；60s 轻量轮询（Drawer 打开时暂停）
+- Backend：`GET /reservations` 新增 `overlap_from` / `overlap_to` 日期窗口重叠查询
+  （`check_in < overlap_to AND check_out > overlap_from`；只给一端或 to<=from → 422；
+  只读扩展，不改变写操作）
+- 前台导航入口（需 room:read + reservation:read 同时满足，不用角色名判断）
+
+### Fixed
+
+- D1（Kun Fast QA Blocking Defect）：并发 Double Booking 时 PostgreSQL 排他约束检查
+  偶发 DeadlockDetected（40P01）逃逸为 500。修复（窄分类）：booking.py 在
+  create/update/cancel/no-show/check-in/check-out 的 flush/commit 路径统一捕获
+  OperationalError → rollback；仅 40P01（deadlock_detected）与 40001
+  （serialization_failure）→ 409（create/update 映射 Double Booking 语义，其余映射
+  各自通用冲突文案）；23P01 → 409 既有行为不变；其它任何 OperationalError
+  （57014 query_canceled、无 pgcode、连接故障、库不可用等）→ 原样 re-raise，
+  保持基础设施错误语义，绝不转换/吞掉。恢复「1 SUCCESS + 1 × 409」契约，
+  数据完整性不变（每轮数据库 exactly 1 条）。新增 7 条 pytest（确定性映射 +
+  57014/无 pgcode 原异常传播 + 事务回滚验证 + 25 轮真实并发无 500）；
+  独立压测 50 轮服务层 + 50 轮 HTTP 层均 0 × 500 且每轮 exactly 1 条。
+
+### Verified
+
+- Backend pytest: 220 passed（202 Sprint 3 基线保留 + 11 overlap 窗口查询 + 7 D1 修复）
+- Frontend Vitest: 240 passed（170 Sprint 3 基线保留 + 70 Front Desk）
+- Playwright E2E: 46 passed（36 Sprint 3 基线保留 + front-desk 1 spec 10 条）
+- lint / typecheck / build PASS
+- Clean-environment bootstrap verified（空库 → alembic upgrade head → seed → setup users →
+  FastAPI :8001 → Next.js :3001 → Full Playwright）
+
+### Status
+
+Sprint 4 implementation complete; D1（Fast QA Blocking）已修复；Kun Fast QA 复审 PASS（S4-D1 Re-QA：pytest 220 / Vitest 240 / Playwright 连续两轮 46 全绿；独立并发压测 100 轮 0 × 500）; v1.0.0-alpha.4 released.
+
 ## [v1.0.0-alpha.3] - 2026-08-28
 
 ### Added

@@ -48,8 +48,7 @@
 | GET | /guests/{id} | 客人详情 | guest:read |
 | PATCH | /guests/{id} | 更新客人 | guest:write |
 | GET | /availability | 可售性查询（`?check_in_date=&check_out_date=&room_type_id=`，返回全量房间 + 可售标注） | reservation:read |
-| GET | /reservations | 预订列表（分页，筛选见下） | reservation:read |
-| POST | /reservations | 创建预订（CONFIRMED） | reservation:write |
+| GET | /reservations | 预订列表（分页，筛选见下） | reservation:read || POST | /reservations | 创建预订（CONFIRMED） | reservation:write |
 | GET | /reservations/{id} | 预订详情 | reservation:read |
 | PATCH | /reservations/{id} | 修改预订（仅 CONFIRMED） | reservation:write |
 | POST | /reservations/{id}/cancel | 取消预订（CONFIRMED → CANCELLED） | reservation:cancel |
@@ -136,7 +135,22 @@ Stay:        ACTIVE ── CHECKED_OUT（终态）
 
 ### 409 场景清单（Booking 域）
 
-Double Booking（含并发撞排他约束 23P01）、blocked / out_of_service 房间、区间含业务日期当天时 occupied / reserved 房间、Active Stay 重叠、Dirty room Check-in、Occupied room Check-in、Check-in 日期资格不符（提前/过期）、未来预订 No-show、CANCELLED / NO_SHOW 后续操作、已 Check-in 重复 Check-in、非 ACTIVE Stay Check-out、已退房重复 Check-out、非法状态机转换、非 CONFIRMED 状态 PATCH。422：日期非法（co <= ci / 格式错误）、Room / Room Type 不一致（REV-FINAL-06）。
+Double Booking（含并发撞排他约束 23P01、并发排他约束仲裁死锁 40P01 / serialization 40001 —— 均映射 409，绝不泄漏 500；**其它任何 OperationalError（如 57014 query_canceled、连接故障、库不可用）不转换业务错误，rollback 后原样 5xx 传播**）、blocked / out_of_service 房间、区间含业务日期当天时 occupied / reserved 房间、Active Stay 重叠、Dirty room Check-in、Occupied room Check-in、Check-in 日期资格不符（提前/过期）、未来预订 No-show、CANCELLED / NO_SHOW 后续操作、已 Check-in 重复 Check-in、非 ACTIVE Stay Check-out、已退房重复 Check-out、非法状态机转换、非 CONFIRMED 状态 PATCH。422：日期非法（co <= ci / 格式错误）、Room / Room Type 不一致（REV-FINAL-06）、overlap_from / overlap_to 只给一端或 to <= from。
+
+### 日期窗口重叠查询（Sprint 4）
+
+`GET /api/v1/reservations?overlap_from=YYYY-MM-DD&overlap_to=YYYY-MM-DD`：
+
+- 语义：预订区间 `[check_in_date, check_out_date)` 与窗口 `[overlap_from, overlap_to)` 有重叠
+  （SQL：`check_in_date < overlap_to AND check_out_date > overlap_from`）；
+  紧邻（touch）不视为重叠，边界日重叠视为重叠。
+- `overlap_from` / `overlap_to` 必须成对提供；`overlap_to <= overlap_from` → 422。
+- 与 `status` / `room_id` / `search` 等既有筛选可组合；权限仍 `reservation:read`；
+  沿用统一分页 `{items,total,page,page_size}`。
+- 用途：/front-desk Room Diary 时间线批量拉取（窗口 = 业务日期今天起 1/7/14/30 天），
+  替代逐房间查询（避免 N+1）。CANCELLED / NO_SHOW / COMPLETED 仍会被返回，
+  时间线是否展示由前端按运营规则过滤（Sprint 4 §8）。
+- 不改变任何写操作。
 
 ### 响应示例
 

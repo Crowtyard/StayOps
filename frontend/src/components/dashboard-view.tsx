@@ -259,7 +259,13 @@ function HousekeepingOverview({ permissions }: { permissions: Set<string> }) {
     <div className="mt-6">
       <div className="mb-3 flex items-center justify-between">
         <h2 className="text-sm font-semibold text-gray-900">保洁运营概览</h2>
-        <Link href="/housekeeping" className="text-xs text-gray-500 hover:underline">
+        {/* aria-label 不含「保洁」子串：与侧边导航链接的 accessible name 消歧
+            （避免 getByRole('link', { name: '保洁' }) 子串匹配的 strict-mode 歧义） */}
+        <Link
+          href="/housekeeping"
+          aria-label="打开 Housekeeping 工作台"
+          className="text-xs text-gray-500 hover:underline"
+        >
           进入保洁工作台 →
         </Link>
       </div>

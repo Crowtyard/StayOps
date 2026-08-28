@@ -81,3 +81,29 @@ Sprint 3 新增（7 条；辅助集中在 `housekeeping-helpers.ts`；房间号�
   执行工作流、不可创建/修改/取消；MAINTENANCE 403；assignees 端点）；并发
   （Duplicate Active Task / Concurrent Start / PASS vs REWORK 各 1 SUCCESS + 1 × 409，
   无矛盾终态）；PII（任务响应与审计无 Guest 身份/联系方式/预订数据）
+
+Sprint 4 新增（10 条；辅助集中在 `front-desk-helpers.ts`；超期在住状态准备
+`setup_overdue_stay.py`（真实 UPDATE planned_check_out_date，见文件头说明）；
+房间号段 110 / 202 / 206 / 207 / 208，不与 Sprint 1-3 用例重叠）：
+
+- `front-desk.spec.ts`（10 条）：
+  1. Room Diary：28 房全量 + 楼层分组 + 7 天窗口 + Today Summary 五卡
+  2. Golden Path（房间 110）：空白格快速新建（预填 room/check_in/check_out=+1）→
+     时间线 1 晚条宽实测 ≈64px（[ci,co) 语义）→ Drawer 字段完整 → Check-in →
+     房间栏刷新 在住 → Check-out → 可售+待清扫 + 自动保洁任务指示，
+     COMPLETED 不再作为占用条
+  3. 相邻预订（房间 202）：[d+1,d+3) 与 [d+3,d+5) boundingBox 实测首尾相接
+     （gap ≤ 2px、各 2 列宽），无 off-by-one
+  4. Attention 三条规则（房间 206/207/208）：脏房到店(A) / 超期在住(B，
+     状态准备见 setup_overdue_stay.py) / 停用房未来预订(C)；需关注计数 = 3，
+     抽屉内问题 + 下一步入口齐全
+  5. Housekeeping 集成（房间 206）：脏房到店 → Attention → 房间尚未准备完成 +
+     任务（Task No/status）+ 查看保洁任务 → 真实 start/submit/pass 闭环 →
+     刷新 clean → Check-in 成功
+  6. 搜索定位：房号 → Room Drawer（本地匹配，零 PII 请求）；预订单号 →
+     Reservation Drawer（日期/晚数正确）
+  7. PII：无 guest:read 自定义角色用户——时间线条无姓名、姓名/手机号搜索受限提示、
+     预订单号搜索可用、Drawer 显示 ID 而非姓名
+  8. RBAC：HOUSEKEEPING / FINANCE 无前台导航入口，直连 /front-desk → 无权限（不跳登录）
+- 响应式（2 条）：Mobile 390×844 → FrontDeskTodayBoard（Room Diary 不渲染，
+  `[data-room-cell]=0`）；Tablet 900×720 → 紧凑 Room Diary 可用（28 房 + 7 天列）

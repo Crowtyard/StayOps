@@ -55,15 +55,15 @@ pnpm.cmd dev                        # http://localhost:3000
 ## 测试
 
 ```powershell
-# 后端 pytest（独立测试库 stayops_test，202 用例 = 87 基线 + 76 Booking + 4 严格 PATCH + 35 Housekeeping）
+# 后端 pytest（独立测试库 stayops_test，220 用例 = 87 基线 + 76 Booking + 4 严格 PATCH + 35 Housekeeping + 11 Front Desk 窗口查询 + 7 D1 死锁窄分类）
 cd backend
 .venv\Scripts\python.exe -m pytest -q
 
-# 前端单元/组件测试（Vitest，170 用例 = 74 基线 + 65 Booking UI + 31 Housekeeping UI）
+# 前端单元/组件测试（Vitest，240 用例 = 74 基线 + 65 Booking UI + 31 Housekeeping UI + 70 Front Desk UI）
 cd frontend
 pnpm.cmd test
 
-# Playwright E2E（独立 stayops_test 库 + 专用端口 8001/3001，36 用例 = Sprint 1 基线 10 + S2-T3 新增 19 + S3 新增 7；不触碰开发数据）
+# Playwright E2E（独立 stayops_test 库 + 专用端口 8001/3001，46 用例 = Sprint 1 基线 10 + S2-T3 新增 19 + S3 新增 7 + S4 新增 10；不触碰开发数据）
 cd frontend
 Copy-Item e2e\test-creds.example e2e\.env.test-creds   # 首次：填入测试库凭据（gitignored）
 pnpm.cmd test:e2e
@@ -75,7 +75,11 @@ pnpm.cmd test:e2e
 > 并发专项（Double Booking / 并发 Check-in / Check-out 各 1 SUCCESS + 1 × 409）、
 > 失败处理（409/404/401 语义）。
 > E2E 覆盖（S3）：翻房 Golden Path（退房自动任务 → 派单 → 清扫链 → 通过 → 下一笔入住成功）、
-> Rework 闭环、手动任务与取消、Check-in clean gating、保洁 RBAC / 并发 / PII；
+> Rework 闭环、手动任务与取消、Check-in clean gating、保洁 RBAC / 并发 / PII。
+> E2E 覆盖（S4）：Front Desk Golden Path（空白格快速新建 → [ci,co) 时间线 →
+> Drawer Check-in → 刷新 → Check-out → dirty + 保洁任务）、相邻预订首尾相接、
+> Attention 三规则（脏房到店 / 超期在住 / 锁房未来预订）、Housekeeping 完成闭环后
+> Check-in、搜索定位、PII、RBAC、Mobile Today Board / Tablet；
 > 详见 [frontend/e2e/README.md](frontend/e2e/README.md)。
 
 详见 [tests/README.md](tests/README.md)、[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
@@ -95,6 +99,25 @@ pnpm.cmd test:e2e
 - 导航按权限显示：`housekeeping_task:read` → 保洁；RBAC：MANAGER 全部、FRONT_DESK read+write、HOUSEKEEPING read+work+inspect
 - 任务不保存任何 Guest PII；Check-in 要求 `cleaning_status = clean`（dirty/cleaning/inspection/rework → 409）
 
+## 前台运营（Sprint 4）
+
+- 页面：`/front-desk`（前台运营指挥台：Today Summary / 统一搜索 / Room Diary / 右侧 Drawer）
+- Today Summary：今日到店 / 今日离店 / 当前在住 / 空净房 / 需关注（卡片点击 → Drawer 列表，不跳离页面）
+- Room Diary：28 间房 × 1/7/14/30 天时间线；楼层分组 + 楼层/房型筛选；左侧房间栏固定（sticky）；
+  房间双状态（占用 + 清洁）同时展示；时间线严格 `[check_in_date, check_out_date)`（无 off-by-one）
+- Reservation Bar：Guest name（guest:read）/ status / source；点击打开 Reservation Drawer
+  （Check-in / Edit / Cancel / No-show / Full Detail，全部复用 Sprint 2 API）
+- 脏房到店明确显示「房间尚未准备完成」+ 保洁任务（Task No / status / assignee / 查看保洁任务）；
+  后端 Check-in 409 仍是最终权威
+- 点击空白日期格：新建预订（复用 `/reservations/new` 预填 room/check_in/check_out=+1，
+  Availability 仍重新验证）/ 查看房间
+- 统一搜索：房号 / Guest name / phone / reservation_no（PII 受 guest:read 约束）
+- Attention Center 三条固定规则：脏房到店（A）/ 超期在住（B）/ 锁房未来预订（C）
+- Mobile（<768px）：FrontDeskTodayBoard（不渲染完整 Room Diary）；768–1023 紧凑 Diary
+- 导航按权限显示：`room:read` + `reservation:read` 同时满足 → 前台；
+  SUPER_ADMIN / MANAGER / FRONT_DESK 可见，HOUSEKEEPING / MAINTENANCE / FINANCE 隐藏
+- Backend 最小扩展：`GET /reservations?overlap_from&overlap_to` 日期窗口重叠查询（只读）
+
 ## 文档
 
 - [PRD](docs/PRD.md) — 产品需求
@@ -111,15 +134,17 @@ pnpm.cmd test:e2e
 > 当前状态：Sprint 1 完成并冻结（v1.0.0-alpha.1）；Sprint 2 完成（Booking & Stay Core Flow），Final Acceptance PASS；
 > Sprint 3 完成（Housekeeping Operations & Room Turnover：退房自动翻房任务 / 派单 / 清扫链 / 返工闭环 / 保洁工作台 / 保洁 RBAC / 并发安全），
 > Kun Fast QA PASS，v1.0.0-alpha.3 已发布。
+> Sprint 4 完成（Front Desk Command Center & Room Diary：前台运营指挥台 / 房态日历 / 快速新建 / 统一搜索 / Attention Center / 移动端 Today Board），
+> Kun Fast QA PASS（含 Blocking Defect D1 修复复审），v1.0.0-alpha.4 已发布。
 
 ## Current Release
 
-Version: v1.0.0-alpha.3
+Version: v1.0.0-alpha.4
 
-Status: Sprint 3 Fast QA PASS
+Status: Sprint 4 Fast QA PASS
 
-This is the third stable Alpha development baseline of StayOps（Housekeeping Operations & Room Turnover）。
+This is the fourth stable Alpha development baseline of StayOps（Front Desk Command Center & Room Diary）。
 
-Sprint 3 implementation complete; Kun Fast QA PASS（pytest 202 / Vitest 170 / Playwright 36 全绿）; v1.0.0-alpha.3 released.
+Sprint 4 implementation complete; Kun Fast QA PASS（pytest 220 / Vitest 240 / Playwright 46 全绿 ×2 轮；D1 并发死锁修复复审通过，独立压测 100 轮 0 × 500）; v1.0.0-alpha.4 released.
 
 Not intended for production deployment.

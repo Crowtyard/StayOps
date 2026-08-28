@@ -16,6 +16,7 @@ import {
   IconBooking,
   IconBuilding,
   IconCleaning,
+  IconDesk,
   IconHome,
   IconLogout,
   IconMenu,
@@ -44,11 +45,20 @@ interface NavItem {
   href: string;
   label: string;
   icon: React.ReactNode;
+  /** 满足任一权限即显示。 */
   permission?: string;
+  /** 必须同时满足全部权限才显示（Sprint 4：前台工作台最低 room:read + reservation:read）。 */
+  required?: string[];
 }
 
 const NAV_ITEMS: NavItem[] = [
   { href: "/dashboard", label: "首页", icon: <IconHome /> },
+  {
+    href: "/front-desk",
+    label: "前台",
+    icon: <IconDesk />,
+    required: ["room:read", "reservation:read"],
+  },
   { href: "/rooms", label: "房态", icon: <IconRooms />, permission: "room:read" },
   {
     href: "/reservations",
@@ -90,9 +100,13 @@ const NAV_ITEMS: NavItem[] = [
 ];
 
 function visibleItems(user: MeOut | null): NavItem[] {
-  if (!user) return NAV_ITEMS.filter((i) => !i.permission);
+  if (!user) return NAV_ITEMS.filter((i) => !i.permission && !i.required);
   const perms = new Set(user.permissions);
-  return NAV_ITEMS.filter((i) => !i.permission || perms.has(i.permission));
+  return NAV_ITEMS.filter((i) => {
+    if (i.required && !i.required.every((p) => perms.has(p))) return false;
+    if (i.permission && !perms.has(i.permission)) return false;
+    return true;
+  });
 }
 
 interface AppShellProps {

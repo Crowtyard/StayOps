@@ -42,6 +42,16 @@ export interface ReservationFormProps {
   mode: "create" | "edit";
   /** 编辑模式初始预订（CONFIRMED） */
   initial?: ReservationOut | null;
+  /**
+   * Sprint 4 快速新建预填（仅 create 模式）：来自 /front-desk 空白日期格。
+   * Backend Availability 仍会重新验证；预填只改善输入效率，不构成业务授权。
+   */
+  prefill?: {
+    roomId?: number;
+    roomTypeId?: number;
+    checkIn?: string;
+    checkOut?: string;
+  };
   permissions: Set<string>;
   submitLabel: string;
   onSubmit: (
@@ -60,6 +70,7 @@ interface Banner {
 export default function ReservationForm({
   mode,
   initial,
+  prefill,
   permissions,
   submitLabel,
   onSubmit,
@@ -71,12 +82,18 @@ export default function ReservationForm({
   const canWriteGuest = permissions.has("guest:write");
 
   const [guest, setGuest] = useState<GuestOut | null>(null);
-  const [checkIn, setCheckIn] = useState(initial?.check_in_date ?? "");
-  const [checkOut, setCheckOut] = useState(initial?.check_out_date ?? "");
-  const [roomTypeId, setRoomTypeId] = useState<number | null>(
-    initial?.room_type_id ?? null,
+  const [checkIn, setCheckIn] = useState(
+    initial?.check_in_date ?? prefill?.checkIn ?? "",
   );
-  const [roomId, setRoomId] = useState<number | null>(initial?.room_id ?? null);
+  const [checkOut, setCheckOut] = useState(
+    initial?.check_out_date ?? prefill?.checkOut ?? "",
+  );
+  const [roomTypeId, setRoomTypeId] = useState<number | null>(
+    initial?.room_type_id ?? prefill?.roomTypeId ?? null,
+  );
+  const [roomId, setRoomId] = useState<number | null>(
+    initial?.room_id ?? prefill?.roomId ?? null,
+  );
   const [source, setSource] = useState<ReservationSource>(
     initial?.source ?? "DIRECT",
   );

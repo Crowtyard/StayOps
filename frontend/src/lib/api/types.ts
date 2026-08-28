@@ -351,6 +351,14 @@ export interface ReservationListParams extends PageParams {
   check_in_date?: string;
   check_out_date?: string;
   search?: string;
+  /**
+   * Sprint 4 日期窗口重叠查询（Room Diary 时间线批量拉取）：
+   * 语义 = [check_in_date, check_out_date) 与 [overlap_from, overlap_to)
+   * 有重叠（check_in < overlap_to AND check_out > overlap_from，紧邻不重叠）。
+   * 必须成对提供，overlap_to 必须晚于 overlap_from（后端 422）。
+   */
+  overlap_from?: string;
+  overlap_to?: string;
 }
 
 export interface StayListParams extends PageParams {

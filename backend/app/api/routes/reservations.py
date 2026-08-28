@@ -65,13 +65,39 @@ def list_reservations(
     check_in_date: date | None = Query(None),
     check_out_date: date | None = Query(None),
     search: str | None = Query(None),
+    overlap_from: date | None = Query(
+        None,
+        description=(
+            "日期窗口重叠查询（Sprint 4）：与 overlap_to 成对提供。"
+            "语义 = 预订区间 [check_in_date, check_out_date) 与 [overlap_from,"
+            " overlap_to) 有重叠（check_in < overlap_to AND check_out >"
+            " overlap_from，紧邻不视为重叠）。"
+        ),
+    ),
+    overlap_to: date | None = Query(None),
     current_user: User = Depends(require_permissions("reservation:read")),
     db: Session = Depends(get_db),
 ) -> dict:
     """预订列表：筛选 + search（reservation_no OR Guest name/phone，REV-FINAL-07）。
 
     search 命中 Guest 的结果仍遵守 guest:read（响应不返回 guest_name）。
+    Sprint 4 新增 overlap_from / overlap_to：日期窗口重叠查询（供 /front-desk
+    Room Diary 批量拉取时间线数据，语义 [from, to)），不改变写操作。
     """
+    if (overlap_from is None) != (overlap_to is None):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="overlap_from 与 overlap_to 必须同时提供",
+        )
+    if (
+        overlap_from is not None
+        and overlap_to is not None
+        and overlap_from >= overlap_to
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="overlap_to 必须晚于 overlap_from",
+        )
     stmt = (
         select(Reservation)
         .options(
@@ -96,6 +122,13 @@ def list_reservations(
         stmt = stmt.where(Reservation.check_in_date == check_in_date)
     if check_out_date is not None:
         stmt = stmt.where(Reservation.check_out_date == check_out_date)
+    if overlap_from is not None and overlap_to is not None:
+        # 区间重叠：[check_in, check_out) ∩ [overlap_from, overlap_to) ≠ ∅
+        # 即 check_in < overlap_to AND check_out > overlap_from（紧邻不重叠）
+        stmt = stmt.where(
+            Reservation.check_in_date < overlap_to,
+            Reservation.check_out_date > overlap_from,
+        )
     if search:
         pattern = f"%{search}%"
         stmt = stmt.join(Guest, Reservation.guest_id == Guest.id).where(

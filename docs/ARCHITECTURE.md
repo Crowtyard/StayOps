@@ -25,6 +25,7 @@ backend/app/
                          # Task↔Room 原子联动、审计同事务、Active Task 唯一（预检 + 部分唯一索引）
   api/routes/        # guests / availability / reservations / stays
                      # housekeeping 新增（/housekeeping/tasks + /housekeeping/assignees）
+                     # reservations 列表新增 overlap_from / overlap_to（Sprint 4 日期窗口重叠查询）
   alembic/versions/77ec5f0c543e_add_housekeeping_domain.py  # Housekeeping 域迁移
 ```
 
@@ -65,16 +66,25 @@ frontend/src/
     (main)/stays/[id]                     # S2-T2：在住详情（Check-out）
     (main)/housekeeping                   # S3：保洁运营工作台（状态视图 + 快捷操作 + 新建任务）
     (main)/housekeeping/[id]              # S3：保洁任务详情（派单/优先级/备注 + 操作确认）
+    (main)/front-desk                     # S4：前台运营指挥台（Today Summary + Search + Room Diary + 右侧 Drawer）
     (main)/settings/{users,roles,room-types,audit-logs}/page.tsx   # 管理页（T3b）
   components/                             # AppShell(侧边导航+顶栏+手机Drawer)、状态徽标、
                                           # 确认对话框、Modal、Loading/Empty/Error/Forbidden 视图
   components/booking/                     # S2-T2：guest-picker（搜索/创建）、availability-picker（可售房间）、
-                                          # reservation-form（新建/编辑共用）、shared（字段/提示条）
+                                          # reservation-form（新建/编辑共用，S4 增加 create 模式 prefill）、shared（字段/提示条）
+  components/front-desk/                  # S4：front-desk-view（指挥台编排 + 权限门控 + 轮询）、
+                                          # use-front-desk-data（4 个批量 List API 组合，无 N+1）、
+                                          # room-diary（时间线网格 + sticky 房间栏 + 空白格快捷菜单）、
+                                          # today-summary / search-box / drawer / drawer-views
+                                          # （Arrivals/Departures/Attention/Reservation/Room Quick View）、
+                                          # front-desk-today-board（<768px 移动端）
   components/housekeeping-*.tsx           # S3：工作台视图 / 任务详情视图
   components/settings/                    # 四个管理页视图 + 共享工具（分页加载/表单/表格）
   lib/api/                                # 统一 API Client（client.ts + guests/reservations/stays/
                                           # availability + housekeeping（S3）等资源模块 + 错误归一化）
   lib/booking.ts                          # S2-T2：业务日期（Asia/Shanghai）、日期校验、状态标签、金额展示
+  lib/front-desk.ts                       # S4：时间线几何（[ci,co) 裁剪与像素定位）、Today Summary /
+                                          # Attention 三规则纯函数、预订条 PII 安全文案、quickCreateHref
   lib/housekeeping.ts                     # S3：任务状态/优先级/来源展示元数据 + 房态联动映射（展示层）
   lib/server/                             # 服务端 Cookie 读取 / 后端直连 Client
   test/setup.ts                           # Vitest 全局 setup（jest-dom + RTL cleanup）
@@ -83,13 +93,20 @@ frontend/src/
 - 页面数据由 Client Component 在挂载后经 `/api/bff` 拉取（Loading/Empty/Error 三态）；
   登录态由服务端布局读取 Cookie 校验（未登录 307 → /login）
 - 导航按 `auth/me` 返回的权限 code 动态显示（S2-T2：`reservation:read` → 预订、`stay:read` → 在住；
-  S3：`housekeeping_task:read` → 保洁）；403 统一渲染“无权限访问该页面”（不跳登录，与 401 区分）
+  S3：`housekeeping_task:read` → 保洁；S4：`room:read` + `reservation:read` 同时满足 → 前台）；
+  403 统一渲染“无权限访问该页面”（不跳登录，与 401 区分）
 - 管理页写操作权限（user:write / role:write / room_type:write 等）由后端 RBAC 裁决，前端仅按权限显隐按钮
 - Booking 操作（cancel / no-show / check-in / check-out）按 Reservation.status 值 + 权限显隐按钮，前端不复制后端状态机；后端 409 detail 原样展示
 - PII 双边界：后端响应已按 guest:read / reservation:read 裁剪（裁剪字段以键缺失呈现，见 S2-T1），前端再按权限隐藏对应区块（不渲染 Guest 姓名/联系方式/金额）
 - Housekeeping 操作（start / submit / pass / rework / cancel）按 Task.status 值 + 权限显隐按钮，
   前端不复制后端状态机；派单候选人经 `GET /housekeeping/assignees`（housekeeping_task:write，
   不要求 user:read）；任务页面不含任何 Guest / Reservation 数据
+- **Front Desk（S4）**：页面数据 = `GET /rooms` + `GET /reservations?overlap_from&overlap_to`
+  + `GET /stays?status=ACTIVE` + `GET /housekeeping/tasks` 四个批量 List API 客户端组合
+  （无 N+1，无聚合端点）；时间线严格 `[check_in, check_out)` 渲染，双状态（占用 + 清洁）不合并；
+  空白格快速新建复用 `/reservations/new`（URL 预填），Backend Availability 仍重新验证；
+  写操作后 targeted refetch + 60s 轻量轮询（Drawer 打开时暂停）；
+  <768px 渲染 FrontDeskTodayBoard（不渲染完整 Room Diary），768–1023 紧凑、≥1024 完整
 
 ## 测试架构（T3b / S2-T2）
 
@@ -98,8 +115,10 @@ frontend/src/
   真实 `ApiError` 语义保留；`next/navigation` / `next/link` 按需 mock。
   S2-T2 新增 Booking 域用例（139 = Sprint 1 基线 74 + S2-T2 新增 65），
   S3 新增 Housekeeping 域用例（170 = 139 + 31：lib 元数据 / 工作台 / 任务详情 /
-  导航 / Dashboard 概览 / Room Detail 任务卡），测试日期一律基于
-  Asia/Shanghai 业务日期动态生成（`businessDate()` / `addDays`，禁止硬编码年月日）。
+  导航 / Dashboard 概览 / Room Detail 任务卡），
+  S4 新增 Front Desk 用例（240 = 170 + 70：lib 时间线几何与三规则 / Room Diary /
+  Command Center 集成 / Today Board / 快速新建预填 / 前台导航矩阵），
+  测试日期一律基于 Asia/Shanghai 业务日期动态生成（`businessDate()` / `addDays`，禁止硬编码年月日）。
 - **Playwright E2E**（`frontend/playwright.config.ts`，`pnpm test:e2e`）：
   - 独立测试库 `stayops_test`：后端 webServer 直接运行单进程入口 `frontend/e2e/run_test_backend.py` ——
     `prepare_test_db.py` DROP/CREATE 测试库 → alembic upgrade → 幂等 seed（28 间种子房）→
@@ -123,10 +142,19 @@ frontend/src/
     `housekeeping-safety`（Check-in clean gating 四状态 409 + clean 成功，房间 105-109；
     RBAC 矩阵 + assignees；Duplicate Active Task / Concurrent Start / PASS vs REWORK 并发；
     PII 无泄漏）
+  - S4 新增 `front-desk.spec.ts` 10 条（辅助集中在 `e2e/front-desk-helpers.ts`，
+    超期在住状态准备 `e2e/setup_overdue_stay.py`，房间 110/202/206/207/208）：
+    28 房 Diary + Today Summary；Golden Path（空白格快速新建 → [ci,co) 时间线区间 →
+    Drawer → Check-in → 刷新 → Check-out → dirty + 保洁任务）；相邻预订首尾相接
+    （boundingBox 实测 1 晚 = 64px、gap ≤ 2px）；Attention 三规则（脏房到店 / 超期在住 /
+    停用房未来预订）；Housekeeping 集成（脏房到店 → 任务可见 → 完成清扫 → 刷新 clean →
+    Check-in 成功）；搜索定位（房号 / 预订单号）；PII（无 guest:read 姓名隐藏 + 搜索受限）；
+    RBAC（HOUSEKEEPING / FINANCE 无入口 + 直连 403）；Mobile（390×844 Today Board，
+    Room Diary 不渲染）；Tablet（900×720 紧凑 Diary）
   - 各 spec 使用专属房间号段保证用例间确定性；既有 auth/rbac/rooms/settings 4 个 spec 与
     `playwright.config.ts` 隔离机制保持不变
-- **后端 pytest**（`backend/`，202 用例 = Sprint 1 基线 87 + S2-T1 Booking 76 + S2T1-BLK-01 严格 PATCH 4 + S3 Housekeeping 35）：独立测试库 `stayops_test`（与 E2E 同库策略），
-  会话级 DROP/CREATE + 迁移 + seed，用例级事务回滚隔离；并发用例（Double Booking / Check-in / Check-out / 业务单号 / Duplicate Active Task / Concurrent Start / PASS vs REWORK）用两线程 + 独立 Session 真实提交验证。
+- **后端 pytest**（`backend/`，220 用例 = Sprint 1 基线 87 + S2-T1 Booking 76 + S2T1-BLK-01 严格 PATCH 4 + S3 Housekeeping 35 + S4 overlap 窗口查询 11 + S4 D1 死锁窄分类 7）：独立测试库 `stayops_test`（与 E2E 同库策略），
+  会话级 DROP/CREATE + 迁移 + seed，用例级事务回滚隔离；并发用例（Double Booking / Check-in / Check-out / 业务单号 / Duplicate Active Task / Concurrent Start / PASS vs REWORK / D1 25 轮双订）用两线程 + 独立 Session 真实提交验证。
   pytest 与 Playwright E2E 共享 `stayops_test` 且互斥（不得并行运行）。
 
 ## 原则

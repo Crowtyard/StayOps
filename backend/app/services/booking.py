@@ -19,7 +19,7 @@ from datetime import date
 
 from fastapi import HTTPException, status
 from sqlalchemy import Date, cast, func, select, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.audit import write_audit_log
@@ -67,9 +67,34 @@ def _unprocessable(detail: str) -> HTTPException:
     )
 
 
-def _pgcode(exc: IntegrityError) -> str | None:
-    """取底层 DBAPI 错误的 SQLSTATE（psycopg2: exc.orig.pgcode）。"""
-    return getattr(getattr(exc, "orig", None), "pgcode", None)
+def _pgcode(exc: IntegrityError | OperationalError) -> str | None:
+    """取底层 DBAPI 错误的 SQLSTATE。
+
+    psycopg2：exc.orig.pgcode（连接抛出的真实错误必然携带）；
+    回退 exc.orig.diag.sqlstate（防御个别驱动版本差异）。
+    """
+    orig = getattr(exc, "orig", None)
+    if orig is None:
+        return None
+    code = getattr(orig, "pgcode", None)
+    if code is None:
+        diag = getattr(orig, "diag", None)
+        code = getattr(diag, "sqlstate", None)
+    return code
+
+
+def _is_transaction_conflict(exc: OperationalError) -> bool:
+    """仅识别可转换为业务 Conflict 的 PostgreSQL 并发仲裁错误：
+
+    - 40P01 deadlock_detected：并发 Double Booking 排他约束检查互相等待
+      ShareLock，PG 中止其一（D1 修复）
+    - 40001 serialization_failure：事务序列化冲突，同属并发仲裁
+
+    其它任何 OperationalError（57014 query_canceled / statement timeout、
+    连接故障、数据库不可用等）一律不得转换 —— 必须 rollback 后原样 re-raise，
+    保持基础设施/数据库错误语义。
+    """
+    return _pgcode(exc) in ("40P01", "40001")
 
 
 # ---------------------------------------------------------------------------
@@ -244,7 +269,11 @@ def ensure_room_room_type_consistency(room: Room, room_type_id: int) -> None:
 
 
 def _commit_or_conflict(
-    db: Session, *, generic_detail: str, double_booking_detail: str
+    db: Session,
+    *,
+    generic_detail: str,
+    double_booking_detail: str,
+    deadlock_detail: str | None = None,
 ) -> None:
     try:
         db.commit()
@@ -253,6 +282,14 @@ def _commit_or_conflict(
         if _pgcode(exc) == "23P01":
             raise _conflict(double_booking_detail) from exc
         raise _conflict(generic_detail) from exc
+    except OperationalError as exc:
+        db.rollback()
+        if _is_transaction_conflict(exc):
+            # 40P01 / 40001：并发仲裁 → 409（D1 修复），绝不泄漏 500
+            raise _conflict(deadlock_detail or generic_detail) from exc
+        # 其它 OperationalError（57014 / 连接故障 / 库不可用等）：
+        # 基础设施错误语义，rollback 后原样 re-raise，不得转换/吞掉
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -335,12 +372,19 @@ def create_reservation(
             db,
             generic_detail="预订创建失败：数据冲突",
             double_booking_detail=_DOUBLE_BOOKING_DETAIL,
+            deadlock_detail=_DOUBLE_BOOKING_DETAIL,
         )
     except IntegrityError as exc:
         db.rollback()
         if _pgcode(exc) == "23P01":
             raise _conflict(_DOUBLE_BOOKING_DETAIL) from exc
         raise _conflict("预订创建失败：数据冲突") from exc
+    except OperationalError as exc:
+        db.rollback()
+        if _is_transaction_conflict(exc):
+            # 40P01 / 40001：排他约束并发仲裁 → 409 Double Booking 语义（D1）
+            raise _conflict(_DOUBLE_BOOKING_DETAIL) from exc
+        raise
     except HTTPException:
         db.rollback()
         raise
@@ -498,12 +542,19 @@ def update_reservation(
             db,
             generic_detail="预订修改失败：数据冲突",
             double_booking_detail=_DOUBLE_BOOKING_DETAIL,
+            deadlock_detail=_DOUBLE_BOOKING_DETAIL,
         )
     except IntegrityError as exc:
         db.rollback()
         if _pgcode(exc) == "23P01":
             raise _conflict(_DOUBLE_BOOKING_DETAIL) from exc
         raise _conflict("预订修改失败：数据冲突") from exc
+    except OperationalError as exc:
+        db.rollback()
+        if _is_transaction_conflict(exc):
+            # 40P01 / 40001：改期/换房重检排他约束时的并发仲裁 → 409（D1）
+            raise _conflict(_DOUBLE_BOOKING_DETAIL) from exc
+        raise
     except HTTPException:
         db.rollback()
         raise
@@ -535,6 +586,11 @@ def cancel_reservation(
     except IntegrityError as exc:
         db.rollback()
         raise _conflict("取消失败：数据冲突") from exc
+    except OperationalError as exc:
+        db.rollback()
+        if _is_transaction_conflict(exc):
+            raise _conflict("取消失败：数据冲突") from exc
+        raise
     except HTTPException:
         db.rollback()
         raise
@@ -569,6 +625,11 @@ def no_show_reservation(
     except IntegrityError as exc:
         db.rollback()
         raise _conflict("标记未到店失败：数据冲突") from exc
+    except OperationalError as exc:
+        db.rollback()
+        if _is_transaction_conflict(exc):
+            raise _conflict("标记未到店失败：数据冲突") from exc
+        raise
     except HTTPException:
         db.rollback()
         raise
@@ -672,6 +733,11 @@ def check_in_reservation(
         if _pgcode(exc) == "23P01":
             raise _conflict(_DOUBLE_BOOKING_DETAIL) from exc
         raise _conflict("该预订已办理入住，请勿重复操作") from exc
+    except OperationalError as exc:
+        db.rollback()
+        if _is_transaction_conflict(exc):
+            raise _conflict("该预订已办理入住，请勿重复操作") from exc
+        raise
     except HTTPException:
         db.rollback()
         raise
@@ -762,6 +828,11 @@ def check_out_stay(
     except IntegrityError as exc:
         db.rollback()
         raise _conflict("该入住记录已退房，请勿重复操作") from exc
+    except OperationalError as exc:
+        db.rollback()
+        if _is_transaction_conflict(exc):
+            raise _conflict("该入住记录已退房，请勿重复操作") from exc
+        raise
     except HTTPException:
         db.rollback()
         raise
