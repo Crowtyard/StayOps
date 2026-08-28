@@ -239,9 +239,12 @@ def test_update_deadlock_maps_to_409(_database, db, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_concurrent_double_booking_rounds_never_500(_database, monkeypatch):
+def test_concurrent_double_booking_rounds_never_500(_database):
     """25 轮两线程并发抢同一房间同一日期：
-    每轮 = 1 SUCCESS + 1 CONFLICT:409（含死锁仲裁轮），绝不出现 ERROR/500。
+    每轮 = 1 SUCCESS + 1 CONFLICT:409，绝不出现 ERROR/500。
+
+    Sprint 6 §7：创建预订事务内先锁 Room 行，后到事务锁上等待，
+    取得锁后事务内重校验 Availability → 409 Double Booking 语义。
     """
     rounds = 25
     created: list[tuple[int, int]] = []
@@ -251,14 +254,6 @@ def test_concurrent_double_booking_rounds_never_500(_database, monkeypatch):
         room_number = f"92{idx:02d}"
         room_id, guest_id, room_type_id = _setup_room_guest_committed(room_number)
         created.append((room_id, guest_id))
-
-        gate = threading.Barrier(2)
-
-        def fake_check(db, room_obj, c_in, c_out, exclude_reservation_id=None):
-            gate.wait(timeout=15)
-            return (True, None)
-
-        monkeypatch.setattr(booking, "check_room_availability", fake_check)
 
         results: list = []
         lock = threading.Lock()
@@ -288,7 +283,7 @@ def test_concurrent_double_booking_rounds_never_500(_database, monkeypatch):
         assert statuses == ["CONFLICT:409", "SUCCESS"], (
             f"round {idx}: 1 SUCCESS + 1 CONFLICT 期望失败，实际 {results}"
         )
-        # 成功者之外，失败者必须是 Double Booking 语义（23P01 或 40P01 仲裁）
+        # 失败者必须是 Double Booking 语义（应用层重校验 409）
         conflict_detail = next(
             r[1] for r in results if r[0] == "CONFLICT:409"
         )

@@ -6,6 +6,9 @@
  * - Stay No / Status / Room / actual_check_in_at / planned_check_out_date / actual_check_out_at
  * - 关联 Reservation 摘要（reservation:read）与 Guest 信息（guest:read）
  * - ACTIVE + stay:check_out → 退房（确认对话框 + 防重复提交）
+ * - ACTIVE + stay:room_move → 换房（Room Move Dialog，Sprint 6 §25/§26）
+ * - 房间记录（Sprint 6 §27：StayRoomAssignment 历史，仅详情接口加载）
+ * - 原分配房 vs 当前在住房（Sprint 6 §28：仅发生换房时展示）
  * - 退房成功后重新获取真实数据：Stay=CHECKED_OUT、Reservation=COMPLETED、Room=available+dirty
  */
 
@@ -20,6 +23,12 @@ import {
   formatDateTime,
   formatMoney,
 } from "@/lib/booking";
+import {
+  formatAssignmentHistory,
+  originalRoomNumber,
+  stayHasMoved,
+} from "@/lib/room-move";
+import RoomMoveDialog from "@/components/booking/room-move-dialog";
 import { CleaningBadge, OccupancyBadge, StatusBadge } from "@/components/status-badge";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { ErrorView, Forbidden, Loading } from "@/components/status-views";
@@ -28,6 +37,7 @@ import {
   AlertBanner,
   SectionCard,
   dangerButtonClass,
+  secondaryButtonClass,
 } from "@/components/booking/shared";
 
 export default function StayDetailView({ id }: { id: string }) {
@@ -37,6 +47,7 @@ export default function StayDetailView({ id }: { id: string }) {
   const canReadGuest = permissions.has("guest:read");
   const canReadReservation = permissions.has("reservation:read");
   const canCheckOut = permissions.has("stay:check_out");
+  const canRoomMove = permissions.has("stay:room_move");
   const canReadRooms = permissions.has("room:read");
 
   const [stay, setStay] = useState<StayOut | null>(null);
@@ -44,6 +55,7 @@ export default function StayDetailView({ id }: { id: string }) {
   const [error, setError] = useState<ApiError | null>(null);
   const [forbidden, setForbidden] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [moveOpen, setMoveOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [banner, setBanner] = useState<{ kind: "success" | "conflict"; text: string } | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -204,7 +216,7 @@ export default function StayDetailView({ id }: { id: string }) {
       ) : null}
 
       {isActive && canCheckOut ? (
-        <div className="mb-5">
+        <div className="mb-5 flex flex-wrap gap-2">
           <button
             type="button"
             onClick={() => setConfirming(true)}
@@ -213,6 +225,16 @@ export default function StayDetailView({ id }: { id: string }) {
           >
             办理退房
           </button>
+          {canRoomMove ? (
+            <button
+              type="button"
+              onClick={() => setMoveOpen(true)}
+              disabled={busy}
+              className={secondaryButtonClass}
+            >
+              换房
+            </button>
+          ) : null}
         </div>
       ) : null}
 
@@ -285,7 +307,71 @@ export default function StayDetailView({ id }: { id: string }) {
             </p>
           </SectionCard>
         ) : null}
+
+        {/* Sprint 6 §28：仅发生换房时展示原分配房 vs 当前在住房（避免噪声） */}
+        {stayHasMoved(stay) && originalRoomNumber(stay) ? (
+          <SectionCard title="换房信息">
+            <dl className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
+              <div>
+                <dt className="text-xs text-gray-500">原分配房</dt>
+                <dd className="mt-0.5 text-sm font-medium text-gray-900">
+                  {originalRoomNumber(stay)}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-gray-500">当前在住房</dt>
+                <dd className="mt-0.5 text-sm font-medium text-gray-900">
+                  {stay.room_number ?? `#${stay.room_id}`}
+                </dd>
+              </div>
+            </dl>
+          </SectionCard>
+        ) : null}
+
+        {/* Sprint 6 §27：房间记录（StayRoomAssignment 历史） */}
+        {stay.assignments && stay.assignments.length > 0 ? (
+          <SectionCard title="房间记录">
+            <ol className="space-y-2.5">
+              {stay.assignments.map((assignment) => {
+                const row = formatAssignmentHistory(assignment);
+                return (
+                  <li
+                    key={assignment.id}
+                    className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 rounded-md border border-gray-100 bg-gray-50/60 px-3 py-2"
+                  >
+                    <span className="text-sm font-medium text-gray-900">
+                      房间 {row.roomLabel}
+                    </span>
+                    <span className="text-xs tabular-nums text-gray-500">
+                      {row.periodLabel}
+                    </span>
+                    <span
+                      className={`text-xs ${
+                        row.isCurrent
+                          ? "font-medium text-emerald-700"
+                          : "text-gray-500"
+                      }`}
+                    >
+                      {row.reasonLabel}
+                      {row.isCurrent ? " · 当前" : ""}
+                    </span>
+                  </li>
+                );
+              })}
+            </ol>
+          </SectionCard>
+        ) : null}
       </div>
+
+      <RoomMoveDialog
+        stay={stay}
+        open={moveOpen}
+        onClose={() => setMoveOpen(false)}
+        onMoved={() => {
+          setReloadKey((k) => k + 1);
+          setBanner({ kind: "success", text: "换房完成" });
+        }}
+      />
 
       <ConfirmDialog
         open={confirming}

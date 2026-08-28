@@ -4,6 +4,7 @@
 > Sprint 2（S2-T1）新增：`guests`、`reservations`、`stays`（另含 PG 枚举 `reservation_status` / `reservation_source` / `stay_status`、Sequence `reservation_no_seq` / `stay_no_seq`、排他约束 `ex_reservations_room_daterange`）。
 > Sprint 3 新增：`housekeeping_tasks`（另含 PG 枚举 `hk_task_status` / `hk_task_source` / `hk_task_priority`、Sequence `housekeeping_task_no_seq`、部分唯一索引 `uq_housekeeping_tasks_active_room`）。
 > Sprint 5 新增：`maintenance_work_orders` + `rooms.unavailability_source`（另含 PG 枚举 `mwo_status` / `mwo_category` / `mwo_severity` / `mwo_source` / `unavailability_source`、Sequence `maintenance_work_order_no_seq`、CHECK 约束 `ck_rooms_unavailability_source`、部分索引 `ix_mwo_active_blocking_room`）。
+> Sprint 6 新增：`stay_room_assignments`（另含 PG 枚举 `room_move_reason`、CHECK 约束 `ck_stay_room_assignments_interval`、部分唯一索引 `uq_stay_room_assignments_active_stay`、排他约束 `ex_stay_room_assignments_no_overlap`；`hk_task_source` 增加 ROOM_MOVE；Reservation 排他约束调整为 CONFIRMED-only；既有 Stay 历史回填）。
 
 ## 表结构（Sprint 1）
 
@@ -23,8 +24,54 @@
 | 表 | 关键字段 | 说明 |
 |---|---|---|
 | guests | id, name, phone, email, notes, created_at, updated_at | Guest = PII，由 `guest:read` 门控；**不存**身份证号/人脸/公安登记数据 |
-| reservations | id, reservation_no(unique), guest_id(FK→guests RESTRICT), room_id(FK→rooms RESTRICT), room_type_id(FK→room_types RESTRICT), check_in_date, check_out_date, status(枚举), source(枚举), external_reference, agreed_total_amount(Numeric(10,2)), currency, notes, created_by/updated_by(FK→users SET NULL), created_at, updated_at | Reservation = 未来住宿计划；日期区间 `[check_in_date, check_out_date)` |
-| stays | id, stay_no(unique), reservation_id(FK→reservations RESTRICT, **unique**), room_id(FK→rooms RESTRICT), status(枚举), actual_check_in_at(timestamptz), planned_check_out_date, actual_check_out_at(timestamptz), created_by/updated_by(FK→users SET NULL), created_at, updated_at | Stay = 实际入住事实；一个 Reservation 至多一个 Stay |
+| reservations | id, reservation_no(unique), guest_id(FK→guests RESTRICT), room_id(FK→rooms RESTRICT), room_type_id(FK→room_types RESTRICT), check_in_date, check_out_date, status(枚举), source(枚举), external_reference, agreed_total_amount(Numeric(10,2)), currency, notes, created_by/updated_by(FK→users SET NULL), created_at, updated_at | Reservation = 未来住宿计划；日期区间 `[check_in_date, check_out_date)`；**Sprint 6：Check-in 后 room_id 冻结为原分配房** |
+| stays | id, stay_no(unique), reservation_id(FK→reservations RESTRICT, **unique**), room_id(FK→rooms RESTRICT), status(枚举), actual_check_in_at(timestamptz), planned_check_out_date, actual_check_out_at(timestamptz), created_by/updated_by(FK→users SET NULL), created_at, updated_at | Stay = 实际入住事实；一个 Reservation 至多一个 Stay；**room_id = 当前实际房间快速指针（Sprint 6）** |
+
+## Room Move 域表结构（Sprint 6，Migration `c8e2b7a4d1f3`）
+
+| 表 | 关键字段 | 说明 |
+|---|---|---|
+| stay_room_assignments | id, stay_id(FK→stays RESTRICT), room_id(FK→rooms RESTRICT), started_at(timestamptz), ended_at(timestamptz, nullable), reason(枚举, nullable), notes, created_by(FK→users SET NULL), created_at | StayRoomAssignment = 实际住宿期间的房间历史；**ended_at = NULL 表示当前 active assignment**；reason 仅 Room Move 时记录（Check-in / backfill = NULL，UI 显示「入住」） |
+
+### Room Move 域 PG 枚举
+
+```text
+room_move_reason: MAINTENANCE / GUEST_REQUEST / ROOM_QUALITY /
+                  OPERATIONAL / UPGRADE / DOWNGRADE / OTHER
+```
+
+### 约束（Sprint 6 §3）
+
+```sql
+-- ended_at > started_at（ended_at NULL = active assignment）
+CONSTRAINT ck_stay_room_assignments_interval CHECK (
+    ended_at IS NULL OR ended_at > started_at
+)
+
+-- 每个 Stay 最多一个 active assignment（数据库最终仲裁）
+CREATE UNIQUE INDEX uq_stay_room_assignments_active_stay
+ON stay_room_assignments (stay_id) WHERE ended_at IS NULL
+
+-- 同一 Stay 的 assignment 区间不重叠（btree_gist + tstzrange 半开区间；
+-- [s1,e1) 与 [e1,∞) 紧邻不冲突；ended_at NULL = 无上界）
+ALTER TABLE stay_room_assignments
+ADD CONSTRAINT ex_stay_room_assignments_no_overlap
+EXCLUDE USING gist (
+    stay_id WITH =,
+    tstzrange(started_at, ended_at, '[)') WITH &&
+)
+```
+
+### 既有 Stay 历史回填（Sprint 6 §4，确定性）
+
+```text
+room_id     = stays.room_id（当前实际房间）
+started_at  = stays.actual_check_in_at（canonical check-in 时间）
+ended_at    = stays.actual_check_out_at（已退房）；ACTIVE Stay → NULL
+reason      = NULL（初始分配，UI 显示「入住」）
+created_by  = stays.created_by
+created_at  = started_at
+```
 
 ## Housekeeping 域表结构（Sprint 3，Migration `77ec5f0c543e`）
 
@@ -36,7 +83,7 @@
 
 ```text
 hk_task_status:   PENDING / IN_PROGRESS / INSPECTION / REWORK / COMPLETED / CANCELLED
-hk_task_source:   CHECKOUT / MANUAL
+hk_task_source:   CHECKOUT / MANUAL / ROOM_MOVE（Sprint 6：换房自动保洁任务）
 hk_task_priority: NORMAL / URGENT
 ```
 
@@ -129,7 +176,7 @@ stay_status:         ACTIVE / CHECKED_OUT
 - `reservation_no_seq` / `stay_no_seq`：应用层 `nextval` 原子取号，格式化 `RSV{YYYYMMDD}-{NNNN}` / `STY{YYYYMMDD}-{NNNN}`（日期 = Property Business Date，Asia/Shanghai）。
 - `reservation_no` / `stay_no` 均有 UNIQUE 约束兜底。禁止 SELECT MAX+1。
 
-### Double Booking 数据库级排他约束（REV-01）
+### Double Booking 数据库级排他约束（REV-01，Sprint 6 §6 调整为 CONFIRMED-only）
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS btree_gist;   -- room_id 相等操作符的 GiST opclass
@@ -139,10 +186,16 @@ ADD CONSTRAINT ex_reservations_room_daterange
 EXCLUDE USING gist (
     room_id WITH =,
     daterange(check_in_date, check_out_date, '[)') WITH &&
-) WHERE (status NOT IN ('CANCELLED', 'NO_SHOW', 'COMPLETED'));
+) WHERE (status = 'CONFIRMED');
 ```
 
-- 部分约束：只阻塞仍占用日期区间的 `CONFIRMED` / `CHECKED_IN`；`CANCELLED` / `NO_SHOW` / `COMPLETED` 不再阻塞（提前退房释放剩余日期）。
+- Sprint 6 起部分约束只作用于 `CONFIRMED`：CHECKED_IN 后实际住宿房间由
+  `Stay.room_id` + `StayRoomAssignment` 表达；Reservation.room_id 在 Check-in
+  后冻结为原分配房，不得继续锁原房至原退房日（否则 203→205 后 203 被错误阻塞）。
+  `CANCELLED` / `NO_SHOW` / `COMPLETED` 仍不阻塞（提前退房释放剩余日期）。
+- Active Stay vs 新 CONFIRMED 预订的并发仲裁由 Room row lock +
+  active Stay check + remaining stay interval check 完成（见 DECISIONS Sprint 6）；
+  排他约束为 CONFIRMED vs CONFIRMED 的数据库最终保护。
 - 约束冲突（pgcode `23P01`）由应用层映射为 409，不泄漏 500。
 
 ### 主要索引

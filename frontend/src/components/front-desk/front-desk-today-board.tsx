@@ -39,6 +39,8 @@ export interface FrontDeskTodayBoardProps {
   onOpenReservation: (res: ReservationOut) => void;
   onOpenRoom: (room: RoomOut) => void;
   onSelectSummary: (kind: SummaryKind) => void;
+  /** Sprint 6 §25：在住换房入口（stay:room_move 才渲染按钮）。 */
+  onOpenStayMove: (stayId: number) => void;
 }
 
 function AttentionReservationButton({
@@ -75,8 +77,10 @@ export default function FrontDeskTodayBoard({
   onOpenReservation,
   onOpenRoom,
   onSelectSummary,
+  onOpenStayMove,
 }: FrontDeskTodayBoardProps) {
   const canStay = permissions.has("stay:read");
+  const canRoomMove = permissions.has("stay:room_move");
 
   return (
     <div className="space-y-5 pb-8">
@@ -250,18 +254,26 @@ export default function FrontDeskTodayBoard({
             <ul className="space-y-1.5">
               {stays.slice(0, 8).map((stay) => (
                 <li key={stay.id}>
-                  <a
-                    href={`/stays/${stay.id}`}
-                    className="block rounded-md border border-gray-200 px-3 py-2.5 text-sm"
-                  >
-                    <span className="block font-medium text-gray-900">
-                      {stay.stay_no}
-                    </span>
-                    <span className="block text-xs text-gray-500">
-                      房间 {stay.room_number ?? `#${stay.room_id}`} · 计划离店{" "}
-                      {stay.planned_check_out_date}
-                    </span>
-                  </a>
+                  <div className="flex items-center gap-2 rounded-md border border-gray-200 px-3 py-2.5 text-sm">
+                    <a href={`/stays/${stay.id}`} className="min-w-0 flex-1">
+                      <span className="block font-medium text-gray-900">
+                        {stay.stay_no}
+                      </span>
+                      <span className="block text-xs text-gray-500">
+                        房间 {stay.room_number ?? `#${stay.room_id}`} · 计划离店{" "}
+                        {stay.planned_check_out_date}
+                      </span>
+                    </a>
+                    {canRoomMove ? (
+                      <button
+                        type="button"
+                        onClick={() => onOpenStayMove(stay.id)}
+                        className="shrink-0 rounded-md border border-gray-300 px-2.5 py-1.5 text-xs font-medium text-gray-700"
+                      >
+                        换房
+                      </button>
+                    ) : null}
+                  </div>
                 </li>
               ))}
             </ul>

@@ -226,6 +226,34 @@ export type ReservationSource =
 
 export type StayStatus = "ACTIVE" | "CHECKED_OUT";
 
+/** Sprint 6 §10：换房原因（固定枚举，不建立自由字符串 reason）。 */
+export type RoomMoveReason =
+  | "MAINTENANCE"
+  | "GUEST_REQUEST"
+  | "ROOM_QUALITY"
+  | "OPERATIONAL"
+  | "UPGRADE"
+  | "DOWNGRADE"
+  | "OTHER";
+
+/**
+ * Sprint 6：在住房间分配记录（StayRoomAssignment）。
+ * ended_at = null 表示当前 active assignment（后端 exclude_none 键缺失）。
+ * reason = null（键缺失）表示 Check-in 初始分配（UI 显示「入住」）。
+ */
+export interface StayRoomAssignmentOut {
+  id: number;
+  stay_id: number;
+  room_id: number;
+  room_number?: string | null;
+  started_at: string;
+  ended_at?: string | null;
+  reason?: RoomMoveReason | null;
+  notes?: string | null;
+  created_by?: number | null;
+  created_at?: string | null;
+}
+
 export interface GuestOut {
   id: number;
   name: string;
@@ -287,6 +315,9 @@ export interface ReservationOut {
 
 export interface ReservationSummary {
   reservation_no: string;
+  /** Sprint 6：原分配房（Check-in 后冻结；换房后与实际在住房不同）。 */
+  room_id?: number | null;
+  room_number?: string | null;
   check_in_date: string;
   check_out_date: string;
   status: ReservationStatus;
@@ -312,6 +343,35 @@ export interface StayOut {
   guest_id?: number | null;
   guest_name?: string | null;
   reservation?: ReservationSummary | null;
+  /** Sprint 6：在住房间分配历史（仅详情接口加载）。 */
+  assignments?: StayRoomAssignmentOut[] | null;
+}
+
+/** POST /stays/{id}/room-move 请求（Sprint 6 §9/§10）。 */
+export interface RoomMoveCreate {
+  target_room_id: number;
+  reason: RoomMoveReason;
+  notes?: string | null;
+}
+
+/** room-move-options 单项：eligible=false 时 reason 为不可换入原因。 */
+export interface RoomMoveOptionItem {
+  room_id: number;
+  room_number: string;
+  room_type_id: number;
+  room_type_name?: string | null;
+  floor: number;
+  eligible: boolean;
+  reason?: string | null;
+}
+
+export interface RoomMoveOptionsOut {
+  business_date: string;
+  stay_id: number;
+  stay_no: string;
+  current_room_id: number;
+  planned_check_out_date: string;
+  items: RoomMoveOptionItem[];
 }
 
 export interface CheckInOut {
@@ -410,7 +470,7 @@ export type HousekeepingTaskStatus =
 
 export type HousekeepingTaskPriority = "NORMAL" | "URGENT";
 
-export type HousekeepingTaskSource = "CHECKOUT" | "MANUAL";
+export type HousekeepingTaskSource = "CHECKOUT" | "MANUAL" | "ROOM_MOVE";
 
 /**
  * 保洁任务响应。后端使用 response_model_exclude_none：

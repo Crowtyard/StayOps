@@ -111,6 +111,7 @@ function renderBoard(opts: { canReadGuest?: boolean } = {}) {
   const onOpenReservation = vi.fn();
   const onOpenRoom = vi.fn();
   const onSelectSummary = vi.fn();
+  const onOpenStayMove = vi.fn();
   render(
     <FrontDeskTodayBoard
       rooms={rooms}
@@ -124,9 +125,10 @@ function renderBoard(opts: { canReadGuest?: boolean } = {}) {
       onOpenReservation={onOpenReservation}
       onOpenRoom={onOpenRoom}
       onSelectSummary={onSelectSummary}
+      onOpenStayMove={onOpenStayMove}
     />,
   );
-  return { onOpenReservation, onOpenRoom, onSelectSummary };
+  return { onOpenReservation, onOpenRoom, onSelectSummary, onOpenStayMove };
 }
 
 describe("FrontDeskTodayBoard（移动端）", () => {
@@ -240,6 +242,7 @@ describe("FrontDeskTodayBoard（移动端）", () => {
         onOpenReservation={vi.fn()}
         onOpenRoom={vi.fn()}
         onSelectSummary={vi.fn()}
+        onOpenStayMove={vi.fn()}
       />,
     );
     expect(

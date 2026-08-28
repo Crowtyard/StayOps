@@ -73,3 +73,9 @@ class Stay(Base):
     # 跨模块关系（Reservation 定义于 reservation.py）：使用字符串注册表解析，避免循环导入
     reservation = relationship("Reservation", back_populates="stay")
     room: Mapped[Room] = relationship()
+    # Sprint 6：在住房间分配历史（StayRoomAssignment 定义于 stay_assignment.py）
+    assignments = relationship(
+        "StayRoomAssignment",
+        back_populates="stay",
+        order_by="StayRoomAssignment.started_at",
+    )

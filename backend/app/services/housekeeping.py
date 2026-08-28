@@ -137,6 +137,11 @@ def _active_task_exists(db: Session, room_id: int) -> bool:
     )
 
 
+def has_active_task(db: Session, room_id: int) -> bool:
+    """该房间当前是否存在进行中保洁任务（Sprint 6 Room Move 复用）。"""
+    return _active_task_exists(db, room_id)
+
+
 def create_manual_task(
     db: Session,
     payload: HousekeepingTaskCreate,
@@ -194,6 +199,51 @@ def create_manual_task(
         raise
 
 
+def _create_auto_task(
+    db: Session,
+    room: Room,
+    source: HousekeepingTaskSource,
+    *,
+    stay: Stay | None,
+    user: User | None,
+    request=None,
+) -> HousekeepingTask:
+    """事务内自动创建翻房任务（PENDING；退房 = CHECKOUT / 换房 = ROOM_MOVE）。
+
+    由 services/booking.check_out_stay 与 services/room_move.move_stay 在
+    各自事务内调用；本函数只 flush 不 commit，任何失败由调用方事务整体回滚
+    （原子不变式：离房必有翻房任务，Sprint 3 / Sprint 6 §14）。
+    """
+    task = HousekeepingTask(
+        task_no=next_task_no(db),
+        room_id=room.id,
+        status=HousekeepingTaskStatus.PENDING,
+        priority=HousekeepingTaskPriority.NORMAL,
+        source=source,
+        notes=None,
+        created_by=user.id if user is not None else None,
+        updated_by=user.id if user is not None else None,
+    )
+    db.add(task)
+    db.flush()
+    details = _audit_basics(task, room.room_number)
+    details.update({"from": None, "to": task.status.value})
+    if stay is not None:
+        # 可追溯（不含 Guest PII / Reservation 数据）
+        details.update({"stay_id": stay.id, "stay_no": stay.stay_no})
+    write_audit_log(
+        db,
+        user,
+        "housekeeping.create",
+        "housekeeping_task",
+        task.id,
+        details,
+        request,
+    )
+    db.flush()
+    return task
+
+
 def create_checkout_task(
     db: Session,
     room: Room,
@@ -206,39 +256,37 @@ def create_checkout_task(
     由 services/booking.check_out_stay 在退房事务内调用；本函数只 flush
     不 commit，任何失败由退房事务整体回滚（原子不变式：退房必有翻房任务）。
     """
-    task = HousekeepingTask(
-        task_no=next_task_no(db),
-        room_id=room.id,
-        status=HousekeepingTaskStatus.PENDING,
-        priority=HousekeepingTaskPriority.NORMAL,
-        source=HousekeepingTaskSource.CHECKOUT,
-        notes=None,
-        created_by=user.id if user is not None else None,
-        updated_by=user.id if user is not None else None,
-    )
-    db.add(task)
-    db.flush()
-    details = _audit_basics(task, room.room_number)
-    details.update(
-        {
-            "from": None,
-            "to": task.status.value,
-            # Checkout 可追溯（不含 Guest PII / Reservation 数据）
-            "stay_id": stay.id,
-            "stay_no": stay.stay_no,
-        }
-    )
-    write_audit_log(
+    return _create_auto_task(
         db,
-        user,
-        "housekeeping.create",
-        "housekeeping_task",
-        task.id,
-        details,
-        request,
+        room,
+        HousekeepingTaskSource.CHECKOUT,
+        stay=stay,
+        user=user,
+        request=request,
     )
-    db.flush()
-    return task
+
+
+def create_room_move_task(
+    db: Session,
+    room: Room,
+    stay: Stay,
+    user: User | None,
+    request=None,
+) -> HousekeepingTask:
+    """Room Move 事务内创建旧房翻房任务（source=ROOM_MOVE，PENDING）。
+
+    Sprint 6 §14：换房自动任务不得伪装成 Checkout；沿用 Alpha.3
+    「one active housekeeping task per room」部分唯一索引。
+    由 services/room_move.move_stay 在换房事务内调用，只 flush 不 commit。
+    """
+    return _create_auto_task(
+        db,
+        room,
+        HousekeepingTaskSource.ROOM_MOVE,
+        stay=stay,
+        user=user,
+        request=request,
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -19,46 +19,61 @@
   `Ctrl+C` 同时关闭前后端进程树；`--check` 只检查不启动。
   生产部署方式（infra/docker）不受影响。
 
-## 后端结构（Sprint 5 · 更新）
+## 后端结构（Sprint 6 · 更新）
 
 ```text
 backend/app/
   models/            # Guest / Reservation / Stay（Booking 域）
-                     # HousekeepingTask（Sprint 3：任务/枚举/来源/优先级）
-                     # MaintenanceWorkOrder 新增（Sprint 5：工单/枚举/阻断语义）
-  schemas/           # guest / reservation / stay / availability
+                     # StayRoomAssignment 新增（Sprint 6：在住房间分配历史 + room_move_reason 枚举）
+                     # HousekeepingTask（Sprint 3：任务/枚举/来源/优先级；Sprint 6 增加 ROOM_MOVE 来源）
+                     # MaintenanceWorkOrder（Sprint 5：工单/枚举/阻断语义）
+  schemas/           # guest / reservation / stay（Sprint 6：assignments / RoomMoveCreate /
+                     # RoomMoveOptionsOut）
                      # housekeeping（Create/Update strict、AssigneeOut）
-                     # maintenance 新增（Create/Update strict、Assign/Resolve/Verify/Rework、AssigneeOut）
+                     # maintenance（Create/Update strict、Assign/Resolve/Verify/Rework、AssigneeOut）
   core/              # business_date.py（Property Business Date，Asia/Shanghai）
                      # booking_state_machine.py（Reservation / Stay 状态机）
                      # housekeeping_state_machine.py（Task 状态机 + 房态联动映射）
-                     # maintenance_state_machine.py 新增（MWO 状态机 + BLOCKING 语义）
-                     # db_conflict.py 新增（23P01/40P01/40001 并发仲裁窄分类，Sprint 4 D1 复用）
+                     # maintenance_state_machine.py（MWO 状态机 + BLOCKING 语义）
+                     # db_conflict.py（23P01/40P01/40001 并发仲裁窄分类，Sprint 4 D1 复用）
   services/booking.py    # 可售性引擎、预订生命周期、Check-in/Check-out 事务、
-                         # 权限裁剪序列化；Check-out 事务内调用 create_checkout_task；
-                         # Sprint 5：Availability/Check-in/Checkout 感知 Active Blocking MWO
-  services/housekeeping.py # 任务生命周期（创建/派单/PATCH/五个 action）、
-                         # Task↔Room 原子联动、审计同事务、Active Task 唯一
-  services/maintenance.py  # 新增：工单生命周期（报修/派单/PATCH/六个 action）、
-                         # blocks_room ↔ Room 可售性原子联动（Room → MWO 固定锁顺序）、
-                         # Last Blocking 规则、MANUAL OOS 保护、审计同事务
-  api/routes/        # guests / availability / reservations / stays
+                         # 权限裁剪序列化；Sprint 6：CONFIRMED-only 可售性、
+                         # Room Row Lock（lock_room_for_update / lock_rooms_for_update）、
+                         # room_release_state（S5 释放决策抽取，退房/换房共用）、
+                         # Check-in 建立 assignment #1 / Checkout 关闭 open assignment
+  services/room_move.py  # 新增：目标房资格评估 + room-move-options + 原子换房事务
+                         # （Stay → Rooms(pk 升序) 锁顺序、事务内重校验、
+                         #  source release + ROOM_MOVE 保洁任务 + stay.room_move 审计）
+  services/housekeeping.py # 任务生命周期、Task↔Room 原子联动；Sprint 6：_create_auto_task
+                         # 抽取（CHECKOUT / ROOM_MOVE 共用）
+  services/maintenance.py  # 工单生命周期、blocks_room ↔ Room 可售性原子联动（Room → MWO 锁顺序）
+  api/routes/        # guests / availability / reservations / stays（Sprint 6：
+                     # room-move-options / room-move 端点）
                      # housekeeping（/housekeeping/tasks + /housekeeping/assignees）
-                     # maintenance 新增（/maintenance/orders + /maintenance/assignees）
+                     # maintenance（/maintenance/orders + /maintenance/assignees）
                      # reservations 列表 overlap_from / overlap_to（Sprint 4）
-  alembic/versions/77ec5f0c543e_add_housekeeping_domain.py  # Housekeeping 域迁移
-  alembic/versions/a7f3e4c1d902_add_maintenance_domain.py   # 新增：Maintenance 域迁移
-                     # （MWO 表/枚举/Sequence/rooms.unavailability_source 回填/CHECK 约束/部分索引）
+  alembic/versions/c8e2b7a4d1f3_add_room_move_domain.py  # 新增：Room Move 域迁移
+                     # （stay_room_assignments 表/枚举/CHECK/部分唯一索引/排他约束、
+                     #   hk_task_source + ROOM_MOVE、Reservation 排他约束 CONFIRMED-only、
+                     #   既有 Stay 历史回填）
 ```
 
 - 预订域业务集中在 `services/booking.py`（routes 保持薄），决策见 docs/DECISIONS.md（S2-T1 第 9 条）。
-- Double Booking 最终仲裁在数据库（排他约束 `ex_reservations_room_daterange` + btree_gist），应用层预检仅为快速路径。
+- Double Booking 最终仲裁在数据库（排他约束 `ex_reservations_room_daterange`，**Sprint 6 起 CONFIRMED-only**）+ Room Row Lock 事务内重校验；应用层预检仅为快速路径。
 - Active Task 唯一最终仲裁在数据库（部分唯一索引 `uq_housekeeping_tasks_active_room`），应用层预检仅为快速路径。
-- Check-out 与 Housekeeping Task 创建为同一数据库事务（原子不变式：退房必有翻房任务）。
-- 后端是 PII / 权限的最终边界：响应按 guest:read / reservation:read 裁剪字段（不只是前端隐藏）。Housekeeping 域不关联 Guest / Reservation，天然无 PII。
+- Stay 当前房间唯一性最终仲裁：Stay 行锁 + 目标房行锁 + 事务内重校验 + 部分唯一索引 `uq_stay_room_assignments_active_stay` / 排他约束 `ex_stay_room_assignments_no_overlap`（Sprint 6）。
+- Check-out / Room Move 与 Housekeeping Task 创建为同一数据库事务（原子不变式：离房必有翻房任务）。
+- 后端是 PII / 权限的最终边界：响应按 guest:read / reservation:read 裁剪字段（不只是前端隐藏）。Housekeeping / Maintenance 域不关联 Guest / Reservation，天然无 PII。
+- **Sprint 6 Room Move**：Reservation = 未来商业分配（Check-in 后 room_id 冻结为原分配房）；
+  Stay = 实际住宿（room_id = 当前实际房间快速指针）；StayRoomAssignment = 实际房间历史
+  （ended_at NULL = active assignment）。原子换房事务锁顺序 Stay → Rooms（Room pk 升序），
+  与 Checkout（Stay → Room）、Check-in / Reservation update（Reservation → Room）、
+  Maintenance（Room → MWO）全局无环；目标房资格后端权威（available+clean+无阻断维修+
+  无其它 ACTIVE Stay+剩余区间 [move_date, planned_check_out) 无 CONFIRMED 预订）；
+  换房绝不触碰原房 MWO 生命周期（维修独立性）。
 - **Maintenance（Sprint 5）**：MaintenanceWorkOrder 为第三独立业务领域（维修状态 ≠ 占用 ≠ 清洁）；
   Active Blocking（blocks_room + OPEN/ASSIGNED/IN_PROGRESS/RESOLVED）参与 Availability /
-  Check-in / Checkout 最终判断；工单 ↔ Room 可售性事务固定锁顺序 Room → MWO；
+  Check-in / Checkout / Room Move 目标资格最终判断；工单 ↔ Room 可售性事务固定锁顺序 Room → MWO；
   只能解除自己造成的 OOS（source=MAINTENANCE 且 active blocking MWO=0），
   MANUAL OOS / blocked 永不被 Maintenance 解除；Cleaning 维度不受 Maintenance 影响。
   Maintenance 域不关联 Guest / Reservation，天然无 PII。
@@ -91,7 +106,8 @@ frontend/src/
     (main)/reservations/new               # S2-T2：新建预订（Guest 搜索创建 + Availability）
     (main)/reservations/[id]              # S2-T2：预订详情（编辑/Cancel/No-show/Check-in）
     (main)/stays                          # S2-T2：在住列表（stay:read 导航落点）
-    (main)/stays/[id]                     # S2-T2：在住详情（Check-out）
+    (main)/stays/[id]                     # S2-T2：在住详情（Check-out；Sprint 6：换房 + 房间记录 +
+                                          #   原分配房/当前在住房）
     (main)/housekeeping                   # S3：保洁运营工作台（状态视图 + 快捷操作 + 新建任务）
     (main)/housekeeping/[id]              # S3：保洁任务详情（派单/优先级/备注 + 操作确认）
     (main)/maintenance                    # S5：维修运营工作台（状态视图 + 筛选/搜索 + 快捷操作 + 现场报修）
@@ -103,22 +119,33 @@ frontend/src/
                                           # 确认对话框、Modal、Loading/Empty/Error/Forbidden 视图
   components/booking/                     # S2-T2：guest-picker（搜索/创建）、availability-picker（可售房间）、
                                           # reservation-form（新建/编辑共用，S4 增加 create 模式 prefill）、shared（字段/提示条）
+                                          # room-move-dialog（Sprint 6 新增：可复用换房对话框，
+                                          #   目标房由 room-move-options 后端权威驱动 + 显式确认换房）
   components/front-desk/                  # S4：front-desk-view（指挥台编排 + 权限门控 + 轮询）、
                                           # use-front-desk-data（4 个批量 List API 组合，无 N+1）、
-                                          # room-diary（时间线网格 + sticky 房间栏 + 空白格快捷菜单）、
+                                          # room-diary（时间线网格 + sticky 房间栏 + 空白格快捷菜单；
+                                          #   Sprint 6：ACTIVE Stay 在住条 = 当前实际占用）、
                                           # today-summary / search-box / drawer / drawer-views
-                                          # （Arrivals/Departures/Attention/Reservation/Room Quick View）、
-                                          # front-desk-today-board（<768px 移动端）
+                                          # （Arrivals/Departures/Attention/Reservation/Room Quick View；
+                                          #   Sprint 6：In-house [换房] 入口 + 在住换房抽屉视图 +
+                                          #   Reservation 抽屉「当前在住房」）、
+                                          # front-desk-today-board（<768px 移动端；Sprint 6 在住换房入口）
   components/housekeeping-*.tsx           # S3：工作台视图 / 任务详情视图
   components/maintenance/                 # S5：maintenance-workspace-view（工作台）、
                                           # maintenance-work-order-detail-view（详情）、report-form（现场报修）
   components/settings/                    # 四个管理页视图 + 共享工具（分页加载/表单/表格）
-  lib/api/                                # 统一 API Client（client.ts + guests/reservations/stays/
-                                          # availability + housekeeping（S3）+ maintenance（S5）等资源模块 + 错误归一化）
+  lib/api/                                # 统一 API Client（client.ts + guests/reservations/stays（Sprint 6：
+                                          # roomMoveOptions / roomMove）/ availability + housekeeping（S3）+
+                                          # maintenance（S5）等资源模块 + 错误归一化）
   lib/booking.ts                          # S2-T2：业务日期（Asia/Shanghai）、日期校验、状态标签、金额展示
   lib/front-desk.ts                       # S4：时间线几何（[ci,co) 裁剪与像素定位）、Today Summary /
-                                          # Attention 四规则纯函数（A/B/C/M）、预订条 PII 安全文案、quickCreateHref
-  lib/housekeeping.ts                     # S3：任务状态/优先级/来源展示元数据 + 房态联动映射（展示层）
+                                          # Attention 四规则纯函数（A/B/C/M）、预订条 PII 安全文案、quickCreateHref；
+                                          # Sprint 6：TIMELINE_STATUSES = CONFIRMED only + ACTIVE Stay 在住条
+                                          # （stayCheckInDate / stayBarText / stayBarTitle）
+  lib/room-move.ts                        # S6 新增：换房原因元数据（7 固定枚举）、assignment 历史格式化、
+                                          # 原分配房 vs 当前在住房判断（展示层）
+  lib/housekeeping.ts                     # S3：任务状态/优先级/来源展示元数据 + 房态联动映射（展示层）；
+                                          # S6：HK_SOURCE_LABELS 增加 ROOM_MOVE「换房自动」
   lib/maintenance.ts                      # S5：工单状态/分类/严重度/来源展示元数据 + Active Blocking 判断（展示层）
   lib/server/                             # 服务端 Cookie 读取 / 后端直连 Client
   test/setup.ts                           # Vitest 全局 setup（jest-dom + RTL cleanup）
@@ -155,6 +182,12 @@ frontend/src/
   空白格快速新建复用 `/reservations/new`（URL 预填），Backend Availability 仍重新验证；
   写操作后 targeted refetch + 60s 轻量轮询（Drawer 打开时暂停）；
   <768px 渲染 FrontDeskTodayBoard（不渲染完整 Room Diary），768–1023 紧凑、≥1024 完整
+- **Front Desk（Sprint 6 Room Diary 语义升级）**：Future booking = CONFIRMED
+  Reservation.room_id（预订条）；Current actual occupancy = ACTIVE Stay.room_id
+  （在住条 [actual check-in 日, planned_check_out)，点击进 Stay 详情）；
+  CHECKED_IN 预订不再画成当前实际占用；换房后 Stay 条画在新房、旧房显示其
+  当前 dirty / maintenance-OOS 状态；In-house 抽屉与移动 Today Board 提供
+  [换房] 入口（stay:room_move 显隐，后端 403 兜底）。
 
 ## 测试架构（T3b / S2-T2）
 
@@ -168,6 +201,9 @@ frontend/src/
   Command Center 集成 / Today Board / 快速新建预填 / 前台导航矩阵），
    S5 新增 Maintenance 用例（300 = 240 + 60：lib 元数据 / 维修工作台 / 工单详情 /
    现场报修表单 / 保洁快捷报修 / 前台维修集成 / 维修导航矩阵），
+   S6 新增 Room Move 用例（324 = 300 + 24：lib 换房元数据 / 历史格式化 / 在住条几何 /
+   Stay 详情换房对话框 / Front Desk 换房入口与抽屉 / Room Diary 在住条语义更新 /
+   HK 来源 ROOM_MOVE），
   测试日期一律基于 Asia/Shanghai 业务日期动态生成（`businessDate()` / `addDays`，禁止硬编码年月日）。
 - **Playwright E2E**（`frontend/playwright.config.ts`，`pnpm test:e2e`）：
   - 独立测试库 `stayops_test`：后端 webServer 直接运行单进程入口 `frontend/e2e/run_test_backend.py` ——
@@ -211,10 +247,18 @@ frontend/src/
     Rework / Cancel / Manual OOS 保护；Check-in 409；RBAC 矩阵 + FINANCE；
     PII（工单无 Guest 数据 + MAINTENANCE 无 Booking PII 出口）；完成 ≠ 清洁；
     S5 缺陷修复（occupied + 未来预订 + blocking MWO → 前台主动维修风险 Attention）
+  - S6 新增 `room-move.spec.ts` 4 条（辅助集中在 `e2e/room-move-helpers.ts`，
+    复用种子房 301-308 归一化策略，不新建房间）：Golden Path UI 全链路
+    （Check-in A → Front Desk [换房] A→B → B 在住 / A dirty + ROOM_MOVE 保洁任务 /
+    Diary 在住条画在 B / Stay 详情房间记录 + 原分配房 vs 当前在住房）；
+    blocking Maintenance on occupied A → 换房 → A OOS+MAINTENANCE+dirty、维修仍 active；
+    HTTP 并发 Move A→T vs Move B→T（1×200 + 1×409）；
+    HTTP 并发 Move→T vs Create Reservation→T（no double allocation）
   - 各 spec 使用专属房间号段保证用例间确定性；既有 auth/rbac/rooms/settings 4 个 spec 与
     `playwright.config.ts` 隔离机制保持不变
-- **后端 pytest**（`backend/`，285 用例 = Sprint 1 基线 87 + S2-T1 Booking 76 + S2T1-BLK-01 严格 PATCH 4 + S3 Housekeeping 35 + S4 overlap 窗口查询 11 + S4 D1 死锁窄分类 7 + S5 Maintenance 65）：独立测试库 `stayops_test`（与 E2E 同库策略），
-  会话级 DROP/CREATE + 迁移 + seed，用例级事务回滚隔离；并发用例（Double Booking / Check-in / Check-out / 业务单号 / Duplicate Active Task / Concurrent Start / PASS vs REWORK / D1 25 轮双订 / S5 同房双阻断创建 / 并发 verify / cancel vs verify）用两线程 + 独立 Session 真实提交验证。
+- **后端 pytest**（`backend/`，317 用例 = 285 基线 + Sprint 6 Room Move 32：核心功能 22 /
+  迁移往返与历史回填 2 / 并发 stress 4×10 轮 + 汇总报告 4 + 既有语义更新）：独立测试库 `stayops_test`（与 E2E 同库策略），
+  会话级 DROP/CREATE + 迁移 + seed，用例级事务回滚隔离；并发用例（Double Booking / Check-in / Check-out / 业务单号 / Duplicate Active Task / Concurrent Start / PASS vs REWORK / D1 25 轮双订 / S5 同房双阻断创建 / 并发 verify / cancel vs verify / S6 move-vs-move / move-vs-reservation / move-vs-checkout / reservation-update-vs-move 各 10 轮 stress）用两线程 + 独立 Session 真实提交验证。
   pytest 与 Playwright E2E 共享 `stayops_test` 且互斥（不得并行运行）。
 
 ## 原则

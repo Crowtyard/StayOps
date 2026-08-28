@@ -284,3 +284,32 @@ venv 因启动器硬编码旧路径而重建；requirements.txt 统一为 UTF-8 
 
 7. **永久性**。本策略写入根目录 AGENTS.md 与 README.md（`start-dev.cmd` 为官方推荐 Local Development 入口）、docs/ARCHITECTURE.md（Local Runtime 条目）；任何 Sprint / Bugfix 开始前必须阅读并遵守。
 
+## 2026-08-28 — Sprint 6：Room Move & In-Stay Recovery（住中换房与在住异常恢复）
+
+1. **领域模型三分（§2，Domain Decision LOCKED）**。Reservation = 商业预订 / 未来房间分配；Stay = 实际住宿；StayRoomAssignment = 实际住宿期间的房间历史。`Reservation.room_id` 在 Check-in 后冻结为入住时原分配房，Room Move 绝不修改它；`Stay.room_id` 继续作为「当前实际房间」快速指针（与 open assignment 同房，数据库/事务不变式）。不允许为方便把 Reservation.room_id 改成目标房——那会错误地把 205 解释为整个预订周期都属于该 Reservation。
+
+2. **StayRoomAssignment 约束（§3）**。CHECK `ended_at IS NULL OR ended_at > started_at`；部分唯一索引 `uq_stay_room_assignments_active_stay ON (stay_id) WHERE ended_at IS NULL`（每个 Stay 最多一个 active assignment，数据库最终仲裁）；排他约束 `ex_stay_room_assignments_no_overlap`（btree_gist 已存在 + `tstzrange(started_at, ended_at, '[)')`，同一 Stay 区间不重叠；[s1,e1) 与 [e1,∞) 紧邻不冲突）。未引入新框架。
+
+3. **Legacy Backfill（§4，确定性）**。迁移内 `INSERT ... SELECT FROM stays`：room_id = stays.room_id、started_at = actual_check_in_at（canonical check-in 时间）、ended_at = actual_check_out_at（ACTIVE → NULL）、reason = NULL（UI 显示「入住」）、created_by = stays.created_by、created_at = started_at。不破坏 S2–S5 数据；downgrade 在 scratch 库验证（正常开发库禁止降级）。
+
+4. **Reservation 排他约束调整为 CONFIRMED-only（§6）**。CHECKED_IN 后实际住宿房间由 Stay + StayRoomAssignment 表达；旧约束若继续锁原房，203→205 后 203 会被错误阻塞至原退房日。可售性审计：所有 `reservation.status == CHECKED_IN` 被当作「房间实际占用」的逻辑全部移除（overlapping_reservation_room_ids 只认 CONFIRMED；Active Stay 检查按 stay.room_id）。换房后原房在原计划区间可接受新 CONFIRMED 预订（pytest + E2E 锁定）。downgrade 恢复旧约束；若已产生「CHECKED_IN 原房与新 CONFIRMED 重叠」数据则重加失败——属预期（旧模型下该数据本不合法）。
+
+5. **Room Row Lock 并发模型（§7）**。所有创建/改变某房间未来占用的写操作在事务内 `SELECT Room ... FOR UPDATE` 后重新校验当前事实（不得只依赖请求前 Availability）：Create Reservation、Update Reservation（room/date 变更）、Check-in、Room Move。CONFIRMED vs CONFIRMED 仍由 PostgreSQL 排他约束最终保护；Active Stay vs 新 CONFIRMED 预订由 Room row lock + active Stay check + remaining stay interval check 仲裁（换房事务锁目标房；预订创建/改期锁目标房后查 ACTIVE Stay —— 双方在房间行上串行化，exactly one allocation wins）。并发双订测试的 barrier 机制被房间行锁取代（后到事务在锁上等待、取得锁后重校验看到先到者提交 → 409），D1 收窄分类（40P01/40001 → 409，其它 OperationalError 原样传播）不变。
+
+6. **全局锁顺序（§8，最终版）**：`(Reservation | Stay) → Rooms（多房按 Room primary key 升序）→ MaintenanceWorkOrder`。Check-in = Reservation → Room；Checkout = Stay → Room；Move = Stay → Rooms(asc pk)；Reservation update = Reservation → Room(s)；Maintenance = Room → MWO（S5 不变）。Move 禁止 source-first 锁房（203→205 与 205→203 并发死锁风险），一律按 pk 升序。Move 不锁 MWO（维修独立性）。与 S5 无环，不打破既有顺序。
+
+7. **Check-in / Check-out / Move 的 assignment 生命周期（§5/§12）**。Check-in 同事务建立 assignment #1（room = check-in room、started_at = actual check-in time、ended_at = NULL）；Check-out 关闭 open assignment（ended_at = actual check-out time，保证 CHECKED_OUT stay 0 个 open assignment）；Move 关闭 source assignment、创建 target assignment、Stay.room_id = Target、任一步失败整体回滚（不允许半换房）。
+
+8. **Room Move API 与目标房资格（§9/§11）**。`GET /stays/{id}/room-move-options`（后端权威候选 + 不可选原因，UI 不得自行猜测）+ `POST /stays/{id}/room-move`（原子事务）；客户端不得直接 PATCH Stay.room_id（无该通道；CHECKED_IN Reservation 的 room_id PATCH → 409「已入住的预订不能修改房间（如需换房请使用换房功能）」）。目标房资格：occupancy=available、cleaning=clean、无 active blocking MWO、无其它 ACTIVE Stay（按 stay.room_id）、remaining stay interval [business_date, planned_check_out) 内无 CONFIRMED 预订（半开区间：planned checkout 当日 Check-in 的下一笔 allowed）。reason 固定 7 枚举（MAINTENANCE/GUEST_REQUEST/ROOM_QUALITY/OPERATIONAL/UPGRADE/DOWNGRADE/OTHER），不建立自由字符串；notes 可选。
+
+9. **Source Release 复用 S5 一套逻辑（§13）**。Checkout 的 maintenance-aware 释放决策抽取为 `room_release_state`（行为保持型重构）：已 OOS 保持停用与来源（MANUAL 绝不被覆盖为 available）、active blocking MWO → OOS+MAINTENANCE、否则 available；Cleaning 无条件 dirty。换房自动保洁任务 source=ROOM_MOVE（PENDING，复用 `_create_auto_task`，不伪装成 CHECKOUT）；源房已有 active HK task → 409 整体回滚（不创建双任务，部分唯一索引兜底）。Target = occupied、cleaning 不变、不创建 target 任务。维修独立性（§16）：Move 绝不 resolve/verify/cancel/complete Source Room 的 MWO。
+
+10. **RBAC stay:room_move（§18）**。SUPER_ADMIN / MANAGER / FRONT_DESK ✓；HOUSEKEEPING / MAINTENANCE / FINANCE ×。用 permission 判断，禁止硬编码角色名；seed 幂等收敛（37 权限码）。
+
+11. **审计 stay.room_move（§19）**。记录 stay_id/stay_no、from/to room、reason、operator_user_id、source room occupancy from→to、maintenance_blocking；不复制 Guest PII 与 notes 内容（notes_recorded 仅布尔）。
+
+12. **前端（§24–§28）**。Room Diary 时间线语义：Future booking = CONFIRMED Reservation.room_id；Current actual occupancy = ACTIVE Stay.room_id（emerald 在住条，[actual check-in 日, planned_check_out)）；CHECKED_IN 预订不再画成当前实际占用（TIMELINE_STATUSES = CONFIRMED only）。换房入口集成 /front-desk 当前在住抽屉与移动 Today Board + Stay 详情页（stay:room_move 显隐，后端 403 兜底）；RoomMoveDialog 由 room-move-options 驱动、显式「确认换房」；Stay 详情展示房间记录（assignment history）与「原分配房 vs 当前在住房」（仅换房后展示，避免噪声）。抽屉标题「在住换房」与 Modal「换房」区分（可访问名称歧义）。
+
+13. **测试口径（Sprint 6）**。pytest 317（285 基线 + 32 新增：功能 22 / 迁移 2 / 并发 4×10 轮 stress + 汇总报告）；Vitest 324（300 基线 + 24 新增：lib 12 / Stay 详情 5 / Front Desk 6 / HK 来源 1，含既有 2 语义更新）；Playwright 60+4（room-move spec 4 条：Golden Path、blocking MWO、move-vs-move、move-vs-reservation HTTP 并发）。E2E 复用种子房 301-308 并归一化（不新建房间，保持 28 间种子房不变——rooms.spec 28 房断言不受影响）。日期全部动态（Asia/Shanghai 业务日期）。
+
+

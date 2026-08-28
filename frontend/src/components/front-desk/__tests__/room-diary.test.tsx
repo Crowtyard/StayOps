@@ -11,7 +11,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import RoomDiary from "@/components/front-desk/room-diary";
 import { addDays, businessDate } from "@/lib/booking";
-import type { ReservationOut, RoomOut } from "@/lib/api/types";
+import type { ReservationOut, RoomOut, StayOut } from "@/lib/api/types";
 
 vi.mock("next/link", () => ({
   default: ({
@@ -70,6 +70,21 @@ function makeReservation(
   };
 }
 
+function makeStay(overrides: Partial<StayOut> = {}): StayOut {
+  return {
+    id: 11,
+    stay_no: "STY-DIARY-0001",
+    reservation_id: 1,
+    room_id: 101,
+    room_number: "101",
+    status: "ACTIVE",
+    actual_check_in_at: `${TODAY}T14:00:00+08:00`,
+    planned_check_out_date: addDays(TODAY, 2),
+    guest_name: "王先生",
+    ...overrides,
+  };
+}
+
 /** 28 间种子房（3 层）。 */
 function seedRooms(): RoomOut[] {
   const rooms: RoomOut[] = [];
@@ -82,6 +97,7 @@ function seedRooms(): RoomOut[] {
 interface RenderOptions {
   rooms?: RoomOut[];
   reservations?: ReservationOut[];
+  stays?: StayOut[];
   activeTaskRoomIds?: number[];
   days?: number;
   canReadGuest?: boolean;
@@ -99,6 +115,7 @@ function renderDiary(opts: RenderOptions = {}) {
     <RoomDiary
       rooms={rooms}
       reservations={opts.reservations ?? []}
+      stays={opts.stays ?? []}
       activeTaskRoomIds={new Set(opts.activeTaskRoomIds ?? [])}
       winStart={TODAY}
       days={opts.days ?? 7}
@@ -258,13 +275,34 @@ describe("Reservation Timeline 渲染", () => {
     expect(document.querySelectorAll("[data-reservation-bar]")).toHaveLength(0);
   });
 
-  it("CHECKED_IN 渲染为在住条", () => {
+  it("Sprint 6 §24：CHECKED_IN 预订不再画成当前实际占用", () => {
     const checkedIn = makeReservation(TODAY, addDays(TODAY, 2), {
       id: 6,
       status: "CHECKED_IN",
     });
     renderDiary({ reservations: [checkedIn] });
-    expect(document.querySelectorAll("[data-reservation-bar]")).toHaveLength(1);
+    expect(document.querySelectorAll("[data-reservation-bar]")).toHaveLength(0);
+  });
+
+  it("Sprint 6 §24：ACTIVE Stay 按 stay.room_id 渲染为当前实际占用条", () => {
+    const stay = makeStay();
+    renderDiary({ stays: [stay] });
+    const bar = document.querySelector("[data-stay-bar]") as HTMLElement;
+    expect(bar).not.toBeNull();
+    expect(bar.style.left).toBe("0px");
+    expect(bar.style.width).toBe("128px");
+    expect(bar).toHaveTextContent("王先生");
+    expect(bar.getAttribute("href")).toBe("/stays/11");
+  });
+
+  it("Sprint 6 §24：换房后 Stay 画在新房，旧房不画占用条", () => {
+    const moved = makeStay({ room_id: 102, room_number: "102" });
+    renderDiary({ stays: [moved] });
+    expect(document.querySelector('[data-room-track="101"] [data-stay-bar]')).toBeNull();
+    const bar = document.querySelector(
+      '[data-room-track="102"] [data-stay-bar]',
+    ) as HTMLElement;
+    expect(bar).not.toBeNull();
   });
 
   it("预订条点击 → onOpenReservation；空白格点击 → 快捷菜单", () => {

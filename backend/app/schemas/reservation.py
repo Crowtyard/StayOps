@@ -141,9 +141,16 @@ class ReservationOut(BaseModel):
 
 
 class ReservationSummary(BaseModel):
-    """嵌套于 StayOut 的预订摘要（仅持有 reservation:read 时出现）。"""
+    """嵌套于 StayOut 的预订摘要（仅持有 reservation:read 时出现）。
+
+    room_id / room_number = Reservation 原分配房（Sprint 6：Check-in 后
+    Reservation.room_id 冻结；换房后与实际在住房不同，供前端展示
+    「原分配房 vs 当前在住房」）。
+    """
 
     reservation_no: str
+    room_id: int | None = None
+    room_number: str | None = None
     check_in_date: date
     check_out_date: date
     status: ReservationStatus

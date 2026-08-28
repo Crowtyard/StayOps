@@ -263,6 +263,7 @@ export default function FrontDeskView() {
           <RoomDiary
             rooms={filteredRooms}
             reservations={timelineReservations}
+            stays={stays}
             activeTaskRoomIds={canReadHousekeeping ? activeTaskRoomIds : new Set()}
             winStart={today}
             days={days}
@@ -296,6 +297,9 @@ export default function FrontDeskView() {
           onOpenReservation={openReservation}
           onOpenRoom={openRoom}
           onSelectSummary={openSummary}
+          onOpenStayMove={(stayId) =>
+            setSelection({ kind: "stay-move", stayId })
+          }
         />
       )}
 

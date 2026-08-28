@@ -16,7 +16,7 @@ def test_smoke_admin_full_flow(client):
     me = client.get("/api/v1/auth/me", headers=headers)
     assert me.status_code == 200
     assert me.json()["username"] == "admin"
-    assert len(me.json()["permissions"]) == 36  # 17 基线 + 9 Booking + 5 Housekeeping + 5 Maintenance
+    assert len(me.json()["permissions"]) == 37  # 17 基线 + 10 Booking + 5 Housekeeping + 5 Maintenance
 
     # 3) 房间列表（种子 28 间）
     rooms = client.get("/api/v1/rooms", params={"page_size": 100}, headers=headers)

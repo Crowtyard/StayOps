@@ -25,6 +25,7 @@ from app.models import (
     Room,
     RoomType,
     Stay,
+    StayRoomAssignment,
 )
 from app.schemas.reservation import ReservationCreate
 from app.services import booking
@@ -45,7 +46,13 @@ def _create_room_and_guest(db, room_number: str) -> tuple[int, int]:
 
 
 def _delete_room_and_guest(db, room_id: int, guest_id: int) -> None:
-    # Sprint 3：Check-out 会为房间生成保洁任务（FK RESTRICT），先清理任务
+    # Sprint 6：先删 stay_room_assignments（FK stays RESTRICT）与保洁任务，
+    # 再删 Stay / Reservation / Guest / Room
+    db.execute(
+        delete(StayRoomAssignment).where(
+            StayRoomAssignment.room_id == room_id
+        )
+    )
     db.execute(delete(HousekeepingTask).where(HousekeepingTask.room_id == room_id))
     db.execute(delete(Stay).where(Stay.room_id == room_id))
     db.execute(delete(Reservation).where(Reservation.room_id == room_id))
@@ -77,11 +84,14 @@ def _capture(fn, results: list, lock: threading.Lock) -> None:
             results.append((f"ERROR:{type(exc).__name__}", str(exc)))
 
 
-def test_concurrent_double_booking(_database, monkeypatch):
+def test_concurrent_double_booking(_database):
     """两个并发请求抢同一 Room 同一日期：恰好 1 SUCCESS + 1 CONFLICT（409）。
 
-    通过 barrier 保证两条线程都在 INSERT 前通过应用层预检，
-    使数据库排他约束（23P01）成为最终仲裁。
+    Sprint 6 §7 并发模型：创建预订在事务内先 SELECT Room ... FOR UPDATE，
+    后到事务在锁上等待，取得锁后事务内重新校验 Availability（看到先到者
+    已提交的 CONFIRMED 预订）→ 409「该房间在所选日期区间已被预订」。
+    PostgreSQL 排他约束（23P01，CONFIRMED-only）仍作为数据库最终保护
+    （应用层重校验失效时的纵深防御）。
     """
     setup = SessionLocal()
     try:
@@ -92,13 +102,6 @@ def test_concurrent_double_booking(_database, monkeypatch):
         setup.close()
 
     check_in_date, check_out_date = today(), d(2)
-    gate = threading.Barrier(2)
-
-    def fake_check(db, room_obj, c_in, c_out, exclude_reservation_id=None):
-        gate.wait(timeout=15)
-        return (True, None)
-
-    monkeypatch.setattr(booking, "check_room_availability", fake_check)
 
     results: list = []
     lock = threading.Lock()
@@ -357,8 +360,13 @@ def test_concurrent_business_numbers(_database):
             assert len(set(stay_numbers)) == len(stay_numbers), "stay_no 不得重复"
             assert all(STAY_NO_RE.match(n) for n in stay_numbers)
         finally:
-            # 清理顺序：先删 Stay/Reservation（全部房间），再删共享 Guest，最后删房间
+            # 清理顺序：先删 StayRoomAssignment / Stay/Reservation（全部房间），再删共享 Guest，最后删房间
             room_ids = [spec[1] for spec in created]
+            cleanup.execute(
+                delete(StayRoomAssignment).where(
+                    StayRoomAssignment.room_id.in_(room_ids)
+                )
+            )
             cleanup.execute(delete(Stay).where(Stay.room_id.in_(room_ids)))
             cleanup.execute(
                 delete(Reservation).where(Reservation.room_id.in_(room_ids))

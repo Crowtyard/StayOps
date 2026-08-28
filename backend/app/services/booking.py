@@ -38,6 +38,7 @@ from app.models import (
     Room,
     RoomType,
     Stay,
+    StayRoomAssignment,
     StayStatus,
     UnavailabilitySource,
     User,
@@ -53,10 +54,11 @@ from app.services.maintenance import (
 RESERVATION_NO_SEQ = "reservation_no_seq"
 STAY_NO_SEQ = "stay_no_seq"
 
-# 不再阻塞新预订的状态（排他约束部分索引同款白名单，REV-01）
+# Sprint 6 §6：排他约束与可售性只认 CONFIRMED 预订。
+# CHECKED_IN 后实际住宿房间由 Stay.room_id + StayRoomAssignment 表达；
+# Reservation.room_id 在 Check-in 后冻结为原分配房，不得继续锁原房。
 _BLOCKING_RESERVATION_STATUSES = (
     ReservationStatus.CONFIRMED,
-    ReservationStatus.CHECKED_IN,
 )
 
 _DOUBLE_BOOKING_DETAIL = "该房间在所选日期区间已被预订"
@@ -141,7 +143,7 @@ def overlapping_reservation_room_ids(
     exclude_reservation_id: int | None = None,
 ) -> set[int]:
     """与查询区间重叠、且仍占用日期的 Reservation 房间集合
-    （CONFIRMED / CHECKED_IN；CANCELLED / NO_SHOW / COMPLETED 不再阻塞）。"""
+    （Sprint 6 §6：仅 CONFIRMED；CHECKED_IN 预订的实际占用由 Stay 表达）。"""
     stmt = select(Reservation.room_id).where(
         Reservation.status.in_(_BLOCKING_RESERVATION_STATUSES),
         Reservation.check_in_date < check_out,
@@ -208,6 +210,61 @@ def check_room_availability(
     ):
         return False, "该房间当前不可用"
     return True, None
+
+
+# ---------------------------------------------------------------------------
+# Room Row Lock（Sprint 6 §7：所有会创建/改变某房间未来占用的写操作
+# 必须在事务内锁定对应 Room 行后再重新校验当前事实）
+# ---------------------------------------------------------------------------
+
+
+def lock_room_for_update(db: Session, room_id: int) -> Room:
+    """SELECT Room ... FOR UPDATE（Sprint 6 §7 统一房间行锁）。"""
+    room = db.scalar(
+        select(Room).where(Room.id == room_id).with_for_update()
+    )
+    if room is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="房间不存在"
+        )
+    return room
+
+
+def lock_rooms_for_update(db: Session, room_ids: list[int]) -> list[Room]:
+    """按 Room primary key 升序锁定多个房间（Sprint 6 §8 全局锁顺序，
+    防止 203→205 与 205→203 并发死锁；绝不允许 source-first 顺序）。"""
+    rooms: list[Room] = []
+    for room_id in sorted(room_ids):
+        rooms.append(lock_room_for_update(db, room_id))
+    return rooms
+
+
+def room_release_state(
+    db: Session, room: Room
+) -> tuple[OccupancyStatus, UnavailabilitySource | None, bool]:
+    """Sprint 5 §18 Maintenance-aware 退房释放决策（Sprint 6 §13 复用同一套逻辑，
+    退房与换房共用，不复制第二套）：
+    - 已 out_of_service（MANUAL 或 MAINTENANCE）→ 保持停用且来源不变
+      （退房/换房不得解除人工停用；MAINTENANCE 来源由维修域负责解除）
+    - 存在 active blocking MWO → out_of_service + source=MAINTENANCE
+    - 否则 → available + source NULL
+    返回 (occupancy_target, unavailability_source_target, blocking)。
+    Cleaning 由调用方无条件置 dirty（「离房即脏房」不变式）。
+    """
+    blocking = has_active_blocking_orders(db, room.id)
+    if room.occupancy_status == OccupancyStatus.out_of_service:
+        return (
+            OccupancyStatus.out_of_service,
+            room.unavailability_source,
+            blocking,
+        )
+    if blocking:
+        return (
+            OccupancyStatus.out_of_service,
+            UnavailabilitySource.MAINTENANCE,
+            blocking,
+        )
+    return (OccupancyStatus.available, None, blocking)
 
 
 def query_availability(
@@ -338,11 +395,11 @@ def create_reservation(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="客人不存在"
         )
-    room = db.get(Room, payload.room_id)
-    if room is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="房间不存在"
-        )
+    # Sprint 6 §7：创建预订 = 改变该房间未来占用 -> 事务内先锁 Room 行
+    # 再重新校验（Active Stay vs 新 CONFIRMED 预订的竞争由 Room row lock
+    # + active Stay check + remaining stay interval check 仲裁；
+    # CONFIRMED vs CONFIRMED 仍由 PostgreSQL 排他约束最终保护）
+    room = lock_room_for_update(db, payload.room_id)
     room_type = db.get(RoomType, payload.room_type_id)
     if room_type is None:
         raise HTTPException(
@@ -423,6 +480,15 @@ def update_reservation(
     if not payload.has_any_field():
         raise _unprocessable("至少提供一个可更新字段")
     if reservation.status != ReservationStatus.CONFIRMED:
+        # Sprint 6 §17：Check-in 后 Reservation.room_id 冻结为原分配房，
+        # 不得经 generic PATCH 修改（换房必须走专用 Room Move Action API）
+        if (
+            reservation.status == ReservationStatus.CHECKED_IN
+            and payload.room_id is not None
+        ):
+            raise _conflict(
+                "已入住的预订不能修改房间（如需换房请使用换房功能）"
+            )
         raise _conflict("仅 CONFIRMED 状态的预订可修改")
 
     new_check_in = (
@@ -460,9 +526,6 @@ def update_reservation(
         if payload.room_type_id is not None
         else reservation.room_type_id
     )
-    room = db.get(Room, new_room_id)
-    ensure_room_room_type_consistency(room, new_room_type_id)
-
     # 修改 room / room_type / dates -> 重新执行 Availability + Double Booking（REV-FINAL-05）
     availability_related = (
         payload.room_id is not None
@@ -471,11 +534,18 @@ def update_reservation(
         or payload.check_out_date is not None
     )
     if availability_related:
+        # Sprint 6 §7：改期/换房改变房间未来占用 -> 锁定新房间行后
+        # 事务内重新校验（Reservation -> Room 锁顺序，与 Check-in 一致）
+        room = lock_room_for_update(db, new_room_id)
+        ensure_room_room_type_consistency(room, new_room_type_id)
         available, reason = check_room_availability(
             db, room, new_check_in, new_check_out, reservation.id
         )
         if not available:
             raise _conflict(reason)
+    else:
+        room = db.get(Room, new_room_id)
+        ensure_room_room_type_consistency(room, new_room_type_id)
 
     changes: dict = {}
     if payload.guest_id is not None and payload.guest_id != reservation.guest_id:
@@ -725,6 +795,19 @@ def check_in_reservation(
             updated_by=user.id if user is not None else None,
         )
         db.add(stay)
+        # Sprint 6 §5：Check-in 原子建立 assignment #1
+        # （room = check-in room，started_at = actual check-in time，
+        #   ended_at = NULL；保证 Stay.room_id == open assignment.room_id）
+        check_in_at = stay.actual_check_in_at
+        stay.assignments.append(
+            StayRoomAssignment(
+                room_id=room.id,
+                started_at=check_in_at,
+                ended_at=None,
+                reason=None,
+                created_by=user.id if user is not None else None,
+            )
+        )
         reservation.status = ReservationStatus.CHECKED_IN
         reservation.updated_by = user.id if user is not None else None
         room.occupancy_status = OccupancyStatus.occupied
@@ -738,6 +821,7 @@ def check_in_reservation(
                 "stay_no": stay.stay_no,
                 "stay_id": stay.id,
                 "room_number": room.room_number,
+                "assignment_id": stay.assignments[0].id,
             }
         )
         write_audit_log(
@@ -819,28 +903,32 @@ def check_out_stay(
         reservation.status = ReservationStatus.COMPLETED
         reservation.updated_by = user.id if user is not None else None
 
+        # Sprint 6 §2：退房关闭当前 active assignment
+        # （ended_at = actual check-out time，历史完整）
+        open_assignment = db.scalar(
+            select(StayRoomAssignment).where(
+                StayRoomAssignment.stay_id == stay.id,
+                StayRoomAssignment.ended_at.is_(None),
+            )
+        )
+        if open_assignment is None:
+            raise _conflict("入住记录缺少房间分配记录，无法退房")
+        open_assignment.ended_at = stay.actual_check_out_at
+
         # Sprint 5 §18：Maintenance-aware 退房（Cleaning 仍无条件置 dirty）
+        # Sprint 6 §13：释放决策抽取为 room_release_state，退房/换房共用同一套
         # - 存在 active blocking MWO -> out_of_service + source=MAINTENANCE
         # - 无 blocking MWO -> available
         # - 已 out_of_service（MANUAL 或 MAINTENANCE）-> 保持停用且来源不变
         #   （退房不得解除人工停用；MAINTENANCE 来源也由维修域负责解除）
-        blocking = has_active_blocking_orders(db, room.id)
-        if room.occupancy_status == OccupancyStatus.out_of_service:
-            room_target = OccupancyStatus.out_of_service
-        elif blocking:
-            room_target = OccupancyStatus.out_of_service
-        else:
-            room_target = OccupancyStatus.available
+        room_target, room_source, blocking = room_release_state(db, room)
 
         room_occupancy_previous = room.occupancy_status.value
         if room.occupancy_status != room_target:
             if not can_change_occupancy(room.occupancy_status, room_target):
                 raise _conflict("房间占用状态异常，无法退房")
             room.occupancy_status = room_target
-            if room_target == OccupancyStatus.out_of_service:
-                room.unavailability_source = UnavailabilitySource.MAINTENANCE
-            else:
-                room.unavailability_source = None
+        room.unavailability_source = room_source
         # 退房即脏房：无条件置 dirty（决策见 DECISIONS，不走手动状态接口）
         room.cleaning_status = CleaningStatus.dirty
 
@@ -946,11 +1034,17 @@ def build_reservation_out(
 
 
 def build_stay_out(
-    stay: Stay, *, show_guest: bool, show_reservation: bool
+    stay: Stay,
+    *,
+    show_guest: bool,
+    show_reservation: bool,
+    include_assignments: bool = False,
 ) -> dict:
     """Stay 响应（REV-FINAL-04）：
     - guest_id 始终保留（关系关联）；guest_name 仅 guest:read 时出现
     - 嵌套 reservation 摘要仅 reservation:read 时出现
+      （Sprint 6：摘要含 room_id / room_number = 原分配房）
+    - assignments 仅在详情接口请求时加载（Sprint 6 §27 房间记录历史）
     """
     out = {
         "id": stay.id,
@@ -979,6 +1073,14 @@ def build_stay_out(
         if show_reservation:
             out["reservation"] = {
                 "reservation_no": reservation.reservation_no,
+                # Sprint 6 §28：原分配房（Check-in 后冻结；换房后与
+                # 实际在住房 stay.room_id 可能不同）
+                "room_id": reservation.room_id,
+                "room_number": (
+                    reservation.room.room_number
+                    if reservation.room is not None
+                    else None
+                ),
                 "check_in_date": reservation.check_in_date,
                 "check_out_date": reservation.check_out_date,
                 "status": reservation.status,
@@ -986,4 +1088,24 @@ def build_stay_out(
                 "agreed_total_amount": reservation.agreed_total_amount,
                 "currency": reservation.currency,
             }
+    if include_assignments:
+        out["assignments"] = [
+            {
+                "id": assignment.id,
+                "stay_id": assignment.stay_id,
+                "room_id": assignment.room_id,
+                "room_number": (
+                    assignment.room.room_number
+                    if assignment.room is not None
+                    else None
+                ),
+                "started_at": assignment.started_at,
+                "ended_at": assignment.ended_at,
+                "reason": assignment.reason,
+                "notes": assignment.notes,
+                "created_by": assignment.created_by,
+                "created_at": assignment.created_at,
+            }
+            for assignment in stay.assignments
+        ]
     return out

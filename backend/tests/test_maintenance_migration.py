@@ -277,7 +277,7 @@ def test_maintenance_seed_role_mapping(_database):
     seed()
     second = snapshot()
     assert first == second, "连续执行两次 seed 必须收敛到一致状态"
-    assert first["permissions"] == 36
+    assert first["permissions"] == 37
 
     mapping = first["mapping"]
     assert MWO_CODES <= mapping["SUPER_ADMIN"]

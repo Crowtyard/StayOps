@@ -158,3 +158,51 @@ Kun                     = PROJECT MANAGER + QA
 Sprint 5 范围：MaintenanceWorkOrder 正式领域（第三独立业务领域：维修状态 ≠ 占用 ≠ 清洁）；Report → Assign → Start → Resolve → Verify/Rework → Complete → Room Ready 闭环；`blocks_room` 与 `severity` 独立（RESOLVED 仍阻断）；Room 新增 `unavailability_source`（MANUAL/MAINTENANCE，历史 blocked/OOS 安全回填 MANUAL + CHECK 约束）；occupied/reserved/blocked/MANUAL-OOS 房不被维修覆盖；Availability / Check-in 排除 Active Blocking MWO、Checkout Maintenance-aware（blocker → OOS+MAINTENANCE+dirty，保洁任务照常）；多张 blocking 工单与 Last Blocking 规则；Maintenance 只能解除自己造成的 OOS；固定锁顺序 Room → MWO + 并发/回滚正式测试；RBAC（maintenance_order:read/write/work/verify/cancel）/ PII（不关联 Guest）/ 审计（8 个 action + 房态证据）；桌面工作台（/maintenance、/maintenance/[id]、/maintenance/new）+ Mobile 现场报修；Housekeeping「发现设施问题 → 报修」与 Front Desk Quick View 最小集成；PRE_OPENING 复用维修域（开业前 28 房整改清单）；不做附件/库存/预防性维护等。
 
 Sprint 5 进展：DSH 单会话完成全部实现（Implementation Complete，无 commit）：pytest 285（220 基线 + 65 新增）/ Vitest 285（240 基线 + 45 新增）/ Playwright 59（46 基线 + maintenance 2 spec 13 条）全绿；lint / typecheck / build PASS；Clean Bootstrap（empty stayops_test → alembic upgrade head → seed → :8001 / :3001 → full Playwright）PASS；Sprint 1–4 回归全部保留。Kun Fast QA 首轮 FAILED（Blocking Product Defect：occupied + blocking MWO + 未来预订 → Front Desk 无主动维修风险提示）；DSH 已修复（Attention 新增 Rule M：预订存在维修风险，与 Room 占用无关，RESOLVED 仍报警，一条预订一条卡片，M 优先抑制重复 Rule C，桌面 + 移动共享）；Kun Fast RE-QA 独立重跑全绿（pytest 285 / Vitest 300（285 基线 + 15 修复增量）/ Playwright 60（59 基线 + 修复场景 1 条），lint / typecheck / build PASS），缺陷修复复审通过；`v1.0.0-alpha.4` 冻结不动，`v1.0.0-alpha.5` 已创建为 Sprint 5 Release Commit。
+
+## Sprint 6（CODING COMPLETE · 等待 Kun Fast QA）
+
+```text
+Sprint 6                = Room Move & In-Stay Recovery（住中换房与在住异常恢复）
+正式名称                = Room Move & In-Stay Recovery
+Release                 = v1.0.0-alpha.6（计划，待 Kun QA PASS 后发布）
+开发模式                = FAST TRACK + REUSE FIRST + ONE SPRINT / ONE DSH SESSION（不拆 T1/T2/T3）
+Sprint 6 Coding         = IMPLEMENTATION COMPLETE（单会话完成，无 commit）
+Sprint 6 Fast QA        = 待 Kun 独立 QA
+DSH                     = STOPPED（完成后停止，不进入 Sprint 7）
+Kun                     = PROJECT MANAGER + QA
+```
+
+Sprint 6 范围（任务书 §1–§41）：
+
+- **领域模型三分（Domain Decision LOCKED）**：Reservation = 商业预订 / 未来房间分配
+  （Check-in 后 `room_id` 冻结为原分配房）；Stay = 实际住宿（`room_id` = 当前实际房间
+  快速指针）；StayRoomAssignment = 实际住宿期间的房间历史（`ended_at NULL` = active）。
+  换房不得创建第二个 Stay。
+- **迁移 `c8e2b7a4d1f3`**：stay_room_assignments（CHECK 区间约束 + 部分唯一索引
+  `uq_stay_room_assignments_active_stay` + 排他约束 `ex_stay_room_assignments_no_overlap`）、
+  room_move_reason 枚举、hk_task_source + ROOM_MOVE、Reservation 排他约束调整为
+  CONFIRMED-only、既有 Stay 历史回填（started_at = actual check-in、ended_at =
+  actual check-out / ACTIVE→NULL，确定性）。
+- **Check-in 进化**：同事务建立 assignment #1；Checkout 关闭 open assignment。
+- **并发模型（§7/§8）**：Room Row Lock + 事务内重校验（Create/Update Reservation、
+  Check-in、Room Move）；全局锁顺序 `(Reservation | Stay) → Rooms(pk 升序) → MWO`；
+  40P01/40001 → 409，其它 OperationalError 原样传播。
+- **Room Move API**：`GET /stays/{id}/room-move-options` + `POST /stays/{id}/room-move`
+  （stay:room_move）；7 固定换房原因；目标房资格后端权威（available+clean+无阻断维修+
+  无其它 ACTIVE Stay+剩余区间 [move_date, planned_check_out) 无 CONFIRMED 预订）；
+  旧房释放复用 S5 maintenance-aware 语义 + ROOM_MOVE 保洁任务（已有 active task → 409
+  回滚）；目标房 occupied + cleaning 不变；维修独立性（换房不触碰原房 MWO）。
+- **前端**：Front Desk 当前在住抽屉 + 移动 Today Board [换房] 入口（stay:room_move
+  显隐，后端 403 兜底）；RoomMoveDialog（后端权威候选 + 显式确认换房，Desktop/mobile）；
+  Room Diary 语义升级（CONFIRMED 预订条 + ACTIVE Stay 在住条 = 当前实际占用，
+  CHECKED_IN 不再画成当前房间）；Stay 详情房间记录 + 原分配房 vs 当前在住房。
+- **测试口径**：pytest 317（285 基线 + 32 新增，含迁移往返/回填 + 4×10 轮并发 stress）；
+  Vitest 324（300 基线 + 24 新增，含既有语义更新）；Playwright 60 + room-move 4 条
+  （Golden Path / blocking MWO / move-vs-move / move-vs-reservation HTTP 并发）；
+  lint / typecheck / build PASS。
+
+Sprint 6 进展：DSH 单会话完成全部实现（Implementation Complete，无 commit）：
+pytest 317 / Vitest 324 / Playwright room-move spec 4 条全绿；lint / typecheck / build PASS；
+开发库 stayops `alembic upgrade head`（c8e2b7a4d1f3）+ seed 幂等收敛（37 权限码）；
+Sprint 1–5 回归全部保留（pytest 285 基线 / Vitest 300 基线 / Playwright 60 基线）。
+`v1.0.0-alpha.5` 冻结不动；待 Kun Fast QA PASS 后创建 `v1.0.0-alpha.6` Release Commit。

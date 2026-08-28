@@ -129,3 +129,18 @@ Sprint 5 新增（13 条；辅助集中在 `maintenance-helpers.ts`；账号 MAN
   S5 缺陷修复（房间 203：ACTIVE Stay(occupied) + 非重叠未来 CONFIRMED + blocking MWO →
   后端保持 occupied / Availability 排除 → /front-desk 不打开任何 Drawer 即主动显示
   「预订存在维修风险」+ 查看维修直达链接）
+
+Sprint 6 新增（4 条；辅助集中在 `room-move-helpers.ts`；复用种子房 301-308 归一化策略，
+不新建房间）——`room-move.spec.ts`：
+
+1. Golden Path（房间 301→302）：API 构造 Check-in 301 → /front-desk 当前在住抽屉
+   [换房] → 换房对话框（后端 room-move-options 权威候选，当前房不可选）→
+   显式确认换房 → 302 在住 / 301 可售+待清扫 → 301 的 ROOM_MOVE PENDING 保洁任务 →
+   Diary 在住条画在 302（301 无在住条）→ Stay 详情房间记录 + 原分配房 vs 当前在住房
+2. blocking Maintenance（房间 303→304）：occupied 303 上的阻断工单 → 换房 →
+   303 OOS+MAINTENANCE+dirty → 工单仍 OPEN 且仍属 303（维修独立性）→ 304 在住 →
+   Diary 在住条画在 304
+3. HTTP 并发 Move A→T vs Move B→T（真实 PostgreSQL）：1×200 + 1×409，
+   目标房最终只有一个 ACTIVE Stay
+4. HTTP 并发 Move→T vs Create Reservation→T：exactly one logical allocation wins
+   （200/201 + 409），无 double allocation

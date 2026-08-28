@@ -116,8 +116,10 @@ export function reservationNights(reservation: ReservationOut): number {
 /* 时间线数据：仅展示当前及未来运营相关状态（Sprint 4 §8）               */
 /* ------------------------------------------------------------------ */
 
-/** 时间线展示状态：CANCELLED / NO_SHOW 不作为占用条；COMPLETED 不作未来主条。 */
-export const TIMELINE_STATUSES = ["CONFIRMED", "CHECKED_IN"] as const;
+/** 时间线展示状态：仅 CONFIRMED 作为未来预订占用条（Sprint 6 §24）：
+ *  CHECKED_IN 预订不得继续画成当前实际占用 —— 当前实际占用由
+ *  ACTIVE Stay（stay.room_id / current Assignment）表达。 */
+export const TIMELINE_STATUSES = ["CONFIRMED"] as const;
 
 export function isTimelineReservation(
   r: Pick<ReservationOut, "status">,
@@ -130,6 +132,50 @@ export const RESERVATION_BAR_CLASS: Record<string, string> = {
   CONFIRMED: "bg-blue-500 text-white",
   CHECKED_IN: "bg-violet-600 text-white",
 };
+
+/** Sprint 6：ACTIVE Stay 占用条（当前实际住宿）基础色。 */
+export const STAY_BAR_CLASS = "bg-emerald-600 text-white";
+
+/**
+ * Stay 实际入住日（Asia/Shanghai 业务日期）：
+ * actual_check_in_at 为 timestamptz ISO，经 IANA 时区转换，
+ * 与宿主机时区无关（与 lib/booking.ts::businessDate 同策略）。
+ */
+export function stayCheckInDate(stay: StayOut): string | null {
+  const value = stay.actual_check_in_at;
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const get = (type: string): string =>
+    parts.find((p) => p.type === type)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+/** Stay 占用条主文案（guest:read 时优先 Guest name，否则 stay_no）。 */
+export function stayBarText(stay: StayOut, canReadGuest: boolean): string {
+  if (canReadGuest && stay.guest_name) return stay.guest_name;
+  return stay.stay_no;
+}
+
+/** Stay 占用条 tooltip（只含当前权限可见字段，无 Guest PII 泄漏）。 */
+export function stayBarTitle(stay: StayOut, canReadGuest: boolean): string {
+  const parts: string[] = [
+    `在住 ${stay.stay_no}`,
+    `房间 ${stay.room_number ?? `#${stay.room_id}`}`,
+    `入住 ${stayCheckInDate(stay) ?? "—"}`,
+    `计划离店 ${stay.planned_check_out_date}`,
+  ];
+  if (canReadGuest && stay.guest_name) {
+    parts.push(`客人 ${stay.guest_name}`);
+  }
+  return parts.join(" · ");
+}
 
 /**
  * 预订条主文案：guest:read 时优先 Guest name，否则 reservation_no。

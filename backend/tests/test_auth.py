@@ -73,7 +73,7 @@ def test_me_returns_profile_and_permissions(client, admin_token):
         "audit:read",
     ]:
         assert code in codes, f"缺少权限 {code}"
-    assert len(codes) == 36  # SUPER_ADMIN = 全部权限（17 基线 + 9 Booking + 5 Housekeeping + 5 Maintenance）
+    assert len(codes) == 37  # SUPER_ADMIN = 全部权限（17 基线 + 10 Booking + 5 Housekeeping + 5 Maintenance）
 
 
 def test_me_without_token(client):

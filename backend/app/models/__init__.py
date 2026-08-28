@@ -25,6 +25,7 @@ from app.models.room import (
     UnavailabilitySource,
 )
 from app.models.stay import Stay, StayStatus
+from app.models.stay_assignment import RoomMoveReason, StayRoomAssignment
 from app.models.user import Permission, Role, RolePermission, User, UserRole
 
 __all__ = [
@@ -50,8 +51,10 @@ __all__ = [
     "OccupancyStatus",
     "UnavailabilitySource",
     "Room",
+    "RoomMoveReason",
     "RoomType",
     "Stay",
+    "StayRoomAssignment",
     "StayStatus",
     "User",
     "UserRole",

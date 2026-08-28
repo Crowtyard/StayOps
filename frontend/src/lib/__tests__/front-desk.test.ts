@@ -206,9 +206,10 @@ describe("[check_in, check_out) 时间线几何", () => {
     expect(
       isTimelineReservation(makeReservation(TODAY, { status: "COMPLETED" })),
     ).toBe(false);
+    // Sprint 6 §24：CHECKED_IN 不再画成当前实际占用（由 ACTIVE Stay 表达）
     expect(
       isTimelineReservation(makeReservation(TODAY, { status: "CHECKED_IN" })),
-    ).toBe(true);
+    ).toBe(false);
   });
 });
 

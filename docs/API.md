@@ -1,6 +1,6 @@
 # StayOps API
 
-> Sprint 1 第二阶段已实现，Sprint 2 S2-T1 扩展 Booking 域，Sprint 3 扩展 Housekeeping 域，Sprint 4 扩展日期窗口重叠查询，Sprint 5 扩展 Maintenance 域（维修运营与客房可用性闭环）。统一前缀 `/api/v1`，JSON 请求/响应，JWT（Bearer）认证。
+> Sprint 1 第二阶段已实现，Sprint 2 S2-T1 扩展 Booking 域，Sprint 3 扩展 Housekeeping 域，Sprint 4 扩展日期窗口重叠查询，Sprint 5 扩展 Maintenance 域（维修运营与客房可用性闭环），Sprint 6 扩展 Room Move 域（住中换房与在住异常恢复）。统一前缀 `/api/v1`，JSON 请求/响应，JWT（Bearer）认证。
 
 ## 约定
 
@@ -30,7 +30,7 @@
 | PUT | /roles/{id} | 更新角色 | role:write |
 | DELETE | /roles/{id} | 删除角色（级联清理关联） | role:delete |
 | POST | /roles/{id}/permissions | 设置角色权限（整体替换，空=清空） | role:write |
-| GET | /permissions | 权限列表（分页，36 个 = Sprint 1 的 17 + Booking 的 9 + Housekeeping 的 5 + Maintenance 的 5） | role:read |
+| GET | /permissions | 权限列表（分页，37 个 = Sprint 1 的 17 + Booking 的 10 + Housekeeping 的 5 + Maintenance 的 5） | role:read |
 | GET | /room-types | 房型列表（分页，含 room_count） | room_type:read |
 | POST | /room-types | 创建房型 | room_type:write |
 | GET | /room-types/{id} | 房型详情 | room_type:read |
@@ -53,10 +53,12 @@
 | PATCH | /reservations/{id} | 修改预订（仅 CONFIRMED） | reservation:write |
 | POST | /reservations/{id}/cancel | 取消预订（CONFIRMED → CANCELLED） | reservation:cancel |
 | POST | /reservations/{id}/no-show | 标记未到店（CONFIRMED → NO_SHOW，需 business_date ≥ check_in_date） | reservation:no_show |
-| POST | /reservations/{id}/check-in | 办理入住（单事务：Reservation CHECKED_IN + Stay ACTIVE + Room occupied + 审计） | stay:check_in |
+| POST | /reservations/{id}/check-in | 办理入住（单事务：Reservation CHECKED_IN + Stay ACTIVE + Room occupied + **StayRoomAssignment #1** + 审计） | stay:check_in |
 | GET | /stays | 入住列表（分页，`?status=` / `?room_id=` / `?planned_check_out_date=`） | stay:read |
-| GET | /stays/{id} | 入住详情 | stay:read |
-| POST | /stays/{id}/check-out | 办理退房（单事务：Stay CHECKED_OUT + Reservation COMPLETED + Room（Sprint 5：存在 Active Blocking MWO → OOS+MAINTENANCE，否则 available）+dirty + **Housekeeping Task PENDING 自动创建** + 审计） | stay:check_out |
+| GET | /stays/{id} | 入住详情（含 Sprint 6 房间记录 `assignments`；嵌套 reservation 摘要含原分配房 `room_id`/`room_number`） | stay:read |
+| POST | /stays/{id}/check-out | 办理退房（单事务：Stay CHECKED_OUT + Reservation COMPLETED + Room（Sprint 5：存在 Active Blocking MWO → OOS+MAINTENANCE，否则 available）+dirty + **Housekeeping Task PENDING 自动创建** + 关闭 open StayRoomAssignment + 审计） | stay:check_out |
+| GET | /stays/{id}/room-move-options | 换房目标房候选（Sprint 6 §9/§11：后端权威资格评估 + 不可选原因；只读建议，最终资格在换房事务内以房间行锁重校验） | stay:room_move |
+| POST | /stays/{id}/room-move | 原子换房（Sprint 6 §12：body `{target_room_id, reason, notes?}`；关闭旧 assignment → 新建目标 assignment → Stay.room_id=Target → 旧房 release + ROOM_MOVE 保洁任务 → 目标房 occupied；不允许客户端直接 PATCH Stay.room_id） | stay:room_move |
 | GET | /housekeeping/tasks | 保洁任务列表（分页，`?status=` / `?room_id=` / `?assigned_to_user_id=` / `?priority=` / `?source=` / `?search=`（task_no OR room_no，非 PII）） | housekeeping_task:read |
 | POST | /housekeeping/tasks | 手动创建任务（仅 dirty 且非 occupied 房间；已有进行中任务 409） | housekeeping_task:write |
 | GET | /housekeeping/tasks/{id} | 任务详情（无 Guest / Reservation 数据） | housekeeping_task:read |
@@ -348,6 +350,109 @@ assign 非 OPEN·ASSIGNED / cancel 终态）、终态 PATCH、房间不存在（
 ```
 
 （示例日期仅为文档说明；自动化测试一律动态日期。响应不含任何 Guest / Reservation 数据。）
+
+## Room Move 域（Sprint 6）
+
+### 领域模型（Domain Decision LOCKED）
+
+```text
+Reservation         = 商业预订 / 未来房间分配（Check-in 后 room_id 冻结为原分配房）
+Stay                = 实际住宿（room_id = 当前实际房间快速指针）
+StayRoomAssignment  = 实际住宿期间的房间历史（ended_at = NULL 表示当前 active assignment）
+```
+
+- Check-in 原子建立 assignment #1（room = check-in room，started_at = actual check-in time）。
+- Room Move 关闭旧 assignment 并开启新 assignment；Check-out 关闭当前 assignment。
+- `Reservation.room_id` 在 Check-in 后**冻结**：CHECKED_IN 预订经 generic PATCH 修改
+  `room_id` → 409「已入住的预订不能修改房间（如需换房请使用换房功能）」。
+- 不变式：`Stay.room_id == open StayRoomAssignment.room_id`。
+
+### 换房原因（§10，固定枚举，不建立自由字符串）
+
+```text
+MAINTENANCE / GUEST_REQUEST / ROOM_QUALITY / OPERATIONAL / UPGRADE / DOWNGRADE / OTHER
+```
+
+### 目标房资格（§11，后端最终权威，事务内以房间行锁重校验）
+
+```text
+occupancy_status = available
+cleaning_status  = clean
+无 active blocking Maintenance Work Order
+无其它 ACTIVE Stay（按 stay.room_id = 当前实际房间）
+remaining stay interval [move_date, planned_check_out_date) 内无 CONFIRMED 预订
+（半开区间：planned_check_out 当日 Check-in 的下一笔预订 allowed）
+```
+
+### 原子换房事务（§12）
+
+```text
+lock ACTIVE Stay → lock Source + Target Rooms（pk 升序）→ 重校验
+→ 关闭 Source assignment → 创建 Target assignment → Stay.room_id = Target
+→ Source Room release（复用 S5 maintenance-aware 语义：
+   blocking MWO → OOS+MAINTENANCE；已 OOS 保持来源；否则 available）+ dirty
+→ 创建 Source HousekeepingTask PENDING（source=ROOM_MOVE；
+  已有 active task → 409 整体回滚，不创建双任务）
+→ Target Room = occupied（cleaning 不变，不创建 target 任务）
+→ 审计 stay.room_move → commit（任一步失败整体回滚，不允许半换房）
+```
+
+### 并发模型（§7/§8，全局锁顺序）
+
+```text
+(Rervation | Stay) → Rooms（多房按 Room primary key 升序）→ MaintenanceWorkOrder
+```
+
+所有会创建或改变某 Room 未来占用的写操作（Create/Update Reservation、
+Check-in、Room Move）在事务内 `SELECT Room ... FOR UPDATE` 后重新校验；
+CONFIRMED vs CONFIRMED 由排他约束（CONFIRMED-only）最终保护；
+Active Stay vs 新 CONFIRMED 预订由 Room row lock + active Stay check +
+remaining stay interval check 仲裁（exactly one allocation wins）。
+40P01 / 40001 → 409；其它 OperationalError 原样传播（绝不吞 500）。
+
+### 409 场景清单（Room Move 域）
+
+目标房不可换入（非 available / 未清洁 / 阻断性维修 / 已有在住 /
+剩余区间已有预订）、target == source、非 ACTIVE Stay、缺少当前分配、
+分配状态异常、原房已有进行中保洁任务、并发仲裁（40P01/40001）。
+422：未知字段（strict schema）、reason 非法、notes 超长。
+CHECKED_IN 预订 PATCH room_id → 409（§17）。
+
+### 响应示例
+
+`GET /api/v1/stays/{id}/room-move-options`（不可选房间带 reason，UI 不得自行猜测可用房）：
+
+```json
+{
+  "business_date": "2026-08-28",
+  "stay_id": 21,
+  "stay_no": "STY20260828-0001",
+  "current_room_id": 13,
+  "planned_check_out_date": "2026-08-31",
+  "items": [
+    {
+      "room_id": 13,
+      "room_number": "203",
+      "room_type_id": 3,
+      "room_type_name": "豪华大床房",
+      "floor": 2,
+      "eligible": false,
+      "reason": "当前入住房间"
+    },
+    {
+      "room_id": 15,
+      "room_number": "205",
+      "room_type_id": 4,
+      "room_type_name": "豪华双床房",
+      "floor": 2,
+      "eligible": true,
+      "reason": null
+    }
+  ]
+}
+```
+
+（示例日期仅为文档说明；自动化测试一律动态日期。响应不含 Guest PII。）
 
 ## 示例
 

@@ -13,16 +13,20 @@
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import type { ReservationOut, RoomOut } from "@/lib/api/types";
+import type { ReservationOut, RoomOut, StayOut } from "@/lib/api/types";
 import {
   DAY_CELL_WIDTH,
   RESERVATION_BAR_CLASS,
+  STAY_BAR_CLASS,
   barPlacement,
   isTimelineReservation,
   quickCreateHref,
   reservationBarText,
   reservationBarTitle,
   shortDateLabel,
+  stayBarText,
+  stayBarTitle,
+  stayCheckInDate,
   weekdayLabel,
   windowDates,
   type DiaryWindowKey,
@@ -40,6 +44,8 @@ const TRACK_HEIGHT = 40;
 export interface RoomDiaryProps {
   rooms: RoomOut[];
   reservations: ReservationOut[];
+  /** Sprint 6 §24：ACTIVE Stay = 当前实际占用（按 stay.room_id 渲染）。 */
+  stays: StayOut[];
   /** 有进行中保洁任务的房间 id（housekeeping_task:read 时提供）。 */
   activeTaskRoomIds: Set<number>;
   winStart: string;
@@ -71,6 +77,7 @@ interface QuickMenuState {
 export default function RoomDiary({
   rooms,
   reservations,
+  stays,
   activeTaskRoomIds,
   winStart,
   days,
@@ -113,6 +120,19 @@ export default function RoomDiary({
     return map;
   }, [reservations]);
 
+  // Sprint 6 §24：ACTIVE Stay = 当前实际占用，按 stay.room_id（当前实际房间）
+  // 渲染 [actual check-in 日, planned_check_out_date)；换房后旧房不画占用条。
+  const staysByRoom = useMemo(() => {
+    const map = new Map<number, StayOut[]>();
+    for (const stay of stays) {
+      if (stay.status !== "ACTIVE") continue;
+      const list = map.get(stay.room_id);
+      if (list) list.push(stay);
+      else map.set(stay.room_id, [stay]);
+    }
+    return map;
+  }, [stays]);
+
   const floorGroups = useMemo(() => {
     return floors.map((floor) => ({
       floor,
@@ -139,7 +159,7 @@ export default function RoomDiary({
   function handleTrackClick(room: RoomOut) {
     return (e: React.MouseEvent<HTMLDivElement>) => {
       const target = e.target as HTMLElement;
-      if (target.closest("[data-reservation-bar]")) return;
+      if (target.closest("[data-reservation-bar], [data-stay-bar]")) return;
       const rect = e.currentTarget.getBoundingClientRect();
       const idx = Math.floor((e.clientX - rect.left) / DAY_CELL_WIDTH);
       if (idx < 0 || idx >= days) return;
@@ -276,6 +296,25 @@ export default function RoomDiary({
                     days,
                   ),
                 }));
+                // Sprint 6 §24：ACTIVE Stay 占用条（[ci, planned_check_out)）
+                const stayBars = (staysByRoom.get(room.id) ?? [])
+                  .map((stay) => ({
+                    stay,
+                    placement: barPlacement(
+                      stayCheckInDate(stay) ?? winStart,
+                      stay.planned_check_out_date,
+                      winStart,
+                      days,
+                    ),
+                  }))
+                  .filter(
+                    (
+                      item,
+                    ): item is {
+                      stay: StayOut;
+                      placement: NonNullable<ReturnType<typeof barPlacement>>;
+                    } => item.placement !== null,
+                  );
                 const hasTask = activeTaskRoomIds.has(room.id);
                 return (
                   <Fragment key={room.id}>
@@ -363,6 +402,28 @@ export default function RoomDiary({
                           </button>
                         ),
                       )}
+                      {/* Sprint 6 §24：当前实际占用 = ACTIVE Stay（换房后画在新房） */}
+                      {stayBars.map(({ stay, placement }) => (
+                        <Link
+                          key={stay.id}
+                          href={`/stays/${stay.id}`}
+                          data-stay-bar={stay.stay_no}
+                          aria-label={stayBarTitle(stay, canReadGuest)}
+                          title={stayBarTitle(stay, canReadGuest)}
+                          onClick={(e) => e.stopPropagation()}
+                          className={`${STAY_BAR_CLASS} absolute inset-y-1 overflow-hidden rounded-sm px-1.5 text-left ring-1 ring-white/40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white`}
+                          style={{ left: placement.left, width: placement.width }}
+                        >
+                          <span className="block truncate text-[11px] font-semibold leading-tight">
+                            {stayBarText(stay, canReadGuest)}
+                          </span>
+                          {placement.width >= 130 ? (
+                            <span className="block truncate text-[10px] leading-tight opacity-90">
+                              在住 · 计划离店 {stay.planned_check_out_date}
+                            </span>
+                          ) : null}
+                        </Link>
+                      ))}
                     </div>
                   </Fragment>
                 );

@@ -41,6 +41,7 @@ export const HK_PRIORITY_META: Record<HousekeepingTaskPriority, StatusMeta> = {
 export const HK_SOURCE_LABELS: Record<HousekeepingTaskSource, string> = {
   CHECKOUT: "退房自动",
   MANUAL: "手动创建",
+  ROOM_MOVE: "换房自动",
 };
 
 export const HK_TASK_STATUSES = Object.keys(

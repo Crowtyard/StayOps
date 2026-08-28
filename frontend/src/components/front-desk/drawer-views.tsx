@@ -48,6 +48,7 @@ import {
 import type { FrontDeskBundle } from "./use-front-desk-data";
 import { CleaningBadge, OccupancyBadge, StatusBadge } from "@/components/status-badge";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import RoomMoveDialog from "@/components/booking/room-move-dialog";
 import { Loading } from "@/components/status-views";
 import {
   AlertBanner,
@@ -63,7 +64,9 @@ export type DrawerSelection =
   | { kind: "vacant-clean" }
   | { kind: "attention" }
   | { kind: "reservation"; reservationId: number }
-  | { kind: "room"; roomId: number };
+  | { kind: "room"; roomId: number }
+  /** Sprint 6 §25：在住换房（stay:room_move 才可进入）。 */
+  | { kind: "stay-move"; stayId: number };
 
 export const DRAWER_TITLES: Record<DrawerSelection["kind"], string> = {
   arrivals: "今日到店",
@@ -73,6 +76,8 @@ export const DRAWER_TITLES: Record<DrawerSelection["kind"], string> = {
   attention: "需关注",
   reservation: "预订速览",
   room: "房间速览",
+  // 与换房 Modal（role=dialog name=换房）区分，避免可访问名称歧义
+  "stay-move": "在住换房",
 };
 
 export interface DrawerViewProps {
@@ -82,7 +87,8 @@ export interface DrawerViewProps {
   today: string;
   /** 写操作成功后触发（父级 targeted refetch）。 */
   onChanged: () => void;
-  onSelect: (next: DrawerSelection) => void;
+  /** 切换抽屉内容；传 null 关闭抽屉（Sprint 6 换房成功后收口）。 */
+  onSelect: (next: DrawerSelection | null) => void;
 }
 
 export default function FrontDeskDrawerView({
@@ -106,7 +112,22 @@ export default function FrontDeskDrawerView({
     case "departures":
       return <DeparturesView bundle={bundle} today={today} />;
     case "inhouse":
-      return <InHouseView bundle={bundle} />;
+      return (
+        <InHouseView
+          bundle={bundle}
+          permissions={permissions}
+          onSelect={onSelect}
+        />
+      );
+    case "stay-move":
+      return (
+        <StayMoveView
+          stayId={selection.stayId}
+          bundle={bundle}
+          onChanged={onChanged}
+          onSelect={onSelect}
+        />
+      );
     case "vacant-clean":
       return (
         <VacantCleanView bundle={bundle} today={today} onSelect={onSelect} />
@@ -379,7 +400,16 @@ function DeparturesView({
   );
 }
 
-function InHouseView({ bundle }: { bundle: FrontDeskBundle }) {
+function InHouseView({
+  bundle,
+  permissions,
+  onSelect,
+}: {
+  bundle: FrontDeskBundle;
+  permissions: Set<string>;
+  onSelect: (next: DrawerSelection | null) => void;
+}) {
+  const canRoomMove = permissions.has("stay:room_move");
   const stays = (bundle.stays ?? []).slice().sort((a, b) =>
     String(a.room_number ?? "").localeCompare(String(b.room_number ?? "")),
   );
@@ -390,21 +420,94 @@ function InHouseView({ bundle }: { bundle: FrontDeskBundle }) {
     <ul className="space-y-1.5">
       {stays.map((stay) => (
         <li key={stay.id}>
-          <Link
-            href={stayHref(stay)}
-            className="block rounded-md border border-gray-200 px-3 py-2 text-sm hover:border-gray-400"
-          >
-            <span className="block font-medium text-gray-900">
-              {stay.stay_no}
-            </span>
-            <span className="block text-xs text-gray-500">
-              房间 {stay.room_number ?? `#${stay.room_id}`} · 计划离店{" "}
-              {stay.planned_check_out_date}
-            </span>
-          </Link>
+          <div className="flex items-center gap-2 rounded-md border border-gray-200 px-3 py-2 text-sm hover:border-gray-400">
+            <Link href={stayHref(stay)} className="min-w-0 flex-1">
+              <span className="block font-medium text-gray-900">
+                {stay.stay_no}
+              </span>
+              <span className="block text-xs text-gray-500">
+                房间 {stay.room_number ?? `#${stay.room_id}`} · 计划离店{" "}
+                {stay.planned_check_out_date}
+              </span>
+            </Link>
+            {/* Sprint 6 §25：有 stay:room_move 权限时显示 [换房]，无权限 hidden；
+                后端仍 403 防护 */}
+            {canRoomMove ? (
+              <button
+                type="button"
+                onClick={() =>
+                  onSelect({ kind: "stay-move", stayId: stay.id })
+                }
+                className="shrink-0 rounded-md border border-gray-300 px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+              >
+                换房
+              </button>
+            ) : null}
+          </div>
         </li>
       ))}
     </ul>
+  );
+}
+
+/** Sprint 6 §25：在住换房抽屉视图（复用 RoomMoveDialog，后端权威候选）。 */
+function StayMoveView({
+  stayId,
+  bundle,
+  onChanged,
+  onSelect,
+}: {
+  stayId: number;
+  bundle: FrontDeskBundle;
+  onChanged: () => void;
+  onSelect: (next: DrawerSelection | null) => void;
+}) {
+  const bundleStay = (bundle.stays ?? []).find((s) => s.id === stayId);
+  const [fetched, setFetched] = useState<StayOut | null>(null);
+  const [fetchError, setFetchError] = useState<ApiError | null>(null);
+
+  useEffect(() => {
+    if (bundleStay) return;
+    let cancelled = false;
+    api.stays
+      .get(stayId)
+      .then((data) => {
+        if (!cancelled) setFetched(data);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setFetchError(
+            err instanceof ApiError
+              ? err
+              : new ApiError("unknown", null, "加载在住信息失败"),
+          );
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [stayId, bundleStay]);
+
+  const stay = bundleStay ?? fetched;
+  if (fetchError) {
+    return (
+      <p role="alert" className="text-sm text-red-600">
+        {fetchError.message}
+      </p>
+    );
+  }
+  if (!stay) {
+    return <Loading text="正在加载在住信息…" />;
+  }
+  return (
+    <RoomMoveDialog
+      stay={stay}
+      open
+      onClose={() => onSelect(null)}
+      onMoved={() => {
+        onChanged();
+      }}
+    />
   );
 }
 
@@ -637,6 +740,15 @@ function ReservationQuickView({
   const roomClean = room ? room.cleaning_status === "clean" : true;
   const nights = reservationNights(reservation);
   const currentId = reservation.id;
+  // Sprint 6 §28：已入住且换过房 → 展示「原分配房 vs 当前在住房」
+  const movedStay =
+    reservation.status === "CHECKED_IN" && canReadStay
+      ? (bundle.stays ?? []).find(
+          (s) =>
+            s.id === reservation.stay_id &&
+            s.room_id !== reservation.room_id,
+        )
+      : null;
 
   async function runAction(kind: ReservationAction) {
     if (busy) return;
@@ -718,6 +830,14 @@ function ReservationQuickView({
             </span>
           ) : null}
         </FieldRow>
+        {/* Sprint 6 §28：换房后明确展示原分配房（上）与当前在住房（本行） */}
+        {movedStay ? (
+          <FieldRow label="当前在住房">
+            <span className="font-medium">
+              {movedStay.room_number ?? `#${movedStay.room_id}`}
+            </span>
+          </FieldRow>
+        ) : null}
         <FieldRow label="客人">
           {canReadGuest && reservation.guest_name
             ? reservation.guest_name

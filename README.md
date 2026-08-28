@@ -166,6 +166,24 @@ pnpm.cmd test:e2e
   MAINTENANCE read+work，FINANCE 无
 - 工单不保存任何 Guest PII；8 个 action 全链路审计（后端自动，含房态恢复证据）
 
+## 住中换房（Sprint 6）
+
+- 领域模型：Reservation = 商业预订 / 未来房间分配（Check-in 后 `room_id` 冻结为原分配房）；
+  Stay = 实际住宿（`room_id` = 当前实际房间）；StayRoomAssignment = 实际住宿期间的房间历史
+  （`ended_at = NULL` = 当前 active assignment）；换房不创建第二个 Stay
+- API：`GET /stays/{id}/room-move-options`（后端权威目标房候选 + 不可选原因）+
+  `POST /stays/{id}/room-move`（原子换房：目标房资格事务内重校验、旧房释放、
+  ROOM_MOVE 保洁任务、目标房 occupied、审计 stay.room_move）；权限 `stay:room_move`
+  （SUPER_ADMIN / MANAGER / FRONT_DESK）
+- 入口：Front Desk 当前在住抽屉 / 移动 Today Board [换房] + Stay 详情页换房对话框
+  （7 个固定原因、显式「确认换房」）；Room Diary 时间线 = CONFIRMED 预订条 +
+  ACTIVE Stay 在住条（当前实际占用）；Stay 详情展示房间记录 + 原分配房 vs 当前在住房
+- 并发安全：Room Row Lock + 事务内重校验；全局锁顺序
+  `(Reservation | Stay) → Rooms(pk 升序) → MWO`；Reservation 排他约束调整为
+  CONFIRMED-only；40P01/40001 → 409，其余数据库错误原样传播
+- 旧房释放复用 S5 maintenance-aware 语义（阻断维修 → OOS+MAINTENANCE；人工停用保持）；
+  换房绝不触碰原房维修工单生命周期
+
 ## 文档
 
 - [PRD](docs/PRD.md) — 产品需求
@@ -188,15 +206,19 @@ pnpm.cmd test:e2e
 > 房间不可售来源 / Availability·Check-in·Checkout 集成 / 保洁·前台最小集成 / PRE_OPENING / RBAC / PII / 审计 / 并发安全），
 > Kun Fast QA 首轮发现 Blocking Defect（occupied + blocking 工单 + 未来预订 → 前台无主动维修风险提示）已修复，
 > Fast RE-QA PASS（pytest 285 / Vitest 300 / Playwright 60 / lint / typecheck / build 全绿），v1.0.0-alpha.5 已发布。
+> Sprint 6 开发完成（Room Move & In-Stay Recovery：在住房间分配历史 / 原子换房 / Room Row Lock 并发模型 /
+> CONFIRMED-only 排他约束 / Front Desk 换房入口 / Room Diary 实际占用语义），
+> 自测全绿（pytest 317 / Vitest 324 / Playwright 60 + room-move 4 条 / lint / typecheck / build），
+> 等待 Kun Fast QA；`v1.0.0-alpha.6` 待 QA PASS 后发布。
 
 ## Current Release
 
-Version: v1.0.0-alpha.5
+Version: v1.0.0-alpha.5（当前已发布）
 
-Status: Sprint 5 Fast QA PASS
+Status: Sprint 6 CODING COMPLETE（Room Move & In-Stay Recovery）— 等待 Kun Fast QA
 
 This is the fifth stable Alpha development baseline of StayOps（Maintenance Operations & Room Readiness）。
 
-Sprint 5 implementation complete; Kun Fast QA 首轮 FAILED（Blocking Product Defect：occupied Room + Active Blocking MWO + future CONFIRMED Reservation 时 Front Desk 无主动维修风险提示）；DSH 已修复（Attention Rule M：预订存在维修风险，桌面 + 移动共享）；Kun Fast RE-QA PASS（pytest 285 / Vitest 300 / Playwright 60 全绿；lint / typecheck / build PASS）; v1.0.0-alpha.5 released.
+Sprint 6 implementation complete（无 commit）：pytest 317 / Vitest 324 / Playwright 60 + room-move 4 条全绿；lint / typecheck / build PASS；开发库 stayops 已迁移至 `c8e2b7a4d1f3`（alembic current == head）。待 Kun Fast QA PASS 后创建 `v1.0.0-alpha.6` Release Commit。
 
 Not intended for production deployment.

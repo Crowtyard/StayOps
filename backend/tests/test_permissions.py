@@ -8,9 +8,9 @@ def test_list_permissions(client, admin_headers):
     )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["total"] == 36  # Sprint 1 的 17 + Booking 的 9 + Housekeeping 的 5 + Maintenance 的 5
+    assert body["total"] == 37  # Sprint 1 的 17 + Booking 的 10 + Housekeeping 的 5 + Maintenance 的 5
     items = body["items"]
-    assert len(items) == 36
+    assert len(items) == 37
     codes = {p["code"] for p in items}
     # 任务书要求：user/role/room/room_type/audit × read/write/delete
     for module in ["user", "role", "room", "room_type", "audit"]:

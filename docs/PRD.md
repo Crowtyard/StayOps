@@ -10,7 +10,9 @@
 
 - 房间
 - 房态
+- 预订
 - 入住记录
+- 住中换房（Room Move）
 - 保洁
 - 查房
 - 维修
@@ -18,15 +20,32 @@
 - 采购
 - 经营数据
 
+## 核心领域模型（Sprint 6 起，Domain Decision LOCKED）
+
+```text
+Reservation         = 商业预订 / 未来房间分配（Check-in 后 room_id 冻结为原分配房）
+Stay                = 实际住宿（room_id = 当前实际房间快速指针）
+StayRoomAssignment  = 实际住宿期间的房间历史（ended_at = NULL 表示当前 active assignment）
+```
+
+- Check-in 原子建立 assignment #1（room = check-in room）；
+  Room Move 关闭旧 assignment 并开启新 assignment；
+  Check-out 关闭当前 assignment。
+- Room Move 不得创建第二个 Stay；`Reservation.room_id` 换房后保持原分配房；
+  ACTIVE Stay 的当前房间一律来自 `Stay.room_id` / current Assignment；
+  Reservation 排他约束仅作用于 CONFIRMED（未来分配），实际占用由 Stay 表达。
+
 ## V1 核心模块
 
 1. 登录与 RBAC 权限
 2. 首页经营驾驶舱
 3. 房态管理
-4. 保洁管理
-5. 维修工单
-6. 库存采购
-7. 经营分析
+4. 预订 / 入住 / 退房（Booking & Stay Core Flow）
+5. 住中换房（Room Move & In-Stay Recovery）
+6. 保洁管理
+7. 维修工单
+8. 库存采购
+9. 经营分析
 
 ## V1 暂不自行实现（未来通过 PMS 或第三方 API 集成）
 

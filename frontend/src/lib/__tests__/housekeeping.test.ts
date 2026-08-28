@@ -27,6 +27,7 @@ describe("lib/housekeeping 展示元数据", () => {
     expect(HK_PRIORITY_META.URGENT.label).toBe("加急");
     expect(HK_SOURCE_LABELS.CHECKOUT).toBe("退房自动");
     expect(HK_SOURCE_LABELS.MANUAL).toBe("手动创建");
+    expect(HK_SOURCE_LABELS.ROOM_MOVE).toBe("换房自动");
   });
 
   it("进行中状态集合 = PENDING/IN_PROGRESS/INSPECTION/REWORK", () => {

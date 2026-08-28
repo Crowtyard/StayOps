@@ -49,6 +49,7 @@ class HousekeepingTaskStatus(str, enum.Enum):
 class HousekeepingTaskSource(str, enum.Enum):
     CHECKOUT = "CHECKOUT"
     MANUAL = "MANUAL"
+    ROOM_MOVE = "ROOM_MOVE"  # Sprint 6：换房自动创建的旧房保洁任务
 
 
 class HousekeepingTaskPriority(str, enum.Enum):

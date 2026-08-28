@@ -1,8 +1,10 @@
-"""Stay 路由：列表 / 详情 / check-out。
+"""Stay 路由：列表 / 详情 / check-out / room-move-options / room-move（Sprint 6）。
 
-权限：GET stay:read；check-out stay:check_out。
+权限：GET stay:read；check-out stay:check_out；room-move-options / room-move
+stay:room_move（Sprint 6 §18）。
 响应 PII 裁剪（REV-FINAL-04）：无 guest:read 仅保留 guest_id；
 无 reservation:read 不含嵌套 reservation 摘要。
+详情接口包含在住房间分配历史（assignments，Sprint 6 §27）。
 """
 
 from datetime import date
@@ -14,10 +16,15 @@ from sqlalchemy.orm import Session, selectinload
 from app.api.deps import get_permission_codes, require_permissions
 from app.core.pagination import paginate
 from app.database import get_db
-from app.models import Reservation, Stay, StayStatus, User
+from app.models import Reservation, Stay, StayRoomAssignment, StayStatus, User
 from app.schemas.common import Page
-from app.schemas.stay import StayOut
+from app.schemas.stay import (
+    RoomMoveCreate,
+    RoomMoveOptionsOut,
+    StayOut,
+)
 from app.services.booking import build_stay_out, check_out_stay
+from app.services.room_move import build_room_move_options, move_stay
 
 router = APIRouter(prefix="/stays", tags=["stays"])
 
@@ -29,6 +36,7 @@ def _load_stay(db: Session, stay_id: int) -> Stay | None:
         .options(
             selectinload(Stay.room),
             selectinload(Stay.reservation).selectinload(Reservation.guest),
+            selectinload(Stay.assignments).selectinload(StayRoomAssignment.room),
         )
     )
 
@@ -92,6 +100,7 @@ def get_stay(
         stay,
         show_guest="guest:read" in codes,
         show_reservation="reservation:read" in codes,
+        include_assignments=True,
     )
 
 
@@ -115,4 +124,56 @@ def check_out_stay_endpoint(
         refreshed,
         show_guest="guest:read" in codes,
         show_reservation="reservation:read" in codes,
+        include_assignments=True,
+    )
+
+
+@router.get(
+    "/{stay_id}/room-move-options",
+    response_model=RoomMoveOptionsOut,
+    response_model_exclude_none=True,
+)
+def room_move_options_endpoint(
+    stay_id: int,
+    current_user: User = Depends(require_permissions("stay:room_move")),
+    db: Session = Depends(get_db),
+) -> dict:
+    """当前 Stay 可选择的目标房间（后端权威结果驱动 UI，Sprint 6 §9/§11）。
+
+    只读建议列表；最终资格在换房事务内以房间行锁重新校验。
+    """
+    stay = db.get(Stay, stay_id)
+    if stay is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="入住记录不存在"
+        )
+    if stay.status != StayStatus.ACTIVE:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="仅 ACTIVE 入住记录可查询换房目标"
+        )
+    return build_room_move_options(db, stay)
+
+
+@router.post(
+    "/{stay_id}/room-move",
+    response_model=StayOut,
+    response_model_exclude_none=True,
+)
+def room_move_endpoint(
+    stay_id: int,
+    payload: RoomMoveCreate,
+    request: Request,
+    current_user: User = Depends(require_permissions("stay:room_move")),
+    db: Session = Depends(get_db),
+) -> StayOut:
+    """原子换房（Sprint 6 §12）。不允许客户端直接 PATCH Stay.room_id。"""
+    stay = move_stay(db, stay_id, payload, current_user, request)
+    refreshed = _load_stay(db, stay.id)
+    assert refreshed is not None
+    codes = get_permission_codes(db, current_user)
+    return build_stay_out(
+        refreshed,
+        show_guest="guest:read" in codes,
+        show_reservation="reservation:read" in codes,
+        include_assignments=True,
     )
