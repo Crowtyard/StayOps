@@ -6,6 +6,14 @@
 
 两个维度可自由组合，例如 reserved + dirty = 已预订但待清扫。
 状态机合法转换校验在 app/core/state_machine.py，由 API 层强制。
+
+Sprint 5 §4：新增 unavailability_source（Room metadata，nullable）：
+    available / reserved / occupied -> normally null
+    blocked                        -> MANUAL
+    out_of_service                 -> MANUAL or MAINTENANCE
+语义（Sprint 5 §3）：blocked = 运营/人工主动锁房；out_of_service =
+因设施、维修、安全或客房本身问题不适合投入住宿经营。
+Maintenance 不得把 Room 设置为 blocked。
 """
 
 import enum
@@ -24,6 +32,13 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
+
+
+class UnavailabilitySource(str, enum.Enum):
+    """Room 不可售来源（Sprint 5 §4）：MANUAL = 运营/人工锁房，MAINTENANCE = 维修。"""
+
+    MANUAL = "MANUAL"
+    MAINTENANCE = "MAINTENANCE"
 
 
 class OccupancyStatus(str, enum.Enum):
@@ -96,6 +111,15 @@ class Room(Base):
         nullable=False,
         default=CleaningStatus.clean,
         server_default=CleaningStatus.clean.value,
+        index=True,
+    )
+    unavailability_source: Mapped[UnavailabilitySource | None] = mapped_column(
+        Enum(
+            UnavailabilitySource,
+            name="unavailability_source",
+            values_callable=lambda members: [m.value for m in members],
+        ),
+        nullable=True,
         index=True,
     )
     notes: Mapped[str | None] = mapped_column(String(255))

@@ -25,8 +25,8 @@ pnpm.cmd test:e2e
 Playwright 会自动启动后端（`e2e/run_test_backend.py`，单进程内嵌 uvicorn，重建测试库）
 与前端（`node node_modules/next/dist/bin/next dev`，独立构建目录 `.next-e2e`）。
 
-E2E 专用账号（FRONT_DESK / HOUSEKEEPING）由 `e2e/setup-users.ts` 在测试
-`beforeAll` 中幂等创建（保证在服务就绪后执行）。
+E2E 专用账号（FRONT_DESK / HOUSEKEEPING / MANAGER / MAINTENANCE）由 `e2e/setup-users.ts`
+在测试 `beforeAll` 中幂等创建（保证在服务就绪后执行）。
 
 ## 覆盖场景
 
@@ -107,3 +107,25 @@ Sprint 4 新增（10 条；辅助集中在 `front-desk-helpers.ts`；超期在�
   8. RBAC：HOUSEKEEPING / FINANCE 无前台导航入口，直连 /front-desk → 无权限（不跳登录）
 - 响应式（2 条）：Mobile 390×844 → FrontDeskTodayBoard（Room Diary 不渲染，
   `[data-room-cell]=0`）；Tablet 900×720 → 紧凑 Room Diary 可用（28 房 + 7 天列）
+
+Sprint 5 新增（13 条；辅助集中在 `maintenance-helpers.ts`；账号 MANAGER / MAINTENANCE
+由 setup-users.ts 幂等创建；房间号段 301-308 复用并发/失败场景房间，测试开始前
+经 admin API 归一化（取消预订 / 退房 / 取消任务 / 恢复 available+clean）保证确定性）：
+
+- `maintenance.spec.ts`（3 条）：
+  1. 维修 Golden Path（房间 301）：HOUSEKEEPING 任务详情「发现设施问题 → 报修」
+     （预填房间 + source=HOUSEKEEPING）→ 阻断报修提交 → 工单 OPEN + 房间 OOS+MAINTENANCE
+     （cleaning 保持 dirty）→ MANAGER 派工 → MAINTENANCE 开始维修 → 提交解决
+     （RESOLVED 仍阻断）→ MANAGER 验收通过 → COMPLETED → 房间恢复 available 仍 dirty →
+     保洁完成链 → clean → Check-in SUCCESS；全链路 audit 五事件存在
+  2. PRE_OPENING：开业前整改报修 + 工作台来源筛选（房间 302）
+  3. Mobile 390×844：现场报修表单预填与提交（房间 302）
+- `maintenance-safety.spec.ts`（11 条，HTTP + UI 层）：occupied 房间阻断工单不覆盖在住 +
+  Availability 维修原因 + Checkout → OOS+MAINTENANCE + 保洁任务照常；未来预订保留不换房；
+  multiple blockers / Last Blocking；Rework 继续阻断；Cancel 恢复；Manual OOS 保护；
+  Check-in 409 纵深防御；RBAC 矩阵（FRONT_DESK / MAINTENANCE / FINANCE）+ assignees；
+  PII（工单响应无 Guest 数据 + MAINTENANCE 无 Booking PII 出口）；
+  维修完成 ≠ 房间清洁（verify 后 dirty，保洁完成后 Ready）；
+  S5 缺陷修复（房间 203：ACTIVE Stay(occupied) + 非重叠未来 CONFIRMED + blocking MWO →
+  后端保持 occupied / Availability 排除 → /front-desk 不打开任何 Drawer 即主动显示
+  「预订存在维修风险」+ 查看维修直达链接）

@@ -12,6 +12,7 @@ import { addDays, businessDate } from "@/lib/booking";
 import {
   computeAttention,
   computeTodaySummary,
+  type AttentionItem,
 } from "@/lib/front-desk";
 import type {
   ReservationOut,
@@ -200,5 +201,56 @@ describe("FrontDeskTodayBoard（移动端）", () => {
       document.querySelector('[data-summary-card="attention"]') as HTMLElement,
     );
     expect(onSelectSummary).toHaveBeenCalledWith("attention");
+  });
+
+  it("S5 修复：Rule M 预订存在维修风险 → 展示问题 + 查看预订 + 查看维修", () => {
+    const rooms = [makeRoom("201"), makeRoom("202"), makeRoom("203")];
+    const reservations = [
+      makeReservation(addDays(TODAY, 1), { room_id: 203, room_number: "203" }),
+    ];
+    const stays: StayOut[] = [];
+    const attention: AttentionItem[] = [
+      {
+        rule: "M",
+        roomId: 203,
+        roomNumber: "203",
+        problem:
+          "明日到店，当前房间存在阻断性维修（阻断性维修 2 项）：MWO-MB-0041 · 维修中",
+        nextStep: "reservation",
+        reservationId: 1,
+        reservationNo: "RSV-MB-0001",
+        maintenance: {
+          workOrderId: 41,
+          workOrderNo: "MWO-MB-0041",
+          count: 2,
+        },
+      },
+    ];
+    const summary = computeTodaySummary(rooms, reservations, stays, TODAY);
+    render(
+      <FrontDeskTodayBoard
+        rooms={rooms}
+        reservations={reservations}
+        stays={stays}
+        attention={attention}
+        summary={summary}
+        permissions={PERMISSIONS}
+        today={TODAY}
+        canReadGuest={true}
+        onOpenReservation={vi.fn()}
+        onOpenRoom={vi.fn()}
+        onSelectSummary={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByText("预订存在维修风险 · 房间 203"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/阻断性维修 2 项/)).toBeInTheDocument();
+    expect(screen.getByText(/MWO-MB-0041/)).toBeInTheDocument();
+    expect(screen.getByText("查看预订")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "查看维修 →" })).toHaveAttribute(
+      "href",
+      "/maintenance/41",
+    );
   });
 });

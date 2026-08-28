@@ -114,8 +114,15 @@ export default function FrontDeskView() {
     [rooms, reservations, stays, today],
   );
   const attention = useMemo(
-    () => computeAttention(reservations, stays, rooms, today),
-    [reservations, stays, rooms, today],
+    () =>
+      computeAttention(
+        reservations,
+        stays,
+        rooms,
+        today,
+        bundle.workOrders,
+      ),
+    [reservations, stays, rooms, today, bundle.workOrders],
   );
   const activeTaskRoomIds = useMemo(() => {
     const set = new Set<number>();

@@ -162,7 +162,7 @@ def test_housekeeping_seed_idempotent_and_role_mapping(_database):
     seed()
     second = snapshot()
     assert first == second, "连续执行两次 seed 必须收敛到一致状态"
-    assert first["permissions"] == 31
+    assert first["permissions"] == 36  # + Maintenance 的 5（Sprint 5）
 
     mapping = first["mapping"]
     assert HK_CODES <= mapping["SUPER_ADMIN"]

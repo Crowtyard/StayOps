@@ -2,6 +2,79 @@
 
 All notable changes to StayOps will be documented in this file.
 
+## [v1.0.0-alpha.5] - 2026-08-28
+
+### Added
+
+- Sprint 5: Maintenance Operations & Room Readiness（维修运营与客房可用性闭环）
+- MaintenanceWorkOrder 正式领域（Migration `a7f3e4c1d902`：PG 枚举 mwo_status /
+  mwo_category / mwo_severity / mwo_source / unavailability_source、
+  Sequence `maintenance_work_order_no_seq`、部分索引 `ix_mwo_active_blocking_room`）
+- 工单闭环：报修（POST /maintenance/orders）→ 派工（assign）→ 开始维修（start）→
+  提交解决（resolve）→ 验收通过 / 返工（verify / rework）→ 完成（COMPLETED）/
+  取消（cancel，非终态）→ Room Ready；状态只能经 action 端点变更
+  （PATCH strict：仅 category / severity / title / description）
+- 工单单号 `MWO{YYYYMMDD}-{NNNN}`（PG Sequence 原子取号 + UNIQUE）
+- `blocks_room` 与 `severity` 相互独立（CRITICAL 不自动阻断）；
+  Active Blocking = OPEN / ASSIGNED / IN_PROGRESS / RESOLVED（RESOLVED 仍阻断）
+- Room 新增 `unavailability_source`（MANUAL / MAINTENANCE）：历史 blocked/OOS 安全回填
+  MANUAL + CHECK 约束；人工房态接口写 MANUAL、维修域写 MAINTENANCE
+- 房态联动：available 房报修阻断 → 同事务 OOS+MAINTENANCE；occupied / reserved /
+  blocked / MANUAL-OOS 保留原占用与来源；多张 blocking 工单按 Last Blocking 规则恢复；
+  Maintenance 只能解除自己造成的 OOS；Cleaning 维度不受维修影响
+- Availability / 预订预检 / Check-in 纵深防御排除 Active Blocking 工单（后端 409）；
+  Checkout Maintenance-aware（有阻断工单 → OOS+MAINTENANCE+dirty，保洁任务照常创建）
+- 固定锁顺序 Room → MaintenanceWorkOrder + 并发仲裁窄分类复用（40P01/40001 → 409）
+- 维修 RBAC（5 个新权限，共 36 个权限码：SUPER_ADMIN / MANAGER 全部，
+  FRONT_DESK / HOUSEKEEPING read+write，MAINTENANCE read+work，FINANCE 无）
+- 维修审计（create / assign / start / resolve / verify / rework / cancel / update，
+  含 Room become OOS / restore available 证据，后端自动生成）
+- PII 隔离：工单不关联 Guest / Reservation / Stay，维修人员无 Guest PII 出口
+- 维修工作台 `/maintenance`（状态视图 + 筛选 + 搜索）、工单详情 `/maintenance/[id]`、
+  现场报修表单 `/maintenance/new`（Mobile 友好，`?room_id=&source=` 预填）
+- Housekeeping 任务详情「发现设施问题 → 报修」（预填房间与 HOUSEKEEPING 来源）
+- Front Desk Room / Reservation Quick View 展示 Active 工单
+  （status / blocks_room / assignee / 查看维修，maintenance_order:read 才请求）
+- PRE_OPENING 来源支持开业前 28 房整改清单（复用维修域）
+- `GET /maintenance/assignees` 候选人端点（复用 Alpha.3 模式，不扩大 user:read）
+
+### Fixed
+
+- S5 Fast QA Blocking Defect「Future Reservation Maintenance Risk」：
+  occupied Room + Active Blocking MaintenanceWorkOrder + current/future CONFIRMED
+  Reservation 时，Front Desk 此前没有主动风险提示（Rule C 依赖 Room occupancy，
+  而 occupied 房不因维修改 OOS，永不命中）。修复：Attention Center 新增
+  Rule M「预订存在维修风险」——`Reservation.status == CONFIRMED`
+  且 `check_in_date >= business_date` 且同房存在 `blocks_room=true` 且状态 ∈
+  OPEN/ASSIGNED/IN_PROGRESS/RESOLVED 的工单（与 Room 占用状态无关，
+  RESOLVED 仍报警，COMPLETED/CANCELLED/blocks_room=false 不产生）；
+  一条预订一条卡片（多张工单合并计数「阻断性维修 N 项」+ 首张工单号）；
+  M 优先抑制同预订 Rule C（避免重复风险卡片），MANUAL blocked/OOS 无工单时
+  Rule C 继续工作；桌面 Attention Drawer 与 Mobile Today Board 共享
+  computeAttention 并渲染「查看维修 →」直达链接；
+  仅 `maintenance_order:read` 时加载工单数据（无权限不请求不显示、不扩大权限、
+  不新增 Backend API、不改 Schema/状态机/Availability/Check-in/Checkout）。
+  后端安全行为（Room 保持 occupied / Stay 保持 ACTIVE / Availability 排除 /
+  Check-in 409）保持不变。
+
+### Verified
+
+- Backend pytest: 285 passed（后端零改动，Sprint 5 基线保留）
+- Frontend Vitest: 300 passed（285 Sprint 5 基线保留 + 15 修复增量）
+- Playwright E2E: 60 passed（59 Sprint 5 基线保留 + 缺陷修复正式场景 1 条）
+- lint / typecheck / build PASS
+- Clean-environment bootstrap verified（空库 → alembic upgrade head → seed → setup users →
+  FastAPI :8001 → Next.js :3001 → Full Playwright）
+
+### Known Issues
+
+（沿用既有非阻塞四项，本轮未改变）
+
+- `/rooms/9999` returns an HTTP 200 page while the underlying BFF resource returns 404.
+- Starlette/httpx TestClient deprecation warning remains.
+- Playwright E2E credentials require local gitignored configuration.
+- `/health` does not currently include PostgreSQL readiness checks.
+
 ## [v1.0.0-alpha.4] - 2026-08-28
 
 ### Added

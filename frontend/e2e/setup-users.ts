@@ -102,6 +102,13 @@ export async function ensureTestUsers(): Promise<void> {
       creds.housekeepingPassword,
       "HOUSEKEEPING",
     );
+    // Sprint 5：维修运营 E2E 账号（MANAGER 派单/验收；MAINTENANCE 维修）
+    await ensureUser(creds.managerUsername, creds.managerPassword, "MANAGER");
+    await ensureUser(
+      creds.maintenanceUsername,
+      creds.maintenancePassword,
+      "MAINTENANCE",
+    );
     prepared = true;
   } finally {
     await ctx.dispose();

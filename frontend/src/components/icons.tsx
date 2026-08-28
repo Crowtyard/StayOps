@@ -239,3 +239,12 @@ export function IconDesk({ className }: IconProps) {
     </Svg>
   );
 }
+
+export function IconMaintenance({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <path d="M14.7 6.3a4.5 4.5 0 0 0-6 5.6L3 17.6V21h3.4l5.7-5.7a4.5 4.5 0 0 0 5.6-6l-3.4 3.4-2.8-.7-.7-2.8 3.9-3.9Z" />
+      <path d="M17.5 3.5a2.4 2.4 0 0 1 3 3" />
+    </Svg>
+  );
+}

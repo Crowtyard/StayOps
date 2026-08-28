@@ -213,3 +213,52 @@ venv 因启动器硬编码旧路径而重建；requirements.txt 统一为 UTF-8 
 12. **E2E 跨 spec 状态容忍（Attention 断言按条目而非总数）**。背景：`failures.spec`（冻结）会遗留「304 脏房 + 今日到店 CONFIRMED」状态（Rule A 命中），S4 Attention 用例若断言「需关注 = 3」会在全套件顺序下失败。决策：S4 Attention E2E 改为断言三条目标规则的条目存在（A 取 first，B/C 唯一），Housekeeping 用例按 `房间 206` 定位条目；隔离运行与全套件运行皆确定。后果：目标规则验证强度不变，与既有 spec 的共享测试库状态共存。
 
 13. **D1 修复（Kun Fast QA Blocking Defect + Fast Review 收窄分类）：并发仲裁错误窄分类映射**。背景：并发 Double Booking 时，PostgreSQL 排他约束（daterange EXCLUDE USING gist）检查让两事务互相等待 ShareLock，PostgreSQL 中止其一并报 `DeadlockDetected`（SQLSTATE 40P01，psycopg2 → `sqlalchemy.exc.OperationalError`）；修复前 `_commit_or_conflict` 只捕获 `IntegrityError`(23P01)，40P01 从 flush/commit 逃逸为 500（Sprint 2 遗留，非 S4 新增代码）。决策（两轮收敛）：`booking.py` 六条 service 路径（create / update / cancel / no-show / check-in / check-out）与 `_commit_or_conflict` 统一捕获 `OperationalError` → rollback，随后**仅**按 `_is_transaction_conflict`（`_pgcode` 读 `orig.pgcode`，回退 `orig.diag.sqlstate`）窄分类：**40P01 / 40001 → 409**（create/update 映射 Double Booking 语义，其余映射各自通用冲突文案）；**其它任何 OperationalError（57014 query_canceled / 无 pgcode / 连接故障 / 库不可用 / 无关超时）→ 原样 re-raise**，不得转换为 409/422/400，不得吞掉（保持基础设施/数据库错误语义）。23P01 → 409 既有行为不变。不重试（与 23P01 一致：数据库仲裁即最终答案）。后果：错误语义 = 23P01/40P01/40001 → 409、其余 DB 错误 → 5xx 基础设施语义；新增 7 条 pytest（commit/flush 处 40P01、40001、update 路径的确定性映射；57014 与无 pgcode → 原异常传播 + 事务已回滚验证；25 轮真实并发无 500）；独立压测 50 轮服务层 + 50 轮 HTTP 层（真实 uvicorn + stayops_test）均 0 × 500 且每轮数据库 exactly 1 条；数据完整性不变。
+
+## 2026-09-02 — Sprint 5：Maintenance Operations & Room Readiness
+
+1. **MaintenanceWorkOrder = 第三个独立业务领域（Maintenance Status ≠ Occupancy ≠ Cleaning）**。工单只关联 Room 与员工用户，**不关联 Guest / Reservation / Stay**（§30：不保存 Guest name / phone / email / reservation amount / Guest notes；如需追溯，审计携带 room/工单上下文即可）。响应与审计因此天然无 PII；维修人员不因 `maintenance_order:*` 获得任何 Guest PII 出口。
+
+2. **blocked 与 out_of_service 语义锁定 + rooms.unavailability_source**。blocked = 运营/人工主动锁房；out_of_service = 因设施/维修/安全问题不适合投入住宿经营。新增 nullable Room metadata `unavailability_source`（MANUAL / MAINTENANCE）：available/reserved/occupied → null，blocked → MANUAL，OOS → MANUAL or MAINTENANCE。Migration 历史回填：existing blocked / OOS → MANUAL、其它 → null（不允许把人工不可售房错误标记成 MAINTENANCE）；CHECK 约束 `ck_rooms_unavailability_source` 数据库级兜底。人工房态接口写 MANUAL（目标 blocked/OOS），Maintenance 域事务写 MAINTENANCE；Maintenance 不得把 Room 设为 blocked。
+
+3. **blocks_room 独立于 severity，RESOLVED 仍阻断**。severity（LOW/MEDIUM/HIGH/CRITICAL）只表达紧迫度；是否阻断客房销售由 `blocks_room` 独立决定（CRITICAL 不自动阻断）。Active Blocking = blocks_room=true 且状态 ∈ OPEN / ASSIGNED / IN_PROGRESS / **RESOLVED**（维修完成 ≠ 酒店验收通过）；COMPLETED / CANCELLED 不阻断。部分索引 `ix_mwo_active_blocking_room` 服务集成查询。
+
+4. **创建 blocking 工单的房态规则（§13/§14）**。Room = available → 同事务内置 OOS + source=MAINTENANCE（Cleaning 不变）；occupied / reserved / blocked / OOS(MANUAL) → 保留当前占用与来源，工单本身负责阻断 Availability / Check-in。MANUAL OOS 永不被 Maintenance 覆盖为 MAINTENANCE。occupied 房间绝不因维修被改成 OOS（不破坏当前 Stay）。
+
+5. **Last Blocking 规则 + 只能解除自己造成的 OOS（§22/§23）**。verify / cancel 后重新查询同房 active blocking MWO：仅当 count == 0 且 Room = OOS 且 source = MAINTENANCE 才恢复 available + null；MANUAL OOS / blocked 永不被 Maintenance 解除；Cleaning Status 始终保持原值。同一 Room 允许多张 Active 工单（§21，不做 active-per-room 唯一约束）。
+
+6. **状态机：start 与 rework 共享 IN_PROGRESS 目标边，action 层守卫区分**。转换表表达合法边（ASSIGNED → IN_PROGRESS、RESOLVED → IN_PROGRESS 都在表中），但 `start` 仅接受 ASSIGNED、`rework` 仅接受 RESOLVED（显式前置状态校验，不用目标状态反推资格）；OPEN 不允许直接 start（先派工后开工，简单明确的状态机）。COMPLETED / CANCELLED 为终态。
+
+7. **锁顺序全项目一致：Room → MaintenanceWorkOrder（§27）**。所有影响 Room 可售性的 Maintenance 事务（create blocking / verify / cancel）先 `SELECT FOR UPDATE` 锁 Room 再锁工单；不涉及房态的 action（assign / start / resolve / rework / PATCH）只锁工单行。Booking 集成同侧收口：Check-in 增加 Reservation → Room 锁序（既有 Reservation 锁 + 新增 Room 锁），Checkout 增加 Stay → Room 锁——与 Maintenance 的 Room → MWO 无环。verify/cancel 先以标量查询取 room_id（不把工单对象装入 identity map，保证 FOR UPDATE 读到锁内最新状态），再按序加锁；状态变更先 flush 再判定 Last Blocking（SessionLocal autoflush=False，未 flush 的 UPDATE 不会被后续查询看到）。并发仲裁错误沿用 Sprint 4 D1 窄分类（40P01/40001 → 409，其余 OperationalError 原样传播），`app/core/db_conflict.py` 统一复用。
+
+8. **Availability / Check-in / Checkout 集成**。Availability 与预订预检排除 Active Blocking MWO 的房间（无论当前 occupancy）；Check-in 纵深防御新增「no active blocking MWO」否则 409（后端最终权威，前端只提前提示）；Checkout 在退房事务内做 Maintenance-aware 决策（存在 blocker → OOS+MAINTENANCE+dirty，否则 available+dirty；已 OOS(MANUAL) 保持停用与来源），HousekeepingTask 照常创建，任一失败整体回滚。
+
+9. **PATCH 严格化（沿用 S2T1-BLK-01 / S3 修订）**。PATCH 仅限 category / severity / title / description；strict schema（extra=forbid、空 payload 422）；status 与 blocks_room 不得经 PATCH 修改（blocks_room 创建后不可变：如需改变阻断语义请取消后重新报修，保持审计清晰）；终态工单 PATCH → 409。
+
+10. **派单候选人端点 `GET /maintenance/assignees`（复用 Alpha.3 模式）**。以 `maintenance_order:write` 门控，返回持有 `maintenance_order:work` 的在职用户（id / display_name / username），不扩大 user:read 权限；不暴露任何 Guest PII。assign 仅校验目标用户在职（与 S3 一致，候选人列表保证 work 权限）。
+
+11. **权限矩阵（§31，用 permission 判断，不用角色名）**。SUPER_ADMIN / MANAGER = read/write/work/verify/cancel；FRONT_DESK / HOUSEKEEPING = read/write；MAINTENANCE = read/work；FINANCE = none。seed 幂等收敛（36 权限码）。
+
+12. **PRE_OPENING 复用 Maintenance 域（§39）**。不建独立开业准备系统；source=PRE_OPENING 表达开业前 28 房整改清单，/maintenance 可按来源筛选。
+
+13. **前端工作台原则（§34/§35/§36）**。/maintenance 轻量 Work Order Board（待处理/已派工/维修中/待验收/阻断客房/今日完成 + 筛选与搜索，不做企业级 Kanban）；详情页展示工单字段 + 房间双状态（后端响应内嵌，无需 room:read）+ 时间线，操作按 permission + status 显隐（后端状态机唯一权威）；现场报修表单 Mobile Friendly（单列表单，390px 可完整操作），支持 `?room_id=&source=` 预填。Housekeeping 任务详情「发现设施问题 → 报修」仅 `maintenance_order:write` 时显示（预填 room_id + source=HOUSEKEEPING，不复制保洁备注）；Front Desk Room/Reservation Quick View 展示 Active MWO + status + blocks_room + assignee + 查看维修（`maintenance_order:read` 才请求与展示）。
+
+14. **附件与扩展范围（§40/§41）**。Sprint 5 不做 photo/file 附件与对象存储（留待统一 Attachment Domain）；不做 Room Move / Guest Compensation / Incident / Inventory / Spare Parts / Preventive Maintenance / OTA / Revenue / Night Audit / CRM / AI。
+
+15. **测试口径（Sprint 5）**。pytest 285（220 基线 + 65 新增：核心域/权限/候选人/PII/审计/Availability 与 Check-in 门禁/Checkout 集成/回滚/并发（同房双阻断创建、并发 verify 最后一张、create vs verify、cancel vs verify、单号并发）/迁移往返与历史回填/seed 矩阵）；Vitest 285（240 基线 + 45：lib 元数据/工作台/详情/报修表单/保洁快捷报修/前台集成/导航矩阵）；Playwright 59（46 基线 + maintenance 2 spec 13 条：Golden Path UI 全链路、PRE_OPENING、Mobile 390×844、occupied blocker、future reservation、multiple blockers、rework、cancel、manual OOS 保护、check-in 409、RBAC、PII、完成≠清洁）。E2E 房间号段：S5 复用 301-308（测试开始前经 admin API 归一化：取消预订/退房/取消任务/恢复 available+clean，保证全套件顺序下确定性）。
+
+## 2026-09-02 — Sprint 5 Fast QA 修复：Future Reservation Maintenance Risk（前台主动维修风险）
+
+背景（Kun Fast QA Blocking Product Defect）：occupied Room + active blocking MWO + current/future CONFIRMED Reservation 时，Front Desk 没有主动风险提示。后端安全行为正确（Room 保持 occupied、Stay 保持 ACTIVE、Availability 排除、Check-in 409）且**不改动**；缺陷仅在前端 Attention Center：原规则 C（future reservation + blocked/OOS）依赖 Room occupancy，而 Sprint 5 正确规定 occupied 房不因维修改 OOS，因此该场景永不命中 C；Active Blocking Maintenance 此前只在 Room/Reservation Drawer 被动展示。
+
+决策：
+
+1. **新增 Rule M（预订存在维修风险，`computeAttention` 第 5 参数 workOrders）**。条件：`Reservation.status == CONFIRMED` AND `check_in_date >= business_date`（含今日到店，不只是未来）AND 同房存在 ≥1 张 `blocks_room=true` 且状态 ∈ OPEN/ASSIGNED/IN_PROGRESS/**RESOLVED** 的工单。与 Room 当前 occupancy 完全无关（occupied/available/reserved/out_of_service 均独立判断）；COMPLETED/CANCELLED 与 blocks_room=false 不产生。workOrders 仅由 `use-front-desk-data` 在持有 `maintenance_order:read` 时批量加载（既有 S5 数据流），无权限传 null → 不产生 M、不发起额外请求、不扩大权限；不新增 Backend API、不改 Schema、不改 Maintenance 状态机、不改 Availability/Check-in/Checkout。
+
+2. **一条预订一条 Attention**。多张 active blocking MWO 合并为一条（problem 显示「阻断性维修 N 项」+ 首张工单号（按 id 升序确定性）与状态中文标签）；`AttentionItem.maintenance = {workOrderId, workOrderNo, count}` 驱动「查看维修」直达首张工单（数据已存在，无需新请求）。
+
+3. **M 优先于 C（Option A）**。同一预订命中 M 时跳过 C，避免「future reservation + unavailable room」与维修风险两张重复卡片；MANUAL blocked/OOS 且无阻断工单时原 Rule C 继续工作（回归锁定）。
+
+4. **桌面 + 移动共享修复**。`computeAttention` 为共享纯函数：桌面 Attention Drawer 与 <768px FrontDeskTodayBoard 均由同一份 attention 列表渲染（桌面由 `front-desk-view` 计算传入，Drawer 内由 bundle 重算）；两者均渲染「查看维修 →」直达链接（无新请求）。
+
+5. **测试口径（修复增量）**。Vitest +15（lib 11：occupied+future、occupied+today（clean 也有提示）、RESOLVED、COMPLETED/CANCELLED、blocks_room=false、多工单合并计数、OOS+blocker 无重复 C、MANUAL OOS Rule C 回归、workOrders null 权限门控、历史日期不命中、activeBlockingOrdersForRoom 过滤排序；桌面集成 3：occupied+future 主动 Attention + 计数、OOS 无重复、无权限不请求不显示；移动板 1：M 渲染 + 查看维修链接）→ Vitest 300；Playwright +1（房间 203：ACTIVE Stay(occupied) → 非重叠未来 CONFIRMED → blocking MWO → 后端保持 occupied/Availability 排除 → /front-desk 不打开任何 Drawer 即主动出现维修风险 + 查看维修链接 → 清理恢复）→ Playwright 60；pytest 285 不变（后端零改动）。
+

@@ -17,6 +17,9 @@ export type CleaningStatus =
   | "inspection"
   | "rework";
 
+/** Sprint 5 §4：Room 不可售来源（MANUAL = 人工锁房，MAINTENANCE = 维修） */
+export type UnavailabilitySource = "MANUAL" | "MAINTENANCE";
+
 export interface Page<T> {
   items: T[];
   total: number;
@@ -149,6 +152,7 @@ export interface RoomOut {
   floor: number;
   occupancy_status: OccupancyStatus;
   cleaning_status: CleaningStatus;
+  unavailability_source?: UnavailabilitySource | null;
   notes: string | null;
   created_at: string;
   updated_at: string;
@@ -454,6 +458,112 @@ export interface HousekeepingTaskListParams extends PageParams {
 /** 可派单候选人（GET /housekeeping/assignees，housekeeping_task:write；
  *  仅员工身份信息，不含任何 Guest PII） */
 export interface HousekeepingAssigneeOut {
+  id: number;
+  display_name: string;
+  username: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Maintenance 域（Sprint 5 后端契约，字段以实际 OpenAPI 为准）         */
+/* ------------------------------------------------------------------ */
+
+export type MaintenanceWorkOrderStatus =
+  | "OPEN"
+  | "ASSIGNED"
+  | "IN_PROGRESS"
+  | "RESOLVED"
+  | "COMPLETED"
+  | "CANCELLED";
+
+export type MaintenanceCategory =
+  | "ELECTRICAL"
+  | "PLUMBING"
+  | "HVAC"
+  | "LOCK"
+  | "BATHROOM"
+  | "FURNITURE"
+  | "APPLIANCE"
+  | "NETWORK"
+  | "FINISHING"
+  | "OTHER";
+
+export type MaintenanceSeverity = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+
+export type MaintenanceSource =
+  | "MANUAL"
+  | "FRONT_DESK"
+  | "HOUSEKEEPING"
+  | "PRE_OPENING";
+
+/**
+ * 维修工单响应。后端使用 response_model_exclude_none：
+ * null 字段以键缺失呈现。工单不关联 Guest / Reservation / Stay，
+ * 响应不含任何 Guest PII 与预订数据（Sprint 5 §30）。
+ */
+export interface MaintenanceWorkOrderOut {
+  id: number;
+  work_order_no: string;
+  room_id: number;
+  room_number: string;
+  room_occupancy_status?: OccupancyStatus;
+  room_cleaning_status?: CleaningStatus;
+  category: MaintenanceCategory;
+  severity: MaintenanceSeverity;
+  status: MaintenanceWorkOrderStatus;
+  source: MaintenanceSource;
+  blocks_room: boolean;
+  title: string;
+  description?: string | null;
+  reported_by_user_id?: number | null;
+  reporter_name?: string | null;
+  assigned_to_user_id?: number | null;
+  assignee_name?: string | null;
+  verified_by_user_id?: number | null;
+  resolution_notes?: string | null;
+  verification_notes?: string | null;
+  started_at?: string | null;
+  resolved_at?: string | null;
+  verified_at?: string | null;
+  completed_at?: string | null;
+  cancelled_at?: string | null;
+  created_by?: number | null;
+  updated_by?: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface MaintenanceWorkOrderCreate {
+  room_id: number;
+  category: MaintenanceCategory;
+  severity?: MaintenanceSeverity;
+  blocks_room?: boolean;
+  source?: MaintenanceSource;
+  title: string;
+  description?: string | null;
+}
+
+/** PATCH 只提交发生变化的字段；status / blocks_room 不得经 PATCH 修改（后端 strict，携带即 422） */
+export interface MaintenanceWorkOrderUpdate {
+  category?: MaintenanceCategory;
+  severity?: MaintenanceSeverity;
+  title?: string;
+  description?: string | null;
+}
+
+export interface MaintenanceWorkOrderListParams extends PageParams {
+  status?: MaintenanceWorkOrderStatus;
+  room_id?: number;
+  category?: MaintenanceCategory;
+  severity?: MaintenanceSeverity;
+  assigned_to?: number;
+  blocks_room?: boolean;
+  source?: MaintenanceSource;
+  search?: string;
+}
+
+/** 可派单候选人（GET /maintenance/assignees，maintenance_order:write；
+ *  持有 maintenance_order:work 的在职用户，不含任何 Guest PII） */
+export interface MaintenanceAssigneeOut {
   id: number;
   display_name: string;
   username: string;

@@ -139,3 +139,22 @@ Kun                     = PROJECT MANAGER + QA
 Sprint 4 范围：`/front-desk` 前台运营工作台 —— Today Summary（到店/离店/在住/空净房/需关注，卡片点击进右侧 Drawer）；Room Diary（28 房 × 1/7/14/30 天时间线，楼层分组 + 楼层/房型筛选，左侧房间栏 sticky，双状态占用+清洁不合并，时间线严格 `[check_in, check_out)` 无 off-by-one）；Reservation Drawer（Check-in/Edit/Cancel/No-show/Full Detail，全部复用 Sprint 2 API；脏房到店明确显示「房间尚未准备完成」+ 保洁任务）；点击空白日期格快速新建（复用 `/reservations/new` 预填，Availability 仍重新验证）；统一搜索（房号/Guest name/phone/reservation_no，PII 受 guest:read 约束）；Attention Center 三条固定规则（脏房到店 / 超期在住 / 锁房未来预订）；Room Quick View；Housekeeping 集成（只消费 Alpha.3）；Mobile（<768px FrontDeskTodayBoard，不渲染完整 Room Diary）；Backend 最小扩展 `overlap_from` / `overlap_to`（Reservation List 日期窗口重叠查询，只读）；写操作后 targeted refetch + 60s 轮询。Alpha.4 不做拖拽排房。
 
 Sprint 4 进展：DSH 单会话完成全部实现（Implementation Complete，无 commit）；Kun Fast QA 第一轮 FAILED（Blocking Defect D1：并发双订偶发 DeadlockDetected 逃逸 500），DSH 已修复并按 Fast Review 收窄分类（仅 23P01/40P01/40001 → 409，其它 OperationalError 原样 re-raise）；Kun Fast QA 复审（S4-D1 Re-QA）PASS：pytest 220 / Vitest 240 / Playwright 连续两轮 46 全绿，独立并发压测 100 轮（50 服务层 + 50 真实 HTTP）0 × 500 且每轮 exactly 1 条；`v1.0.0-alpha.3` 冻结不动，`v1.0.0-alpha.4` 已创建为 Sprint 4 Release Commit。
+
+## Sprint 5（COMPLETE）
+
+```text
+Sprint 5                = COMPLETE
+正式名称                = Maintenance Operations & Room Readiness（维修运营与客房可用性闭环）
+Release                 = v1.0.0-alpha.5（RELEASED）
+开发模式                = FAST TRACK + REUSE FIRST + ONE SPRINT / ONE DSH SESSION（不拆 T1/T2/T3）
+Sprint 5 Coding         = IMPLEMENTATION COMPLETE（单会话一次完成）
+Sprint 5 Fast QA        = PASS（Kun 独立重跑 pytest 285 / Vitest 300 / Playwright 60 全绿 + Blocking Defect 修复复审）
+DSH                     = STOPPED
+Kun                     = PROJECT MANAGER + QA
+```
+
+任务书：`docs/tasks/sprint-05/README.md`（单文档）。
+
+Sprint 5 范围：MaintenanceWorkOrder 正式领域（第三独立业务领域：维修状态 ≠ 占用 ≠ 清洁）；Report → Assign → Start → Resolve → Verify/Rework → Complete → Room Ready 闭环；`blocks_room` 与 `severity` 独立（RESOLVED 仍阻断）；Room 新增 `unavailability_source`（MANUAL/MAINTENANCE，历史 blocked/OOS 安全回填 MANUAL + CHECK 约束）；occupied/reserved/blocked/MANUAL-OOS 房不被维修覆盖；Availability / Check-in 排除 Active Blocking MWO、Checkout Maintenance-aware（blocker → OOS+MAINTENANCE+dirty，保洁任务照常）；多张 blocking 工单与 Last Blocking 规则；Maintenance 只能解除自己造成的 OOS；固定锁顺序 Room → MWO + 并发/回滚正式测试；RBAC（maintenance_order:read/write/work/verify/cancel）/ PII（不关联 Guest）/ 审计（8 个 action + 房态证据）；桌面工作台（/maintenance、/maintenance/[id]、/maintenance/new）+ Mobile 现场报修；Housekeeping「发现设施问题 → 报修」与 Front Desk Quick View 最小集成；PRE_OPENING 复用维修域（开业前 28 房整改清单）；不做附件/库存/预防性维护等。
+
+Sprint 5 进展：DSH 单会话完成全部实现（Implementation Complete，无 commit）：pytest 285（220 基线 + 65 新增）/ Vitest 285（240 基线 + 45 新增）/ Playwright 59（46 基线 + maintenance 2 spec 13 条）全绿；lint / typecheck / build PASS；Clean Bootstrap（empty stayops_test → alembic upgrade head → seed → :8001 / :3001 → full Playwright）PASS；Sprint 1–4 回归全部保留。Kun Fast QA 首轮 FAILED（Blocking Product Defect：occupied + blocking MWO + 未来预订 → Front Desk 无主动维修风险提示）；DSH 已修复（Attention 新增 Rule M：预订存在维修风险，与 Room 占用无关，RESOLVED 仍报警，一条预订一条卡片，M 优先抑制重复 Rule C，桌面 + 移动共享）；Kun Fast RE-QA 独立重跑全绿（pytest 285 / Vitest 300（285 基线 + 15 修复增量）/ Playwright 60（59 基线 + 修复场景 1 条），lint / typecheck / build PASS），缺陷修复复审通过；`v1.0.0-alpha.4` 冻结不动，`v1.0.0-alpha.5` 已创建为 Sprint 5 Release Commit。

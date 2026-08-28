@@ -123,11 +123,22 @@ export default function FrontDeskTodayBoard({
                 </p>
                 <p className="mt-1 text-sm text-gray-800">{item.problem}</p>
                 {item.nextStep === "reservation" ? (
-                  <AttentionReservationButton
-                    item={item}
-                    reservations={reservations}
-                    onOpenReservation={onOpenReservation}
-                  />
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <AttentionReservationButton
+                      item={item}
+                      reservations={reservations}
+                      onOpenReservation={onOpenReservation}
+                    />
+                    {/* Sprint 5 修复：预订存在维修风险 → 直达首张阻断工单 */}
+                    {item.maintenance ? (
+                      <a
+                        href={`/maintenance/${item.maintenance.workOrderId}`}
+                        className="rounded-md border border-red-300 px-2.5 py-1.5 text-xs font-medium text-red-700"
+                      >
+                        查看维修 →
+                      </a>
+                    ) : null}
+                  </div>
                 ) : null}
                 {item.nextStep === "stay" && item.stayId ? (
                   <a

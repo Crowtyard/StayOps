@@ -1,6 +1,6 @@
 # StayOps API
 
-> Sprint 1 第二阶段已实现，Sprint 2 S2-T1 扩展 Booking 域，Sprint 3 扩展 Housekeeping 域。统一前缀 `/api/v1`，JSON 请求/响应，JWT（Bearer）认证。
+> Sprint 1 第二阶段已实现，Sprint 2 S2-T1 扩展 Booking 域，Sprint 3 扩展 Housekeeping 域，Sprint 4 扩展日期窗口重叠查询，Sprint 5 扩展 Maintenance 域（维修运营与客房可用性闭环）。统一前缀 `/api/v1`，JSON 请求/响应，JWT（Bearer）认证。
 
 ## 约定
 
@@ -30,18 +30,18 @@
 | PUT | /roles/{id} | 更新角色 | role:write |
 | DELETE | /roles/{id} | 删除角色（级联清理关联） | role:delete |
 | POST | /roles/{id}/permissions | 设置角色权限（整体替换，空=清空） | role:write |
-| GET | /permissions | 权限列表（分页，31 个 = Sprint 1 的 17 + Booking 的 9 + Housekeeping 的 5） | role:read |
+| GET | /permissions | 权限列表（分页，36 个 = Sprint 1 的 17 + Booking 的 9 + Housekeeping 的 5 + Maintenance 的 5） | role:read |
 | GET | /room-types | 房型列表（分页，含 room_count） | room_type:read |
 | POST | /room-types | 创建房型 | room_type:write |
 | GET | /room-types/{id} | 房型详情 | room_type:read |
 | PUT | /room-types/{id} | 更新房型 | room_type:write |
 | DELETE | /room-types/{id} | 删除房型（有房间时 409） | room_type:delete |
-| GET | /rooms | 房间列表（分页，`?occupancy_status=` / `?cleaning_status=` / `?room_type_id=` 筛选） | room:read |
-| POST | /rooms | 创建房间（occupancy_status 默认 available，cleaning_status 默认 clean） | room:write |
-| GET | /rooms/{id} | 房间详情 | room:read |
+| GET | /rooms | 房间列表（分页，`?occupancy_status=` / `?cleaning_status=` / `?room_type_id=` 筛选；响应含 `unavailability_source`） | room:read |
+| POST | /rooms | 创建房间（occupancy_status 默认 available，cleaning_status 默认 clean；blocked/OOS 时 `unavailability_source` 自动 MANUAL） | room:write |
+| GET | /rooms/{id} | 房间详情（含 `unavailability_source`） | room:read |
 | PUT | /rooms/{id} | 更新房间基础信息（不含状态） | room:write |
 | DELETE | /rooms/{id} | 删除房间 | room:delete |
-| POST | /rooms/{id}/status | 房态变更（状态机校验，非法 409；写审计） | room:write 或 room:status_cleaning / room:status_maintenance（对应目标房态） |
+| POST | /rooms/{id}/status | 房态变更（状态机校验，非法 409；写审计；`unavailability_source` 由后端派生：目标 blocked/OOS → MANUAL，目标 available/reserved/occupied → NULL） | room:write 或 room:status_cleaning / room:status_maintenance（对应目标房态） |
 | GET | /audit-logs | 审计日志列表（分页，`?action=` / `?user_id=` / `?resource_type=` 筛选） | audit:read |
 | GET | /guests | 客人列表（分页，`?search=` 匹配 name OR phone） | guest:read |
 | POST | /guests | 创建客人 | guest:write |
@@ -56,7 +56,7 @@
 | POST | /reservations/{id}/check-in | 办理入住（单事务：Reservation CHECKED_IN + Stay ACTIVE + Room occupied + 审计） | stay:check_in |
 | GET | /stays | 入住列表（分页，`?status=` / `?room_id=` / `?planned_check_out_date=`） | stay:read |
 | GET | /stays/{id} | 入住详情 | stay:read |
-| POST | /stays/{id}/check-out | 办理退房（单事务：Stay CHECKED_OUT + Reservation COMPLETED + Room available+dirty + **Housekeeping Task PENDING 自动创建** + 审计） | stay:check_out |
+| POST | /stays/{id}/check-out | 办理退房（单事务：Stay CHECKED_OUT + Reservation COMPLETED + Room（Sprint 5：存在 Active Blocking MWO → OOS+MAINTENANCE，否则 available）+dirty + **Housekeeping Task PENDING 自动创建** + 审计） | stay:check_out |
 | GET | /housekeeping/tasks | 保洁任务列表（分页，`?status=` / `?room_id=` / `?assigned_to_user_id=` / `?priority=` / `?source=` / `?search=`（task_no OR room_no，非 PII）） | housekeeping_task:read |
 | POST | /housekeeping/tasks | 手动创建任务（仅 dirty 且非 occupied 房间；已有进行中任务 409） | housekeeping_task:write |
 | GET | /housekeeping/tasks/{id} | 任务详情（无 Guest / Reservation 数据） | housekeeping_task:read |
@@ -67,6 +67,17 @@
 | POST | /housekeeping/tasks/{id}/rework | 返工（INSPECTION → REWORK；Room → rework；单事务） | housekeeping_task:inspect |
 | POST | /housekeeping/tasks/{id}/cancel | 取消任务（进行中 → CANCELLED；Room → dirty；单事务） | housekeeping_task:cancel |
 | GET | /housekeeping/assignees | 派单候选人（持有 housekeeping_task:work 的在职用户；不要求 user:read） | housekeeping_task:write |
+| GET | /maintenance/orders | 维修工单列表（分页，`?status=` / `?room_id=` / `?category=` / `?severity=` / `?assigned_to=` / `?blocks_room=` / `?source=` / `?search=`（work_order_no OR room_no OR title，非 Guest PII）） | maintenance_order:read |
+| POST | /maintenance/orders | 报修创建工单（blocking 且房间 available 时同事务置 OOS + source=MAINTENANCE） | maintenance_order:write |
+| GET | /maintenance/orders/{id} | 工单详情（内嵌 Room occupancy/cleaning 双状态；无 Guest / Reservation 数据） | maintenance_order:read |
+| PATCH | /maintenance/orders/{id} | 编辑基础字段（category / severity / title / description）；仅非终态；strict schema（status / blocks_room → 422，空 payload → 422） | maintenance_order:write |
+| POST | /maintenance/orders/{id}/assign | 派单 / 改派（OPEN / ASSIGNED；被指派人必须在职；422 不存在/停用） | maintenance_order:write |
+| POST | /maintenance/orders/{id}/start | 开始维修（仅 ASSIGNED → IN_PROGRESS） | maintenance_order:work |
+| POST | /maintenance/orders/{id}/resolve | 提交解决（IN_PROGRESS → RESOLVED；可选 `resolution_notes`） | maintenance_order:work |
+| POST | /maintenance/orders/{id}/verify | 验收通过（仅 RESOLVED → COMPLETED；记录 verified_at / verified_by / verification_notes；最后一张 blocking 工单且 Room OOS+MAINTENANCE → Room 恢复 available） | maintenance_order:verify |
+| POST | /maintenance/orders/{id}/rework | 验收不通过（仅 RESOLVED → IN_PROGRESS；记录返工原因；blocking 继续阻断） | maintenance_order:verify |
+| POST | /maintenance/orders/{id}/cancel | 取消工单（非终态 → CANCELLED；最后一张 blocking 且 Room OOS+MAINTENANCE → Room 恢复） | maintenance_order:cancel |
+| GET | /maintenance/assignees | 派单候选人（持有 maintenance_order:work 的在职用户；不要求 user:read） | maintenance_order:write |
 
 ## 认证与权限
 
@@ -247,6 +258,96 @@ REWORK  → rework  COMPLETED    → clean     CANCELLED   → dirty
 ```
 
 （示例日期仅为文档说明；自动化测试一律动态日期。任务响应不含任何 Guest / Reservation 数据。）
+
+## Maintenance 域（Sprint 5）
+
+### 领域原则
+
+**Maintenance Status ≠ Room Occupancy Status ≠ Cleaning Status**。维修工单是第三个独立业务领域；
+`blocks_room`（阻断客房销售）与 `severity`（严重度）相互独立 —— CRITICAL 不自动阻断。
+
+### 状态机（后端唯一权威，非法跳转 409）
+
+```text
+OPEN → ASSIGNED → IN_PROGRESS → RESOLVED → COMPLETED（终态）
+  │                    ▲              │  │
+  │                    └── Rework ────┘  └── CANCELLED（终态，任意非终态可取消）
+```
+
+- 状态只能经专用 action 端点变更（assign / start / resolve / verify / rework / cancel）；
+  PATCH 不含 status / blocks_room。
+- `start` 仅 ASSIGNED → IN_PROGRESS；`rework` 仅 RESOLVED → IN_PROGRESS（两条边共享目标，
+  由 action 层守卫区分）。
+- Active Blocking 状态 = OPEN / ASSIGNED / IN_PROGRESS / RESOLVED
+  （**RESOLVED 仍阻断**：维修完成 ≠ 酒店验收通过）。
+
+### blocks_room 语义与 Room 联动（单事务 + 审计，任一步失败全部回滚）
+
+- 创建 blocking 工单：Room = available → 同事务 OOS + `unavailability_source=MAINTENANCE`；
+  Room = occupied / reserved / blocked / OOS(MANUAL) → 保留当前占用与来源，工单本身阻断可售性。
+- 最后一张 blocking 工单 verify / cancel：仅当 active blocking MWO == 0
+  且 Room = OOS 且 source = MAINTENANCE → Room 恢复 available + source NULL；
+  **MANUAL OOS / blocked 永不被 Maintenance 解除**；Cleaning Status 始终保持原值。
+- 锁顺序（全项目一致）：Room → MaintenanceWorkOrder；verify / cancel / create(blocking) /
+  Checkout 集成均先锁 Room。
+
+### Availability / Check-in / Checkout 集成
+
+- Availability：排除 Active Blocking MWO 的房间（无论 Room 当前 occupancy 为何）。
+- Check-in 最终条件增加：no active blocking MWO，否则 409
+  「该房间存在进行中的阻断性维修工单，无法办理入住」。
+- Checkout：存在 active blocking MWO → Room = OOS + MAINTENANCE + dirty；
+  否则 available + dirty；已 OOS(MANUAL) → 保持停用与来源。HousekeepingTask 照常创建。
+
+### PII（Sprint 5 §30）
+
+工单不关联 Guest / Reservation / Stay，不保存 Guest name / phone / email /
+reservation amount / Guest notes；响应与审计不含任何 Guest PII。
+维修人员不因 maintenance_order:* 权限获得任何 Guest PII 出口。
+
+### 业务单号
+
+`work_order_no` 服务端生成：`MWO{YYYYMMDD}-{NNNN}`（日期 = Property Business Date；
+NNNN = PG Sequence `maintenance_work_order_no_seq` 原子取号，UNIQUE 约束兜底）。禁止客户端传入。
+
+### 409 / 422 场景清单（Maintenance 域）
+
+409：非法状态转换（start 非 ASSIGNED / resolve 非 IN_PROGRESS / verify·rework 非 RESOLVED /
+assign 非 OPEN·ASSIGNED / cancel 终态）、终态 PATCH、房间不存在（404）。
+422：PATCH 携带 status / blocks_room / 未知字段、空 payload、被指派人不存在或停用、
+标题缺失或超长。
+并发仲裁：40P01 / 40001 → 409（业务冲突），其它 OperationalError 原样传播（不吞 500）。
+
+### 响应示例
+
+`GET /api/v1/maintenance/orders/{id}`（`response_model_exclude_none`：null 字段以键缺失呈现）：
+
+```json
+{
+  "id": 1,
+  "work_order_no": "MWO20260901-0001",
+  "room_id": 13,
+  "room_number": "203",
+  "room_occupancy_status": "out_of_service",
+  "room_cleaning_status": "dirty",
+  "category": "HVAC",
+  "severity": "HIGH",
+  "status": "IN_PROGRESS",
+  "source": "HOUSEKEEPING",
+  "blocks_room": true,
+  "title": "空调不制冷",
+  "description": "出风口无冷风",
+  "reported_by_user_id": 3,
+  "reporter_name": "保洁小王",
+  "assigned_to_user_id": 9,
+  "assignee_name": "维修老张",
+  "started_at": "2026-09-01T10:00:00+08:00",
+  "created_at": "2026-09-01T09:30:00+08:00",
+  "updated_at": "2026-09-01T10:00:00+08:00"
+}
+```
+
+（示例日期仅为文档说明；自动化测试一律动态日期。响应不含任何 Guest / Reservation 数据。）
 
 ## 示例
 

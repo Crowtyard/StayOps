@@ -18,9 +18,9 @@ def test_list_seeded_roles(client, admin_headers):
     body = resp.json()
     assert body["total"] == 6
     assert {r["name"] for r in body["items"]} == SEEDED_ROLES
-    # SUPER_ADMIN 拥有全部 31 个权限（17 基线 + 9 Booking + 5 Housekeeping）
+    # SUPER_ADMIN 拥有全部 36 个权限（17 基线 + 9 Booking + 5 Housekeeping + 5 Maintenance）
     super_admin = next(r for r in body["items"] if r["name"] == "SUPER_ADMIN")
-    assert len(super_admin["permissions"]) == 31
+    assert len(super_admin["permissions"]) == 36
 
 
 def test_create_and_get_role(client, admin_headers):

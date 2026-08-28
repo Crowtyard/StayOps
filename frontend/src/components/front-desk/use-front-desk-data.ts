@@ -7,6 +7,9 @@
  * - GET /reservations?overlap_from&overlap_to（时间线窗口批量拉取，Sprint 4 后端扩展）
  * - GET /stays?status=ACTIVE（当前在住，stay:read）
  * - GET /housekeeping/tasks（保洁任务，housekeeping_task:read；展示层过滤进行中）
+ * - GET /maintenance/orders（维修工单，maintenance_order:read；Sprint 5 §38 最小集成：
+ *   Room Quick View / Reservation Quick View 展示 Active MWO + status + blocks_room
+ *   + assignee；无权限不请求不显示）
  *
  * 权限边界：无权限不请求、不显示（403 由后端最终裁决）。
  * 注意力中心（三条规则）与 Today Summary 完全由本 bundle 在客户端组合计算，
@@ -17,6 +20,7 @@ import { useEffect, useState } from "react";
 import { ApiError, api } from "@/lib/api";
 import type {
   HousekeepingTaskOut,
+  MaintenanceWorkOrderOut,
   Page,
   ReservationOut,
   RoomOut,
@@ -31,6 +35,8 @@ export interface FrontDeskBundle {
   stays: StayOut[] | null;
   /** 全部保洁任务（展示层过滤进行中）。 */
   tasks: HousekeepingTaskOut[] | null;
+  /** 全部维修工单（展示层过滤 Active，Sprint 5）。 */
+  workOrders: MaintenanceWorkOrderOut[] | null;
   /** 权限允许加载的必选数据（rooms + reservations + 可选域）是否已就绪。 */
   ready: boolean;
   error: ApiError | null;
@@ -62,6 +68,7 @@ export function useFrontDeskData(
   const canReservation = permissions.has("reservation:read");
   const canStay = permissions.has("stay:read");
   const canHousekeeping = permissions.has("housekeeping_task:read");
+  const canMaintenance = permissions.has("maintenance_order:read");
 
   const [rooms, setRooms] = useState<RoomOut[] | null>(null);
   const [reservations, setReservations] = useState<ReservationOut[] | null>(
@@ -69,6 +76,9 @@ export function useFrontDeskData(
   );
   const [stays, setStays] = useState<StayOut[] | null>(null);
   const [tasks, setTasks] = useState<HousekeepingTaskOut[] | null>(null);
+  const [workOrders, setWorkOrders] = useState<MaintenanceWorkOrderOut[] | null>(
+    null,
+  );
   const [error, setError] = useState<ApiError | null>(null);
   const [forbidden, setForbidden] = useState(false);
 
@@ -133,6 +143,19 @@ export function useFrontDeskData(
           }),
       );
     }
+    if (canMaintenance) {
+      jobs.push(
+        fetchAllPages((page) =>
+          api.maintenance.list({ page, page_size: 100 }),
+        )
+          .then((items) => {
+            if (!cancelled) setWorkOrders(items);
+          })
+          .catch((err: unknown) => {
+            if (!cancelled) throw err;
+          }),
+      );
+    }
 
     Promise.all(jobs)
       .then(() => {
@@ -166,13 +189,15 @@ export function useFrontDeskData(
     canReservation,
     canStay,
     canHousekeeping,
+    canMaintenance,
   ]);
 
   const ready =
     rooms !== null &&
     reservations !== null &&
     (!canStay || stays !== null) &&
-    (!canHousekeeping || tasks !== null);
+    (!canHousekeeping || tasks !== null) &&
+    (!canMaintenance || workOrders !== null);
 
-  return { rooms, reservations, stays, tasks, ready, error, forbidden };
+  return { rooms, reservations, stays, tasks, workOrders, ready, error, forbidden };
 }

@@ -11,7 +11,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.models.room import CleaningStatus, OccupancyStatus
+from app.models.room import CleaningStatus, OccupancyStatus, UnavailabilitySource
 
 
 class RoomTypeCreate(BaseModel):
@@ -90,6 +90,7 @@ class RoomOut(BaseModel):
     floor: int
     occupancy_status: OccupancyStatus
     cleaning_status: CleaningStatus
+    unavailability_source: UnavailabilitySource | None = None
     notes: str | None
     created_at: datetime
     updated_at: datetime

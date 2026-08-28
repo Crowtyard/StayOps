@@ -15,6 +15,10 @@ export interface TestCredentials {
   frontdeskPassword: string;
   housekeepingUsername: string;
   housekeepingPassword: string;
+  managerUsername: string;
+  managerPassword: string;
+  maintenanceUsername: string;
+  maintenancePassword: string;
 }
 
 const REQUIRED_KEYS = [
@@ -24,6 +28,10 @@ const REQUIRED_KEYS = [
   "E2E_FRONT_DESK_PASSWORD",
   "E2E_HOUSEKEEPING_USERNAME",
   "E2E_HOUSEKEEPING_PASSWORD",
+  "E2E_MANAGER_USERNAME",
+  "E2E_MANAGER_PASSWORD",
+  "E2E_MAINTENANCE_USERNAME",
+  "E2E_MAINTENANCE_PASSWORD",
 ] as const;
 
 type EnvMap = Record<(typeof REQUIRED_KEYS)[number], string>;
@@ -60,5 +68,9 @@ export function loadTestCredentials(): TestCredentials {
     frontdeskPassword: env.E2E_FRONT_DESK_PASSWORD,
     housekeepingUsername: env.E2E_HOUSEKEEPING_USERNAME,
     housekeepingPassword: env.E2E_HOUSEKEEPING_PASSWORD,
+    managerUsername: env.E2E_MANAGER_USERNAME,
+    managerPassword: env.E2E_MANAGER_PASSWORD,
+    maintenanceUsername: env.E2E_MAINTENANCE_USERNAME,
+    maintenancePassword: env.E2E_MAINTENANCE_PASSWORD,
   };
 }

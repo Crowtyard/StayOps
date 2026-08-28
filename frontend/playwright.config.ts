@@ -20,6 +20,10 @@ process.env.E2E_FRONT_DESK_USERNAME = creds.frontdeskUsername;
 process.env.E2E_FRONT_DESK_PASSWORD = creds.frontdeskPassword;
 process.env.E2E_HOUSEKEEPING_USERNAME = creds.housekeepingUsername;
 process.env.E2E_HOUSEKEEPING_PASSWORD = creds.housekeepingPassword;
+process.env.E2E_MANAGER_USERNAME = creds.managerUsername;
+process.env.E2E_MANAGER_PASSWORD = creds.managerPassword;
+process.env.E2E_MAINTENANCE_USERNAME = creds.maintenanceUsername;
+process.env.E2E_MAINTENANCE_PASSWORD = creds.maintenancePassword;
 
 export default defineConfig({
   testDir: "./e2e",

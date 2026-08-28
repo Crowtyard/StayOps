@@ -19,6 +19,7 @@ import Link from "next/link";
 import { ApiError, api } from "@/lib/api";
 import type {
   HousekeepingTaskOut,
+  MaintenanceWorkOrderOut,
   ReservationOut,
   RoomOut,
   StayOut,
@@ -32,6 +33,10 @@ import {
   HK_SOURCE_LABELS,
   HK_TASK_STATUS_META,
 } from "@/lib/housekeeping";
+import {
+  MWO_CATEGORY_LABELS,
+  MWO_STATUS_META,
+} from "@/lib/maintenance";
 import {
   activeTaskForRoom,
   attentionRuleLabel,
@@ -222,6 +227,72 @@ function HousekeepingInfo({
   return null;
 }
 
+const MWO_ACTIVE_STATUSES = ["OPEN", "ASSIGNED", "IN_PROGRESS", "RESOLVED"];
+
+/** 维修工单信息块（Sprint 5 §38：仅 maintenance_order:read 时渲染；
+ *  展示 Active 工单 + status + blocks_room + assignee + 查看维修）。 */
+function MaintenanceInfo({
+  workOrders,
+  canRead,
+}: {
+  workOrders: MaintenanceWorkOrderOut[];
+  canRead: boolean;
+}) {
+  if (!canRead) return null;
+  const active = workOrders.filter((o) =>
+    MWO_ACTIVE_STATUSES.includes(o.status),
+  );
+  if (active.length === 0) return null;
+  return (
+    <div className="space-y-2">
+      {active.map((order) => {
+        const meta = MWO_STATUS_META[order.status];
+        const blocking =
+          order.blocks_room && MWO_ACTIVE_STATUSES.includes(order.status);
+        return (
+          <div
+            key={order.id}
+            className={`rounded-md border px-3 py-2 text-sm ${
+              blocking
+                ? "border-red-200 bg-red-50"
+                : "border-gray-200 bg-gray-50"
+            }`}
+          >
+            <p
+              className={`font-medium ${
+                blocking ? "text-red-900" : "text-gray-900"
+              }`}
+            >
+              维修工单 {order.work_order_no}
+              {blocking ? " · 阻断客房" : ""}
+            </p>
+            <p
+              className={`mt-0.5 text-xs ${
+                blocking ? "text-red-800" : "text-gray-600"
+              }`}
+            >
+              {MWO_CATEGORY_LABELS[order.category]} · {meta?.label ?? order.status}
+              {order.assignee_name
+                ? ` · 负责人 ${order.assignee_name}`
+                : " · 未派单"}
+            </p>
+            <Link
+              href={`/maintenance/${order.id}`}
+              className={`mt-1.5 inline-block text-xs font-medium underline underline-offset-2 ${
+                blocking
+                  ? "text-red-900 hover:text-red-700"
+                  : "text-gray-900 hover:text-gray-700"
+              }`}
+            >
+              查看维修 →
+            </Link>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /* 列表类抽屉                                                           */
 /* ------------------------------------------------------------------ */
@@ -399,6 +470,7 @@ function AttentionView({
         bundle.stays ?? [],
         bundle.rooms ?? [],
         today,
+        bundle.workOrders ?? [],
       ),
     [bundle, today],
   );
@@ -447,6 +519,15 @@ function AttentionView({
                 查看在住
               </Link>
             ) : null}
+            {/* Sprint 5 修复：预订存在维修风险 → 直达首张阻断工单 */}
+            {item.maintenance ? (
+              <Link
+                href={`/maintenance/${item.maintenance.workOrderId}`}
+                className="rounded-md border border-red-300 px-2.5 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50"
+              >
+                查看维修 →
+              </Link>
+            ) : null}
             {item.nextStep === "room" ? (
               <button
                 type="button"
@@ -491,6 +572,7 @@ function ReservationQuickView({
   const canNoShow = permissions.has("reservation:no_show");
   const canReadStay = permissions.has("stay:read");
   const canReadHousekeeping = permissions.has("housekeeping_task:read");
+  const canReadMaintenance = permissions.has("maintenance_order:read");
 
   // 抽屉内目标预订：优先窗口 bundle，缺失时（搜索命中窗口外）定向拉取
   const [fetched, setFetched] = useState<ReservationOut | null>(null);
@@ -534,6 +616,10 @@ function ReservationQuickView({
     room && canReadHousekeeping
       ? activeTaskForRoom(bundle.tasks ?? [], room.id)
       : null;
+  const roomWorkOrders =
+    room && canReadMaintenance
+      ? (bundle.workOrders ?? []).filter((o) => o.room_id === room.id)
+      : [];
 
   if (fetchError) {
     return (
@@ -672,6 +758,14 @@ function ReservationQuickView({
         <HousekeepingInfo task={task} room={room} canRead={canReadHousekeeping} />
       ) : null}
 
+      {/* Sprint 5 §38：Active Maintenance Work Order（含阻断）感知 */}
+      {room && roomWorkOrders.length > 0 ? (
+        <MaintenanceInfo
+          workOrders={roomWorkOrders}
+          canRead={canReadMaintenance}
+        />
+      ) : null}
+
       {isConfirmed && !arrivalToday ? (
         <p className="text-xs text-gray-500">
           入住日期 {reservation.check_in_date}，未到入住日
@@ -798,6 +892,7 @@ function RoomQuickView({
   const canReadGuest = permissions.has("guest:read");
   const canReadStay = permissions.has("stay:read");
   const canReadHousekeeping = permissions.has("housekeeping_task:read");
+  const canReadMaintenance = permissions.has("maintenance_order:read");
   const canCreateReservation = permissions.has("reservation:write");
 
   const room = (bundle.rooms ?? []).find((r) => r.id === roomId);
@@ -809,6 +904,10 @@ function RoomQuickView({
     canReadHousekeeping && room
       ? activeTaskForRoom(bundle.tasks ?? [], room.id)
       : null;
+  const roomWorkOrders =
+    canReadMaintenance && room
+      ? (bundle.workOrders ?? []).filter((o) => o.room_id === room.id)
+      : [];
 
   // next reservation：抽屉打开时定向查询该房间（单次请求，不构成 N+1 页面级请求）
   const [nextReservations, setNextReservations] = useState<
@@ -859,6 +958,14 @@ function RoomQuickView({
 
       {canReadHousekeeping && room.cleaning_status !== "clean" ? (
         <HousekeepingInfo task={task} room={room} canRead={canReadHousekeeping} />
+      ) : null}
+
+      {/* Sprint 5 §38：Active Maintenance Work Order + status + blocks_room + assignee */}
+      {roomWorkOrders.length > 0 ? (
+        <MaintenanceInfo
+          workOrders={roomWorkOrders}
+          canRead={canReadMaintenance}
+        />
       ) : null}
 
       {canReadStay ? (

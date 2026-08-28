@@ -76,6 +76,12 @@ PERMISSIONS: dict[str, tuple[str, str]] = {
     "housekeeping_task:work": ("执行保洁任务", "开始清扫与提交验房"),
     "housekeeping_task:inspect": ("验收保洁任务", "验房通过或返工"),
     "housekeeping_task:cancel": ("取消保洁任务", "取消进行中的保洁任务"),
+    # Sprint 5：Maintenance 域权限（用 permission 判断，不用角色名）
+    "maintenance_order:read": ("查看维修工单", "查看维修工单列表与详情"),
+    "maintenance_order:write": ("编辑维修工单", "创建维修工单、编辑与派单"),
+    "maintenance_order:work": ("执行维修工单", "开始维修与提交解决"),
+    "maintenance_order:verify": ("验收维修工单", "验收通过或返工"),
+    "maintenance_order:cancel": ("取消维修工单", "取消进行中的维修工单"),
 }
 
 ROLES: dict[str, str] = {
@@ -115,6 +121,20 @@ HK_TASK_ALL: list[str] = [
     "housekeeping_task:cancel",
 ]
 
+# Sprint 5：Maintenance 域角色矩阵（SUPER_ADMIN 动态全部，Sprint 5 §31）
+#   MANAGER     = read + write + work + verify + cancel
+#   FRONT_DESK  = read + write
+#   HOUSEKEEPING= read + write
+#   MAINTENANCE = read + work
+#   FINANCE     = 无
+MWO_ALL: list[str] = [
+    "maintenance_order:read",
+    "maintenance_order:write",
+    "maintenance_order:work",
+    "maintenance_order:verify",
+    "maintenance_order:cancel",
+]
+
 ROLE_PERMISSIONS: dict[str, list[str]] = {
     "SUPER_ADMIN": [],
     "MANAGER": [
@@ -129,6 +149,7 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
         "audit:write",
         *BOOKING_PERMISSIONS,
         *HK_TASK_ALL,
+        *MWO_ALL,
     ],
     "FRONT_DESK": [
         "room:read",
@@ -138,6 +159,8 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
         *BOOKING_PERMISSIONS,
         "housekeeping_task:read",
         "housekeeping_task:write",
+        "maintenance_order:read",
+        "maintenance_order:write",
     ],
     "HOUSEKEEPING": [
         "room:read",
@@ -145,8 +168,15 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
         "housekeeping_task:read",
         "housekeeping_task:work",
         "housekeeping_task:inspect",
+        "maintenance_order:read",
+        "maintenance_order:write",
     ],
-    "MAINTENANCE": ["room:read", "room:status_maintenance"],
+    "MAINTENANCE": [
+        "room:read",
+        "room:status_maintenance",
+        "maintenance_order:read",
+        "maintenance_order:work",
+    ],
     "FINANCE": ["audit:read", "room:read"],
 }
 

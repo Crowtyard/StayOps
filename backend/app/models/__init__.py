@@ -9,12 +9,20 @@ from app.models.housekeeping import (
     HousekeepingTaskSource,
     HousekeepingTaskStatus,
 )
+from app.models.maintenance import (
+    MaintenanceCategory,
+    MaintenanceSeverity,
+    MaintenanceSource,
+    MaintenanceWorkOrder,
+    MaintenanceWorkOrderStatus,
+)
 from app.models.reservation import Reservation, ReservationSource, ReservationStatus
 from app.models.room import (
     CleaningStatus,
     OccupancyStatus,
     Room,
     RoomType,
+    UnavailabilitySource,
 )
 from app.models.stay import Stay, StayStatus
 from app.models.user import Permission, Role, RolePermission, User, UserRole
@@ -27,6 +35,11 @@ __all__ = [
     "HousekeepingTaskPriority",
     "HousekeepingTaskSource",
     "HousekeepingTaskStatus",
+    "MaintenanceCategory",
+    "MaintenanceSeverity",
+    "MaintenanceSource",
+    "MaintenanceWorkOrder",
+    "MaintenanceWorkOrderStatus",
     "Permission",
     "Reservation",
     "ReservationSource",
@@ -35,6 +48,7 @@ __all__ = [
     "RolePermission",
     "CleaningStatus",
     "OccupancyStatus",
+    "UnavailabilitySource",
     "Room",
     "RoomType",
     "Stay",

@@ -19,6 +19,7 @@ import {
   IconDesk,
   IconHome,
   IconLogout,
+  IconMaintenance,
   IconMenu,
   IconRefresh,
   IconRooms,
@@ -72,6 +73,12 @@ const NAV_ITEMS: NavItem[] = [
     label: "保洁",
     icon: <IconCleaning />,
     permission: "housekeeping_task:read",
+  },
+  {
+    href: "/maintenance",
+    label: "维修",
+    icon: <IconMaintenance />,
+    permission: "maintenance_order:read",
   },
   {
     href: "/settings/room-types",

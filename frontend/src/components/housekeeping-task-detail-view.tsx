@@ -53,6 +53,8 @@ export default function HousekeepingTaskDetailView({ id }: { id: string }) {
   const canInspect = permissions.has("housekeeping_task:inspect");
   const canCancel = permissions.has("housekeeping_task:cancel");
   const canReadRooms = permissions.has("room:read");
+  // Sprint 5 §37：发现设施问题 → 报修（仅 maintenance_order:write 时显示）
+  const canReportMaintenance = permissions.has("maintenance_order:write");
 
   const [task, setTask] = useState<HousekeepingTaskOut | null>(null);
   const [room, setRoom] = useState<RoomOut | null>(null);
@@ -320,7 +322,19 @@ export default function HousekeepingTaskDetailView({ id }: { id: string }) {
         </SectionCard>
 
         {canReadRooms && room ? (
-          <SectionCard title="房间现场状态">
+          <SectionCard
+            title="房间现场状态"
+            action={
+              canReportMaintenance ? (
+                <Link
+                  href={`/maintenance/new?room_id=${task.room_id}&source=HOUSEKEEPING`}
+                  className="inline-flex items-center gap-1 rounded-md border border-amber-300 px-2.5 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-50"
+                >
+                  发现设施问题 → 报修
+                </Link>
+              ) : undefined
+            }
+          >
             <div className="flex flex-wrap items-center gap-3">
               <span className="text-sm text-gray-600">房间 {room.room_number}：</span>
               <OccupancyBadge status={room.occupancy_status} />

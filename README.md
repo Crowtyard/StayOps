@@ -55,15 +55,15 @@ pnpm.cmd dev                        # http://localhost:3000
 ## 测试
 
 ```powershell
-# 后端 pytest（独立测试库 stayops_test，220 用例 = 87 基线 + 76 Booking + 4 严格 PATCH + 35 Housekeeping + 11 Front Desk 窗口查询 + 7 D1 死锁窄分类）
+# 后端 pytest（独立测试库 stayops_test，285 用例 = 87 基线 + 76 Booking + 4 严格 PATCH + 35 Housekeeping + 11 Front Desk 窗口查询 + 7 D1 死锁窄分类 + 65 Maintenance）
 cd backend
 .venv\Scripts\python.exe -m pytest -q
 
-# 前端单元/组件测试（Vitest，240 用例 = 74 基线 + 65 Booking UI + 31 Housekeeping UI + 70 Front Desk UI）
+# 前端单元/组件测试（Vitest，285 用例 = 74 基线 + 65 Booking UI + 31 Housekeeping UI + 70 Front Desk UI + 45 Maintenance UI）
 cd frontend
 pnpm.cmd test
 
-# Playwright E2E（独立 stayops_test 库 + 专用端口 8001/3001，46 用例 = Sprint 1 基线 10 + S2-T3 新增 19 + S3 新增 7 + S4 新增 10；不触碰开发数据）
+# Playwright E2E（独立 stayops_test 库 + 专用端口 8001/3001，59 用例 = Sprint 1 基线 10 + S2-T3 新增 19 + S3 新增 7 + S4 新增 10 + S5 新增 13；不触碰开发数据）
 cd frontend
 Copy-Item e2e\test-creds.example e2e\.env.test-creds   # 首次：填入测试库凭据（gitignored）
 pnpm.cmd test:e2e
@@ -80,6 +80,10 @@ pnpm.cmd test:e2e
 > Drawer Check-in → 刷新 → Check-out → dirty + 保洁任务）、相邻预订首尾相接、
 > Attention 三规则（脏房到店 / 超期在住 / 锁房未来预订）、Housekeeping 完成闭环后
 > Check-in、搜索定位、PII、RBAC、Mobile Today Board / Tablet；
+> E2E 覆盖（S5）：维修 Golden Path（保洁发现 → 阻断报修 → 派工 → 维修 → 验收 →
+> 房间恢复 → 清洁后 Check-in Ready + 全链路审计）、PRE_OPENING、Mobile 报修表单、
+> occupied blocker / future reservation / multiple blockers / Rework / Cancel /
+> Manual OOS 保护 / Check-in 409 / RBAC / PII / 完成 ≠ 清洁；
 > 详见 [frontend/e2e/README.md](frontend/e2e/README.md)。
 
 详见 [tests/README.md](tests/README.md)、[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
@@ -112,11 +116,33 @@ pnpm.cmd test:e2e
 - 点击空白日期格：新建预订（复用 `/reservations/new` 预填 room/check_in/check_out=+1，
   Availability 仍重新验证）/ 查看房间
 - 统一搜索：房号 / Guest name / phone / reservation_no（PII 受 guest:read 约束）
-- Attention Center 三条固定规则：脏房到店（A）/ 超期在住（B）/ 锁房未来预订（C）
+- Attention Center 固定规则：脏房到店（A）/ 超期在住（B）/ 锁房未来预订（C）/
+  预订存在维修风险（M，Sprint 5 修复：CONFIRMED 且 check_in ≥ 今日 + Active Blocking MWO，
+  与 Room 占用状态无关；多张工单合并为一条；Maintenance 规则优先于 C 避免重复）
 - Mobile（<768px）：FrontDeskTodayBoard（不渲染完整 Room Diary）；768–1023 紧凑 Diary
 - 导航按权限显示：`room:read` + `reservation:read` 同时满足 → 前台；
   SUPER_ADMIN / MANAGER / FRONT_DESK 可见，HOUSEKEEPING / MAINTENANCE / FINANCE 隐藏
 - Backend 最小扩展：`GET /reservations?overlap_from&overlap_to` 日期窗口重叠查询（只读）
+
+## 维修运营（Sprint 5）
+
+- 页面：`/maintenance`（维修运营工作台：待处理/已派工/维修中/待验收/阻断客房/今日完成 +
+  分类/严重度/来源/阻断/负责人筛选 + 搜索）、`/maintenance/[id]`（工单详情：房间双状态、
+  时间线、派工/编辑 + Assign/Start/Resolve/Verify/Rework/Cancel）、
+  `/maintenance/new`（现场报修表单，Mobile 友好，`?room_id=&source=` 预填）
+- 闭环：`报修 → 派工 → 开始维修 → 提交解决 → 验收/返工 → 完成 → 房间恢复可售 → 清洁后 Ready`
+- `blocks_room`（阻断客房销售）与 `severity` 相互独立；RESOLVED 仍阻断（维修完成 ≠ 验收通过）
+- Room 新增 `unavailability_source`（MANUAL / MAINTENANCE）：available 房报修阻断 →
+  同事务 OOS+MAINTENANCE；occupied/reserved/blocked/MANUAL-OOS 不被覆盖；
+  Maintenance 只能解除自己造成的 OOS；多张工单时按 Last Blocking 规则恢复
+- Availability / Check-in 排除 Active Blocking 工单（后端 409 最终权威）；
+  Checkout Maintenance-aware（有阻断工单 → OOS+MAINTENANCE+dirty，保洁任务照常）
+- Housekeeping 任务详情「发现设施问题 → 报修」；Front Desk Quick View 展示 Active 工单
+- PRE_OPENING 来源支持开业前 28 房整改清单（复用维修域，不做独立开业模块）
+- 导航按权限显示：`maintenance_order:read` → 维修；
+  RBAC：SUPER_ADMIN / MANAGER 全部，FRONT_DESK / HOUSEKEEPING read+write，
+  MAINTENANCE read+work，FINANCE 无
+- 工单不保存任何 Guest PII；8 个 action 全链路审计（后端自动，含房态恢复证据）
 
 ## 文档
 
@@ -136,15 +162,19 @@ pnpm.cmd test:e2e
 > Kun Fast QA PASS，v1.0.0-alpha.3 已发布。
 > Sprint 4 完成（Front Desk Command Center & Room Diary：前台运营指挥台 / 房态日历 / 快速新建 / 统一搜索 / Attention Center / 移动端 Today Board），
 > Kun Fast QA PASS（含 Blocking Defect D1 修复复审），v1.0.0-alpha.4 已发布。
+> Sprint 5 完成（Maintenance Operations & Room Readiness：维修工单领域 / 阻断语义 / 派工维修验收闭环 /
+> 房间不可售来源 / Availability·Check-in·Checkout 集成 / 保洁·前台最小集成 / PRE_OPENING / RBAC / PII / 审计 / 并发安全），
+> Kun Fast QA 首轮发现 Blocking Defect（occupied + blocking 工单 + 未来预订 → 前台无主动维修风险提示）已修复，
+> Fast RE-QA PASS（pytest 285 / Vitest 300 / Playwright 60 / lint / typecheck / build 全绿），v1.0.0-alpha.5 已发布。
 
 ## Current Release
 
-Version: v1.0.0-alpha.4
+Version: v1.0.0-alpha.5
 
-Status: Sprint 4 Fast QA PASS
+Status: Sprint 5 Fast QA PASS
 
-This is the fourth stable Alpha development baseline of StayOps（Front Desk Command Center & Room Diary）。
+This is the fifth stable Alpha development baseline of StayOps（Maintenance Operations & Room Readiness）。
 
-Sprint 4 implementation complete; Kun Fast QA PASS（pytest 220 / Vitest 240 / Playwright 46 全绿 ×2 轮；D1 并发死锁修复复审通过，独立压测 100 轮 0 × 500）; v1.0.0-alpha.4 released.
+Sprint 5 implementation complete; Kun Fast QA 首轮 FAILED（Blocking Product Defect：occupied Room + Active Blocking MWO + future CONFIRMED Reservation 时 Front Desk 无主动维修风险提示）；DSH 已修复（Attention Rule M：预订存在维修风险，桌面 + 移动共享）；Kun Fast RE-QA PASS（pytest 285 / Vitest 300 / Playwright 60 全绿；lint / typecheck / build PASS）; v1.0.0-alpha.5 released.
 
 Not intended for production deployment.

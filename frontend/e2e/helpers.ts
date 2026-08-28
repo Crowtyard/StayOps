@@ -40,6 +40,30 @@ export function housekeepingPassword(): string {
   return v;
 }
 
+export function managerUsername(): string {
+  const v = process.env.E2E_MANAGER_USERNAME;
+  if (!v) throw new Error("缺少 E2E_MANAGER_USERNAME 环境变量");
+  return v;
+}
+
+export function managerPassword(): string {
+  const v = process.env.E2E_MANAGER_PASSWORD;
+  if (!v) throw new Error("缺少 E2E_MANAGER_PASSWORD 环境变量");
+  return v;
+}
+
+export function maintenanceUsername(): string {
+  const v = process.env.E2E_MAINTENANCE_USERNAME;
+  if (!v) throw new Error("缺少 E2E_MAINTENANCE_USERNAME 环境变量");
+  return v;
+}
+
+export function maintenancePassword(): string {
+  const v = process.env.E2E_MAINTENANCE_PASSWORD;
+  if (!v) throw new Error("缺少 E2E_MAINTENANCE_PASSWORD 环境变量");
+  return v;
+}
+
 export async function login(
   page: Page,
   username: string,
@@ -50,6 +74,12 @@ export async function login(
   await page.getByLabel("密码").fill(password);
   await page.getByRole("button", { name: "登录" }).click();
   await expect(page).toHaveURL(/\/dashboard/);
+}
+
+/** 顶栏退出登录并等待回到登录页（切换账号前调用）。 */
+export async function logout(page: Page): Promise<void> {
+  await page.getByRole("button", { name: "退出" }).click();
+  await expect(page).toHaveURL(/\/login/);
 }
 
 /** 打开侧边导航中的房态棋盘并进入指定房号详情 */

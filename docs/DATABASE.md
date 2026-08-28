@@ -3,6 +3,7 @@
 > Sprint 1 范围：`users`、`roles`、`permissions`、`user_roles`、`room_types`、`rooms`、`audit_logs`（另含关联表 `role_permissions`）。
 > Sprint 2（S2-T1）新增：`guests`、`reservations`、`stays`（另含 PG 枚举 `reservation_status` / `reservation_source` / `stay_status`、Sequence `reservation_no_seq` / `stay_no_seq`、排他约束 `ex_reservations_room_daterange`）。
 > Sprint 3 新增：`housekeeping_tasks`（另含 PG 枚举 `hk_task_status` / `hk_task_source` / `hk_task_priority`、Sequence `housekeeping_task_no_seq`、部分唯一索引 `uq_housekeeping_tasks_active_room`）。
+> Sprint 5 新增：`maintenance_work_orders` + `rooms.unavailability_source`（另含 PG 枚举 `mwo_status` / `mwo_category` / `mwo_severity` / `mwo_source` / `unavailability_source`、Sequence `maintenance_work_order_no_seq`、CHECK 约束 `ck_rooms_unavailability_source`、部分索引 `ix_mwo_active_blocking_room`）。
 
 ## 表结构（Sprint 1）
 
@@ -14,7 +15,7 @@
 | user_roles | user_id, role_id | 复合主键，级联删除 |
 | role_permissions | role_id, permission_id | 复合主键，级联删除 |
 | room_types | id, name(unique), base_price(Numeric), capacity, description | |
-| rooms | id, room_number(unique), room_type_id(FK), floor, **occupancy_status**, **cleaning_status**, notes | 房态双维度（见下） |
+| rooms | id, room_number(unique), room_type_id(FK), floor, **occupancy_status**, **cleaning_status**, **unavailability_source**(nullable), notes | 房态双维度 + 不可售来源（见下） |
 | audit_logs | id, user_id(FK nullable, SET NULL), action, resource_type, resource_id, details(JSONB), ip | 后端业务层自动写入 |
 
 ## Booking 域表结构（Sprint 2 · S2-T1，Migration `16debb5c57f8`）
@@ -59,6 +60,61 @@ WHERE status IN ('PENDING', 'IN_PROGRESS', 'INSPECTION', 'REWORK');
 ### 主要索引
 
 - `housekeeping_tasks`：status / room_id / assigned_to_user_id / priority / source（另：部分唯一索引服务 Active Task 唯一）
+
+## Maintenance 域表结构（Sprint 5，Migration `a7f3e4c1d902`）
+
+| 表 | 关键字段 | 说明 |
+|---|---|---|
+| maintenance_work_orders | id, work_order_no(unique), room_id(FK→rooms RESTRICT), category(枚举), severity(枚举), status(枚举), source(枚举), blocks_room(bool), title, description, reported_by_user_id(FK→users SET NULL), assigned_to_user_id(FK→users SET NULL), verified_by_user_id(FK→users SET NULL), resolution_notes, verification_notes, started_at(timestamptz), resolved_at(timestamptz), verified_at(timestamptz), completed_at(timestamptz), cancelled_at(timestamptz), created_by/updated_by(FK→users SET NULL), created_at, updated_at | Maintenance Work Order = 维修工单；**不关联 Guest / Reservation / Stay（无 PII）**；同一 Room 允许多张 Active 工单（无 active-per-room 唯一约束） |
+
+### Maintenance 域 PG 枚举
+
+```text
+mwo_status:            OPEN / ASSIGNED / IN_PROGRESS / RESOLVED / COMPLETED / CANCELLED
+mwo_category:          ELECTRICAL / PLUMBING / HVAC / LOCK / BATHROOM /
+                       FURNITURE / APPLIANCE / NETWORK / FINISHING / OTHER
+mwo_severity:          LOW / MEDIUM / HIGH / CRITICAL
+mwo_source:            MANUAL / FRONT_DESK / HOUSEKEEPING / PRE_OPENING
+unavailability_source: MANUAL / MAINTENANCE
+```
+
+### 业务单号 Sequence
+
+- `maintenance_work_order_no_seq`：应用层 `nextval` 原子取号，格式 `MWO{YYYYMMDD}-{NNNN}`（日期 = Property Business Date，Asia/Shanghai）。
+- `work_order_no` 有 UNIQUE 约束兜底。禁止 SELECT MAX+1。
+
+### rooms.unavailability_source（Sprint 5 §4，Room metadata）
+
+```text
+available / reserved / occupied  -> normally NULL
+blocked                          -> MANUAL（运营/人工锁房）
+out_of_service                   -> MANUAL or MAINTENANCE
+```
+
+- 历史数据安全回填：existing blocked / out_of_service → MANUAL；其它 → NULL
+  （不允许把既有人工不可售房错误标记成 MAINTENANCE）。
+- CHECK 约束 `ck_rooms_unavailability_source`：unavailability_source 与
+  occupancy_status 语义一致性数据库级兜底。
+- Maintenance 只能解除自己造成的 OOS（source=MAINTENANCE 且 active blocking MWO=0）；
+  MANUAL OOS / blocked 永不被 Maintenance 解除。
+
+### Active Blocking 部分索引
+
+```sql
+CREATE INDEX ix_mwo_active_blocking_room
+ON maintenance_work_orders (room_id)
+WHERE blocks_room
+  AND status IN ('OPEN', 'ASSIGNED', 'IN_PROGRESS', 'RESOLVED');
+```
+
+- 服务 Availability / Check-in / Checkout 集成查询；RESOLVED 仍阻断
+  （维修完成 ≠ 酒店验收通过）。
+
+### 主要索引
+
+- `maintenance_work_orders`：status / room_id / category / severity /
+  assigned_to_user_id / source（另：部分索引服务 Active Blocking 查询）
+- `rooms`：unavailability_source
 
 ### Booking 域 PG 枚举
 
@@ -114,4 +170,4 @@ cleaning_status（清洁状态，PG 枚举 cleaning_status）：
 - PostgreSQL 16，通过 Docker Compose 提供开发实例（`stayops` 库；pytest 用独立 `stayops_test` 库）
 - Schema 修改必须使用 Alembic Migration（禁止直接改表）
 - 凭据不硬编码进 Git，通过 `.env` 加载
-- 种子数据（权限/角色/admin/28 房间/6 房型）由 `python -m app.seed` 幂等写入；Sprint 2 新增 9 个 Booking 权限码（共 26 个），Sprint 3 新增 5 个 Housekeeping 权限码（共 31 个），seed 幂等收敛不变
+- 种子数据（权限/角色/admin/28 房间/6 房型）由 `python -m app.seed` 幂等写入；Sprint 2 新增 9 个 Booking 权限码（共 26 个），Sprint 3 新增 5 个 Housekeeping 权限码（共 31 个），Sprint 5 新增 5 个 Maintenance 权限码（共 36 个），seed 幂等收敛不变

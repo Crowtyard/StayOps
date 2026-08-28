@@ -39,10 +39,15 @@ from app.models import (
     RoomType,
     Stay,
     StayStatus,
+    UnavailabilitySource,
     User,
 )
 from app.schemas.reservation import ReservationCreate, ReservationUpdate
 from app.services.housekeeping import create_checkout_task
+from app.services.maintenance import (
+    active_blocking_room_ids,
+    has_active_blocking_orders,
+)
 
 # 业务单号使用的 PG Sequence（Migration 创建）
 RESERVATION_NO_SEQ = "reservation_no_seq"
@@ -55,6 +60,12 @@ _BLOCKING_RESERVATION_STATUSES = (
 )
 
 _DOUBLE_BOOKING_DETAIL = "该房间在所选日期区间已被预订"
+
+# Sprint 5 §16/§17：Active Blocking Maintenance 参与最终可售性判断
+_ACTIVE_BLOCKING_MAINTENANCE_DETAIL = "该房间存在进行中的阻断性维修工单，暂不可售"
+_ACTIVE_BLOCKING_MAINTENANCE_CHECKIN_DETAIL = (
+    "该房间存在进行中的阻断性维修工单，无法办理入住"
+)
 
 
 def _conflict(detail: str) -> HTTPException:
@@ -171,7 +182,9 @@ def check_room_availability(
     """应用层预检（快速路径）。返回 (可售?, 不可售原因)。
 
     排除：blocked / out_of_service；重叠 CONFIRMED / CHECKED_IN；
-    重叠 Active Stay；查询区间含业务日期当天时 occupied / reserved。
+    重叠 Active Stay；查询区间含业务日期当天时 occupied / reserved；
+    Active Blocking Maintenance（Sprint 5 §16：OPEN/ASSIGNED/IN_PROGRESS/
+    RESOLVED 且 blocks_room=true，无论 Room 当前 occupancy 为何）。
     未来预订不要求 cleaning_status = clean（Clean 要求只在 Check-in 当下）。
     数据库排他约束仍为最终仲裁。
     """
@@ -180,6 +193,8 @@ def check_room_availability(
         OccupancyStatus.out_of_service,
     ):
         return False, f"房间当前为 {room.occupancy_status.value}，不可预订"
+    if room.id in active_blocking_room_ids(db):
+        return False, _ACTIVE_BLOCKING_MAINTENANCE_DETAIL
     if room.id in overlapping_reservation_room_ids(
         db, check_in, check_out, exclude_reservation_id
     ):
@@ -202,6 +217,7 @@ def query_availability(
     today = business_date()
     overlap_ids = overlapping_reservation_room_ids(db, check_in, check_out)
     stay_ids = active_stay_room_ids(db, check_in, check_out)
+    blocking_ids = active_blocking_room_ids(db)
     stmt = select(Room).options(selectinload(Room.room_type)).order_by(Room.id)
     if room_type_id is not None:
         stmt = stmt.where(Room.room_type_id == room_type_id)
@@ -216,6 +232,8 @@ def query_availability(
             OccupancyStatus.out_of_service,
         ):
             reason = f"房间当前为 {room.occupancy_status.value}"
+        elif room.id in blocking_ids:
+            reason = _ACTIVE_BLOCKING_MAINTENANCE_DETAIL
         elif room.id in overlap_ids:
             reason = _DOUBLE_BOOKING_DETAIL
         elif room.id in stay_ids:
@@ -668,13 +686,22 @@ def check_in_reservation(
             raise _conflict("未到入住日期，不能提前办理入住")
         if today >= reservation.check_out_date:
             raise _conflict("已超过计划退房日期，无法办理入住")
-        room = db.get(Room, reservation.room_id)
+        # Sprint 5 §27：锁顺序 Reservation -> Room（Maintenance 事务为
+        # Room -> MWO，无环）；Sprint 5 §17 纵深防御：
+        # active blocking MaintenanceWorkOrder -> 409（后端最终权威）
+        room = db.scalar(
+            select(Room)
+            .where(Room.id == reservation.room_id)
+            .with_for_update()
+        )
         if room is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="房间不存在"
             )
         if room.cleaning_status != CleaningStatus.clean:
             raise _conflict("房间未清洁，请先安排保洁")
+        if has_active_blocking_orders(db, room.id):
+            raise _conflict(_ACTIVE_BLOCKING_MAINTENANCE_CHECKIN_DETAIL)
         if not can_change_occupancy(
             room.occupancy_status, OccupancyStatus.occupied
         ):
@@ -776,25 +803,44 @@ def check_out_stay(
             reservation.status, ReservationStatus.COMPLETED
         ):
             raise _conflict("非法预订状态转换")
-        room = db.get(Room, stay.room_id)
+        # Sprint 5 §27：退房事务显式锁 Room（顺序 Stay -> Room，
+        # 与 Maintenance 事务 Room -> MWO 无环），串行化 vs 维修工单事务
+        room = db.scalar(
+            select(Room).where(Room.id == stay.room_id).with_for_update()
+        )
         if room is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="房间不存在"
             )
-        if room.occupancy_status != OccupancyStatus.available and (
-            not can_change_occupancy(
-                room.occupancy_status, OccupancyStatus.available
-            )
-        ):
-            raise _conflict("房间占用状态异常，无法退房")
 
         stay.status = StayStatus.CHECKED_OUT
         stay.actual_check_out_at = property_now()
         stay.updated_by = user.id if user is not None else None
         reservation.status = ReservationStatus.COMPLETED
         reservation.updated_by = user.id if user is not None else None
-        if room.occupancy_status != OccupancyStatus.available:
-            room.occupancy_status = OccupancyStatus.available
+
+        # Sprint 5 §18：Maintenance-aware 退房（Cleaning 仍无条件置 dirty）
+        # - 存在 active blocking MWO -> out_of_service + source=MAINTENANCE
+        # - 无 blocking MWO -> available
+        # - 已 out_of_service（MANUAL 或 MAINTENANCE）-> 保持停用且来源不变
+        #   （退房不得解除人工停用；MAINTENANCE 来源也由维修域负责解除）
+        blocking = has_active_blocking_orders(db, room.id)
+        if room.occupancy_status == OccupancyStatus.out_of_service:
+            room_target = OccupancyStatus.out_of_service
+        elif blocking:
+            room_target = OccupancyStatus.out_of_service
+        else:
+            room_target = OccupancyStatus.available
+
+        room_occupancy_previous = room.occupancy_status.value
+        if room.occupancy_status != room_target:
+            if not can_change_occupancy(room.occupancy_status, room_target):
+                raise _conflict("房间占用状态异常，无法退房")
+            room.occupancy_status = room_target
+            if room_target == OccupancyStatus.out_of_service:
+                room.unavailability_source = UnavailabilitySource.MAINTENANCE
+            else:
+                room.unavailability_source = None
         # 退房即脏房：无条件置 dirty（决策见 DECISIONS，不走手动状态接口）
         room.cleaning_status = CleaningStatus.dirty
 
@@ -810,6 +856,11 @@ def check_out_stay(
             "stay_to": stay.status.value,
             "reservation_from": ReservationStatus.CHECKED_IN.value,
             "reservation_to": reservation.status.value,
+            "room_occupancy": {
+                "from": room_occupancy_previous,
+                "to": room.occupancy_status.value,
+            },
+            "maintenance_blocking": blocking,
         }
         write_audit_log(
             db, user, "stay.check_out", "stay", stay.id, details, request

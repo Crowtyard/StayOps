@@ -2,15 +2,21 @@
  * Sprint 4 Front Desk 纯函数工具库（展示层，非后端状态机事实源）：
  * - 时间线几何：[check_in_date, check_out_date) 与可视窗口裁剪、像素定位
  *   （严格不含退房日；紧邻预订相邻渲染、互不重叠；禁止 off-by-one）
- * - Today Summary / Attention Center（三条固定规则）计算
+ * - Today Summary / Attention Center 计算
+ *   （A 脏房到店 / B 超期在住 / C 房间不可用 / M 预订存在维修风险（Sprint 5 修复））
  * - 预订条展示文案（受 guest:read 控制，不泄漏 PII）
  *
  * 日期一律 YYYY-MM-DD，运算走 Date.UTC 纯日期算术（与 lib/booking.ts 一致）。
  */
 
 import { addDays } from "@/lib/booking";
+import {
+  MWO_BLOCKING_STATUSES,
+  MWO_STATUS_META,
+} from "@/lib/maintenance";
 import type {
   HousekeepingTaskOut,
+  MaintenanceWorkOrderOut,
   ReservationOut,
   RoomOut,
   StayOut,
@@ -194,10 +200,10 @@ export function computeTodaySummary(
 }
 
 /* ------------------------------------------------------------------ */
-/* Attention Center（Sprint 4 固定三条规则，不做通用 Rule Engine）        */
+/* Attention Center（固定规则，不做通用 Rule Engine）                    */
 /* ------------------------------------------------------------------ */
 
-export type AttentionRule = "A" | "B" | "C";
+export type AttentionRule = "A" | "B" | "C" | "M";
 
 export interface AttentionItem {
   rule: AttentionRule;
@@ -211,12 +217,23 @@ export interface AttentionItem {
   reservationNo?: string;
   stayId?: number;
   stayNo?: string;
+  /**
+   * Rule M（预订存在维修风险）专用：首张阻断工单 + 总数。
+   * 数据来自 use-front-desk-data 的 workOrders bundle
+   * （仅 maintenance_order:read 时加载，不额外请求、不扩大权限）。
+   */
+  maintenance?: {
+    workOrderId: number;
+    workOrderNo: string;
+    count: number;
+  };
 }
 
 const ATTENTION_RULE_LABELS: Record<AttentionRule, string> = {
   A: "到店房间未准备",
   B: "在住超期",
   C: "房间不可用",
+  M: "预订存在维修风险",
 };
 
 export function attentionRuleLabel(rule: AttentionRule): string {
@@ -224,17 +241,70 @@ export function attentionRuleLabel(rule: AttentionRule): string {
 }
 
 /**
- * 三条固定规则：
+ * 房间的 Active Blocking 维修工单（Sprint 5 修复，展示层判断）：
+ * blocks_room=true 且状态 ∈ OPEN / ASSIGNED / IN_PROGRESS / RESOLVED
+ * （RESOLVED 仍阻断：维修完成 ≠ 验收通过；COMPLETED / CANCELLED 不阻断）。
+ * 按 id 升序保证「首张工单」确定性。
+ */
+export function activeBlockingOrdersForRoom(
+  workOrders: MaintenanceWorkOrderOut[],
+  roomId: number,
+): MaintenanceWorkOrderOut[] {
+  return workOrders
+    .filter(
+      (o) =>
+        o.room_id === roomId &&
+        o.blocks_room &&
+        (MWO_BLOCKING_STATUSES as readonly string[]).includes(o.status),
+    )
+    .sort((a, b) => a.id - b.id);
+}
+
+function maintenanceArrivalLabel(checkIn: string, today: string): string {
+  if (checkIn === today) return "今日到店";
+  if (dayDiff(today, checkIn) === 1) return "明日到店";
+  return `${checkIn} 到店`;
+}
+
+function maintenanceRiskProblem(
+  reservation: ReservationOut,
+  first: MaintenanceWorkOrderOut,
+  count: number,
+  today: string,
+): string {
+  const statusLabel = MWO_STATUS_META[first.status]?.label ?? first.status;
+  const countText = count > 1 ? `（阻断性维修 ${count} 项）` : "";
+  return (
+    `${maintenanceArrivalLabel(reservation.check_in_date, today)}，` +
+    `当前房间存在阻断性维修${countText}：` +
+    `${first.work_order_no} · ${statusLabel}`
+  );
+}
+
+/**
+ * 固定规则：
  * A：今日到店（CONFIRMED）且 Room.cleaning_status != clean
  * B：Stay = ACTIVE 且 planned_checkout_date < business_date（超期未退）
  * C：未来 CONFIRMED 预订（check_in_date > today）且 Room occupancy_status
  *    ∈ (blocked, out_of_service)
+ * M（Sprint 5 修复）：CONFIRMED 预订且 check_in_date >= business_date
+ *    且同房存在 Active Blocking MaintenanceWorkOrder ——
+ *    与 Room 当前 occupancy 完全无关（occupied / available / reserved /
+ *    out_of_service 均按工单独立判断）；RESOLVED 仍产生风险；
+ *    COMPLETED / CANCELLED / blocks_room=false 不产生；
+ *    同一预订只产生一条（多张阻断工单合并计数）；
+ *    M 命中时抑制同预订的 Rule C（避免重复风险卡片），
+ *    MANUAL blocked/OOS 且无阻断工单时 Rule C 继续工作。
+ *
+ * workOrders 仅在持有 maintenance_order:read 时由 bundle 加载
+ * （无权限传 null/[] → 不产生 Rule M，也不发起额外请求）。
  */
 export function computeAttention(
   reservations: ReservationOut[],
   stays: StayOut[],
   rooms: RoomOut[],
   today: string,
+  workOrders: MaintenanceWorkOrderOut[] | null = [],
 ): AttentionItem[] {
   const roomById = new Map(rooms.map((r) => [r.id, r]));
   const items: AttentionItem[] = [];
@@ -254,6 +324,28 @@ export function computeAttention(
           reservationId: r.id,
           reservationNo: r.reservation_no,
         });
+      }
+    }
+    if (r.status === "CONFIRMED" && r.check_in_date >= today) {
+      const blockers = activeBlockingOrdersForRoom(workOrders ?? [], room.id);
+      if (blockers.length > 0) {
+        const first = blockers[0];
+        items.push({
+          rule: "M",
+          roomId: room.id,
+          roomNumber: roomNo,
+          problem: maintenanceRiskProblem(r, first, blockers.length, today),
+          nextStep: "reservation",
+          reservationId: r.id,
+          reservationNo: r.reservation_no,
+          maintenance: {
+            workOrderId: first.id,
+            workOrderNo: first.work_order_no,
+            count: blockers.length,
+          },
+        });
+        // M 优先：同一预订不再产生 generic unavailable-room 规则（C）
+        continue;
       }
     }
     if (

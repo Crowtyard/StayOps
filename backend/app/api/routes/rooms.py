@@ -24,6 +24,7 @@ from app.models import (
     OccupancyStatus,
     Room,
     RoomType,
+    UnavailabilitySource,
     User,
 )
 from app.schemas.common import Page
@@ -83,12 +84,20 @@ def create_room(
     _ensure_room_type(db, payload.room_type_id)
     if db.scalar(select(Room.id).where(Room.room_number == payload.room_number)):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="房间号已存在")
+    # Sprint 5 §4：unavailability_source 由后端派生（blocked/OOS -> MANUAL）
+    unavailability_source = (
+        UnavailabilitySource.MANUAL
+        if payload.occupancy_status
+        in (OccupancyStatus.blocked, OccupancyStatus.out_of_service)
+        else None
+    )
     room = Room(
         room_number=payload.room_number,
         room_type_id=payload.room_type_id,
         floor=payload.floor,
         occupancy_status=payload.occupancy_status,
         cleaning_status=payload.cleaning_status,
+        unavailability_source=unavailability_source,
         notes=payload.notes,
     )
     db.add(room)
@@ -197,8 +206,19 @@ def change_room_status(
     """房态变更：先鉴权（403），再按维度状态机校验（非法 409），并写审计。
 
     可单独改占用或清洁维度，也可同时改（需 room:write）。
+
+    Sprint 5 §3/§4：unavailability_source 由后端派生维护（不接受前端显式传值）——
+    目标 blocked / out_of_service -> MANUAL（运营/人工来源）；
+    目标 available / reserved / occupied -> NULL。
+    Maintenance 域写 MAINTENANCE 来源走自己的事务（services/maintenance.py），
+    人工改房态永不得把来源写成 MAINTENANCE。
+    行锁（SELECT FOR UPDATE）串行化与 Maintenance 房态事务的并发（Sprint 5 §27）。
     """
-    room = _get_or_404(db, room_id)
+    room = db.scalar(select(Room).where(Room.id == room_id).with_for_update())
+    if room is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="房间不存在"
+        )
     occupancy_target = payload.occupancy_status
     cleaning_target = payload.cleaning_status
 
@@ -221,6 +241,25 @@ def change_room_status(
             "to": occupancy_target.value,
         }
         room.occupancy_status = occupancy_target
+        # Sprint 5：人工来源维护（Maintenance 来源只能由 Maintenance 域写入）
+        source_target = (
+            UnavailabilitySource.MANUAL
+            if occupancy_target
+            in (OccupancyStatus.blocked, OccupancyStatus.out_of_service)
+            else None
+        )
+        if room.unavailability_source != source_target:
+            changes["unavailability_source"] = {
+                "from": (
+                    room.unavailability_source.value
+                    if room.unavailability_source is not None
+                    else None
+                ),
+                "to": (
+                    source_target.value if source_target is not None else None
+                ),
+            }
+            room.unavailability_source = source_target
     if cleaning_target is not None:
         if not can_change_cleaning(room.cleaning_status, cleaning_target):
             raise HTTPException(
