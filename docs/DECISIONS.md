@@ -262,3 +262,25 @@ venv 因启动器硬编码旧路径而重建；requirements.txt 统一为 UTF-8 
 
 5. **测试口径（修复增量）**。Vitest +15（lib 11：occupied+future、occupied+today（clean 也有提示）、RESOLVED、COMPLETED/CANCELLED、blocks_room=false、多工单合并计数、OOS+blocker 无重复 C、MANUAL OOS Rule C 回归、workOrders null 权限门控、历史日期不命中、activeBlockingOrdersForRoom 过滤排序；桌面集成 3：occupied+future 主动 Attention + 计数、OOS 无重复、无权限不请求不显示；移动板 1：M 渲染 + 查看维修链接）→ Vitest 300；Playwright +1（房间 203：ACTIVE Stay(occupied) → 非重叠未来 CONFIRMED → blocking MWO → 后端保持 occupied/Availability 排除 → /front-desk 不打开任何 Drawer 即主动出现维修风险 + 查看维修链接 → 清理恢复）→ Playwright 60；pytest 285 不变（后端零改动）。
 
+## 2026-09-02 — Alpha.5 Local Runtime Hardening（stale backend incident → unified supervised local runtime）
+
+背景（已确认事故）：实际运行环境曾出现 Frontend = alpha.5 + Backend = 2026-08-27 启动的旧 uvicorn（无 `--reload`、停留在 Sprint 2 route set）——frontend hot-loaded newer code while non-reload backend stayed stale，导致 `/maintenance` Not Found、`/housekeeping` API 404、Dashboard 保洁概览失败；Git 与 Dev DB 无问题，Fresh Restart 后恢复。Root Cause = stale backend process + 手工分别启动前后端缺少一致性守卫。
+
+决策：**unified supervised local development runtime** = `start-dev.cmd` + `scripts/dev_runtime.py` Runtime Supervisor + repository-level Agent policy（AGENTS.md「Local Runtime Policy」Rule A–H，永久生效，后续 S6/S7 新 Session 不依赖聊天上下文）。
+
+决策（仓库级永久工程规则，记录于 AGENTS.md「Local Runtime Policy」，后续 S6/S7 等新 Session 不依赖聊天上下文）：
+
+1. **统一入口 `start-dev.cmd` + `scripts/dev_runtime.py`（Runtime Supervisor）**。仅 Python 标准库 + Windows 系统工具（netstat/taskkill 只报告 PID 与清理自己启动的进程树），不要求 PowerShell，不新增第三方依赖、不引入 process manager、不影响 production deployment（infra/docker）。
+
+2. **启动前一致性守卫（FAIL FAST）**。Git 预检（分支/HEAD/tag/工作区，普通修改仅 warning，`.kun-canvas/` 不算错误）；端口 8000/3000 被占用 → 显式失败并显示 PID（绝不 taskkill 未知进程，防止误杀）；开发库 `stayops` 的 `alembic current == heads` 检查（默认 CHECK ONLY，`--migrate` 为显式升级）；`frontend/.env.local` 的 `BACKEND_API_URL` 必须指向本启动器管理的 `127.0.0.1:8000`。
+
+3. **启动方式固化**。Backend = `.venv` 的 `uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload`（`--reload` 为本地开发硬要求）；Frontend = `pnpm.cmd dev`。
+
+4. **Readiness 语义**。不立即宣称 READY：轮询 `/health` + `/openapi.json`（至少存在 Rooms / Reservations / Housekeeping / Maintenance 核心路由，防止启动到旧 Backend；不做「路由数 == N」的过期判断）+ `/login`；Frontend 超时 → 显式 `FRONTEND START FAILED` 并关闭已启动的 Backend，不留半套环境。
+
+5. **进程生命周期**。子进程以独立进程组启动；Ctrl+C（或 stdin EOF，重定向场景同一路径）→ 逐级清理（组内 Ctrl+C → `taskkill /T` → `/T /F`，仅本启动器自己的 PID 树）；日志输出对 BrokenPipe 免疫——验证中发现父进程意外退出时打印失败曾导致清理路径中断、遗留 stale uvicorn，已加固为「清理优先于输出」。
+
+6. **验证口径**。Test A `--check`（正常环境 PASS）；Test B 占用端口（FAIL FAST + PID + exit 1，不启动第二套服务）；Test C Fresh Runtime（:8000 /health 200、/openapi.json 核心路由齐、:3000 /login 200）；Test D `--reload`（进程命令行验证）；Test E Clean Stop（orderly shutdown exit 0 → 8000/3000 全部释放、无 stale 进程）；Test F 产品冒烟（BFF 真实登录后 `/dashboard` `/front-desk` `/housekeeping` `/maintenance` 均 200）。`--migrate` 路径与 check 同源 `alembic upgrade head`（未对开发库做降级实测：会删 S5 开发数据，不做不安全验证）。
+
+7. **永久性**。本策略写入根目录 AGENTS.md 与 README.md（`start-dev.cmd` 为官方推荐 Local Development 入口）、docs/ARCHITECTURE.md（Local Runtime 条目）；任何 Sprint / Bugfix 开始前必须阅读并遵守。
+

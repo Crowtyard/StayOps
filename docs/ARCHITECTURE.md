@@ -8,6 +8,17 @@
 - `docs/` — 项目文档
 - `tests/` — 测试
 
+## Local Runtime（Alpha.5 加固）
+
+- `start-dev.cmd` + `scripts/dev_runtime.py`（仅 Python 标准库，不要求 PowerShell）为统一本地开发入口：
+  Git 预检 → 端口安全（8000/3000 占用即 FAIL FAST，显示 PID，不杀未知进程）→
+  开发库 `stayops` 的 `alembic current == heads` 检查（默认 CHECK ONLY，`--migrate` 才升级）→
+  Backend（`.venv` uvicorn `--reload`，127.0.0.1:8000）→ Frontend（`pnpm.cmd dev`）→
+  就绪校验（`/health` + `/openapi.json` 核心路由 Rooms/Reservations/Housekeeping/Maintenance +
+  `/login`；Frontend 失败显式关闭 Backend，不留半套环境）→ 运行摘要。
+  `Ctrl+C` 同时关闭前后端进程树；`--check` 只检查不启动。
+  生产部署方式（infra/docker）不受影响。
+
 ## 后端结构（Sprint 5 · 更新）
 
 ```text

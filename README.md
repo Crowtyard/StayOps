@@ -25,7 +25,31 @@ cp .env.example .env
 docker compose up -d postgres
 ```
 
-后端（`backend/`，Sprint 1 已完成）：
+### Local Development（官方推荐入口）
+
+> `start-dev.cmd` 是 StayOps 本地开发的**官方推荐启动方式**（仓库级永久规则，
+> 见 [AGENTS.md](AGENTS.md) 的 Local Runtime Policy）。日常开发统一使用本入口，
+> 不再长期手工分别裸启动 `uvicorn ...` 与 `pnpm dev`。
+
+```powershell
+start-dev.cmd              # 预检 -> 迁移检查 -> 启动前后端 -> 就绪校验 -> 运行摘要
+start-dev.cmd --check      # 只检查（Git/端口/配置/文件/migration），不启动服务
+start-dev.cmd --migrate    # 开发库迁移落后时显式 alembic upgrade head 后再启动
+```
+
+`start-dev.cmd`（内部为 `scripts/dev_runtime.py`，仅 Python 标准库 + Windows 系统工具，**不要求 PowerShell**）是本地开发运行环境加固的统一入口，防止「新 Frontend + 旧 Backend + 错误数据库版本」组成看似能运行的不一致环境：
+
+- **Preflight**：打印 Git 分支 / HEAD / 精确 tag / 工作区摘要（普通修改仅 warning，`.kun-canvas/` 不算错误）
+- **Port Safety**：8000 / 3000 被占用 → **FAIL FAST**（显示 PID，绝不自动杀未知进程；请自行停止旧进程后重试）
+- **Migration Check**：检查开发库 `stayops` 的 `alembic current == heads`；不一致 → 停止并提示 `alembic upgrade head`（默认 CHECK ONLY，`--migrate` 才升级）
+- **Backend**：`backend/.venv` 的 `uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload`（`--reload` 为本地开发硬要求；生产部署方式不受影响）
+- **Frontend**：`pnpm.cmd dev`（继续使用 `frontend/.env.local` 的 `BACKEND_API_URL`；启动前校验其指向 `127.0.0.1:8000`）
+- **Readiness**：轮询 `/health` 与 `/openapi.json`（必须包含已发布核心路由 Rooms / Reservations / Housekeeping / Maintenance，防止启动到旧 Backend），再确认 `http://localhost:3000/login`；Frontend 超时 → 显式 `FRONTEND START FAILED` 并关闭 Backend，不留半套环境
+- **停止**：`Ctrl+C` 同时关闭 Backend + Frontend 进程树，不遗留 stale uvicorn
+
+> 不再推荐长期手工分别启动裸 `uvicorn ...` 与 `pnpm dev`（统一入口避免旧进程残留事故）。
+
+后端手动准备（首次或需要独立调试时，`backend/`）：
 
 ```powershell
 cd backend
@@ -33,7 +57,6 @@ python -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt
 .venv\Scripts\python.exe -m alembic upgrade head
 .venv\Scripts\python.exe -m app.seed          # 幂等种子数据
-.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
 ```
 
 - 健康检查：`http://localhost:8000/health`
@@ -45,10 +68,9 @@ python -m venv .venv
 cd frontend
 pnpm.cmd install
 Copy-Item .env.example .env.local   # BACKEND_API_URL / NEXT_PUBLIC_APP_NAME
-pnpm.cmd dev                        # http://localhost:3000
 ```
 
-> 前后端需分别启动；后端需先运行在 `http://127.0.0.1:8000`（见上文）。前端不接触 Token：登录后 JWT 只存在 HttpOnly Cookie，其余 API 统一走 `/api/bff/*` 由服务端附加 Bearer 转发。
+> 前后端由 `start-dev.cmd` 统一启动；后端在 `http://127.0.0.1:8000`、前端在 `http://localhost:3000`。前端不接触 Token：登录后 JWT 只存在 HttpOnly Cookie，其余 API 统一走 `/api/bff/*` 由服务端附加 Bearer 转发。
 
 前端质量命令：`pnpm.cmd lint`、`pnpm.cmd typecheck`、`pnpm.cmd test`（Vitest）、`pnpm.cmd build`。
 
@@ -59,11 +81,11 @@ pnpm.cmd dev                        # http://localhost:3000
 cd backend
 .venv\Scripts\python.exe -m pytest -q
 
-# 前端单元/组件测试（Vitest，285 用例 = 74 基线 + 65 Booking UI + 31 Housekeeping UI + 70 Front Desk UI + 45 Maintenance UI）
+# 前端单元/组件测试（Vitest，300 用例 = 74 基线 + 65 Booking UI + 31 Housekeeping UI + 70 Front Desk UI + 60 Maintenance UI 与修复增量）
 cd frontend
 pnpm.cmd test
 
-# Playwright E2E（独立 stayops_test 库 + 专用端口 8001/3001，59 用例 = Sprint 1 基线 10 + S2-T3 新增 19 + S3 新增 7 + S4 新增 10 + S5 新增 13；不触碰开发数据）
+# Playwright E2E（独立 stayops_test 库 + 专用端口 8001/3001，60 用例 = Sprint 1 基线 10 + S2-T3 新增 19 + S3 新增 7 + S4 新增 10 + S5 新增 14；不触碰开发数据）
 cd frontend
 Copy-Item e2e\test-creds.example e2e\.env.test-creds   # 首次：填入测试库凭据（gitignored）
 pnpm.cmd test:e2e

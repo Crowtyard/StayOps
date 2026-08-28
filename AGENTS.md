@@ -62,3 +62,39 @@
 19. 所有重大架构决策记录到：`docs/DECISIONS.md`
 
 20. README 必须始终保持基本可用。
+
+## Local Runtime Policy（Alpha.5 起生效，仓库级永久规则）
+
+背景：alpha.5 曾发生「新 Frontend + 旧 Backend（无 --reload、旧 route set）+ 数据库版本不一致」组成看似能运行的实际事故（stale backend incident：frontend hot-loaded newer code while non-reload backend stayed stale）。本策略为永久工程规则；任何 Sprint / Bugfix 开始前，Agent 必须先阅读并遵守本策略。
+
+**Rule A · Official Dev Entry**
+
+StayOps 正常本地开发统一使用根目录 `start-dev.cmd`（内部为 `scripts/dev_runtime.py` Runtime Supervisor，不要求 PowerShell）。Coding Agent（编程代理）不得把分别长期启动裸 `uvicorn` / `pnpm dev` 作为默认开发运行方式；临时测试环境除外，但必须在任务结束后清理。
+
+**Rule B · Runtime Preflight**
+
+每一个 Sprint / Bugfix / Runtime debugging / Product smoke 在使用 StayOps 日常开发环境前，都必须遵守仓库 Runtime Preflight：至少检查 ports 8000 / 3000、`BACKEND_API_URL`、`alembic current == head`。不得默默复用未知旧进程（`start-dev.cmd --check` 覆盖全部预检）。
+
+**Rule C · Stale Process**
+
+如果 8000 或 3000 已被占用：Coding Agent 不得假定现有服务是正确版本；必须 identify 并 report，然后通过统一 Runtime Policy 处理（停止旧进程后经 `start-dev.cmd` 重启）。不得静默接管旧 Backend，不得自动杀死未知进程。
+
+**Rule D · Backend Development**
+
+StayOps 日常开发 Backend 必须启用 `--reload`（Supervisor 固定使用 `.venv` 的 `uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload`）。除非当前任务属于正式测试 / production-equivalent 环境，并明确要求不同启动方式。
+
+**Rule E · Database**
+
+日常 Dev DB = `stayops`；E2E DB = `stayops_test`，不得混淆。Dev Runtime 启动要求 `alembic current == head`（默认 CHECK ONLY，`--migrate` 为显式升级）。Agent 不得为了通过检查对正常开发数据库执行 downgrade / reset / recreate，除非用户明确授权。
+
+**Rule F · Runtime Readiness**
+
+不得仅以「process started」判断 Runtime Ready。必须经过仓库 supervisor 的校验：Backend health（`/health`）、OpenAPI core-route validation（Rooms / Reservations / Housekeeping / Maintenance 存在于 `/openapi.json`）、Frontend readiness（`/login`）。
+
+**Rule G · Process Ownership**
+
+Coding Agent 可以为了测试启动临时服务；但 Agent 启动的临时 Backend / Frontend 不得在任务完成后继续作为用户的长期 StayOps 服务。临时运行完成后必须清理自己的 process tree，不得留下 stale uvicorn / stale Next dev。
+
+**Rule H · Future Sessions**
+
+所有未来 Coding Agent 在进入 StayOps 工作区后 MUST read `AGENTS.md` before coding or starting services，并遵守 Local Runtime Policy，不依赖历史聊天上下文。
