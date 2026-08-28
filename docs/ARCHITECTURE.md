@@ -19,7 +19,7 @@
   `Ctrl+C` 同时关闭前后端进程树；`--check` 只检查不启动。
   生产部署方式（infra/docker）不受影响。
 
-## 后端结构（Sprint 6 · 更新）
+## 后端结构（Sprint 7 · 更新）
 
 ```text
 backend/app/
@@ -27,15 +27,23 @@ backend/app/
                      # StayRoomAssignment 新增（Sprint 6：在住房间分配历史 + room_move_reason 枚举）
                      # HousekeepingTask（Sprint 3：任务/枚举/来源/优先级；Sprint 6 增加 ROOM_MOVE 来源）
                      # MaintenanceWorkOrder（Sprint 5：工单/枚举/阻断语义）
+                     # Sprint 7：inventory.py（InventoryItem / InventoryLocation /
+                     #   InventoryBalance Projection / StockMovement 不可变账本 /
+                     #   StockIssue+Lines）与 procurement.py（Supplier /
+                     #   PurchaseRequest+Lines / PurchaseOrder+Lines /
+                     #   GoodsReceipt+Lines）
   schemas/           # guest / reservation / stay（Sprint 6：assignments / RoomMoveCreate /
                      # RoomMoveOptionsOut）
                      # housekeeping（Create/Update strict、AssigneeOut）
                      # maintenance（Create/Update strict、Assign/Resolve/Verify/Rework、AssigneeOut）
+                     # Sprint 7：inventory / procurement（strict extra=forbid、
+                     #   quantity/金额 Decimal 字符串序列化、状态机专用 action schema）
   core/              # business_date.py（Property Business Date，Asia/Shanghai）
                      # booking_state_machine.py（Reservation / Stay 状态机）
                      # housekeeping_state_machine.py（Task 状态机 + 房态联动映射）
                      # maintenance_state_machine.py（MWO 状态机 + BLOCKING 语义）
-                     # db_conflict.py（23P01/40P01/40001 并发仲裁窄分类，Sprint 4 D1 复用）
+                     # db_conflict.py（23P01/40P01/40001 并发仲裁窄分类，Sprint 4 D1 复用；
+                     #   Sprint 7 增加 classify() SQLSTATE 分类）
   services/booking.py    # 可售性引擎、预订生命周期、Check-in/Check-out 事务、
                          # 权限裁剪序列化；Sprint 6：CONFIRMED-only 可售性、
                          # Room Row Lock（lock_room_for_update / lock_rooms_for_update）、
@@ -47,15 +55,37 @@ backend/app/
   services/housekeeping.py # 任务生命周期、Task↔Room 原子联动；Sprint 6：_create_auto_task
                          # 抽取（CHECKOUT / ROOM_MOVE 共用）
   services/maintenance.py  # 工单生命周期、blocks_room ↔ Room 可售性原子联动（Room → MWO 锁顺序）
+  services/inventory.py    # Sprint 7：库存账本核心——业务单号（SMV/SIS Sequence）、
+                           # Balance 锁定（(item_id,location_id) 升序 +
+                           #   INSERT ON CONFLICT + FOR UPDATE）、
+                           # _record_movement（流水+余额同事务原子，no movement = no stock change）、
+                           # create_item / update_item / update_location、set_initial_stock（INITIAL）、
+                           # create_issue（多行全原子）/ create_return / create_transfer
+                           #   （OUT↔IN 成对互指）/ create_stocktake（差异→ADJUSTMENT）、
+                           # total_stock_by_item / stock_status_for / recommended_replenishment
+  services/procurement.py  # Sprint 7：采购闭环——create/update supplier、PR 状态机
+                           # （submit/approve/reject/cancel，行锁 + 专用 action）、
+                           # create_order（Request→PO 同事务 exactly-once）、
+                           # mark_ordered / cancel_order（PO 不改变库存）、
+                           # receive_goods（收货事务：PO→lines→Balances 锁链、
+                           #   PURCHASE_RECEIPT 流水 + PO 状态推导）
   api/routes/        # guests / availability / reservations / stays（Sprint 6：
                      # room-move-options / room-move 端点）
                      # housekeeping（/housekeeping/tasks + /housekeeping/assignees）
                      # maintenance（/maintenance/orders + /maintenance/assignees）
                      # reservations 列表 overlap_from / overlap_to（Sprint 4）
+                     # Sprint 7：inventory（/inventory/items|locations|balances|movements
+                     #   + issues|returns|transfers|stocktakes 业务动作）与 procurement
+                     #   （/procurement/suppliers|requests|orders + 状态机 action 端点）
   alembic/versions/c8e2b7a4d1f3_add_room_move_domain.py  # 新增：Room Move 域迁移
                      # （stay_room_assignments 表/枚举/CHECK/部分唯一索引/排他约束、
                      #   hk_task_source + ROOM_MOVE、Reservation 排他约束 CONFIRMED-only、
                      #   既有 Stay 历史回填）
+  alembic/versions/e3a91f5c8d24_add_inventory_procurement_domain.py  # Sprint 7 新增：
+                     # Inventory + Procurement 域迁移（13 张表、5 个 PG 枚举、
+                     #   5 个业务单号 Sequence、UNIQUE(item,location)、
+                     #   movement 符号 CHECK、received<=ordered CHECK、
+                     #   PR→PO 一对一 UNIQUE）
 ```
 
 - 预订域业务集中在 `services/booking.py`（routes 保持薄），决策见 docs/DECISIONS.md（S2-T1 第 9 条）。
@@ -77,6 +107,20 @@ backend/app/
   只能解除自己造成的 OOS（source=MAINTENANCE 且 active blocking MWO=0），
   MANUAL OOS / blocked 永不被 Maintenance 解除；Cleaning 维度不受 Maintenance 影响。
   Maintenance 域不关联 Guest / Reservation，天然无 PII。
+- **Inventory & Procurement（Sprint 7，第二条运营链：库存与采购）**：
+  StockMovement = 永久库存账本事实（immutable ledger，无 PATCH/DELETE 端点）；
+  InventoryBalance = 快速查询 Projection（唯一 (item_id, location_id)），
+  每次库存事务与流水同事务更新（no movement = no stock change）。
+  锁顺序：Inventory 事务只锁 Balance 行（(item_id, location_id) 升序）；
+  Procurement 收货 = PurchaseOrder → PO lines → Balance 行（Balance 永远在
+  锁链末端，与 S5/S6 锁图全局无环）。PO 不改变库存；只有 Goods Receipt 创建
+  PURCHASE_RECEIPT 流水并增加库存（收货才是 stock-in 权威）；部分收货
+  cumulative received <= ordered（行锁 + DB CHECK）。PR 状态机
+  DRAFT→SUBMITTED→APPROVED→ORDERED、PO 状态机
+  DRAFT→ORDERED→PARTIALLY_RECEIVED→RECEIVED，状态只能经专用 action 端点变更；
+  Request→PO 同事务 exactly-once（行锁 + UNIQUE）。无自动客耗扣账（Checkout /
+  Housekeeping / Room Move 不扣库存）。低库存：total==0 → OUT_OF_STOCK，
+  total<=minimum → LOW_STOCK；建议补货 = max(target-total, 0)，仅建议不自动下单。
 
 ## 通信架构：HttpOnly Cookie + BFF
 
@@ -113,6 +157,15 @@ frontend/src/
     (main)/maintenance                    # S5：维修运营工作台（状态视图 + 筛选/搜索 + 快捷操作 + 现场报修）
     (main)/maintenance/[id]               # S5：维修工单详情（派工/编辑 + 六个 action 确认）
     (main)/maintenance/new                # S5：现场报修表单（Mobile Friendly，?room_id&source 预填）
+    (main)/inventory                      # S7：库存工作台（统计 + 物资表格 + 筛选 + 领用/调拨/盘点/新建 Modal）
+    (main)/inventory/items/[id]           # S7：物资详情（信息 + 总/最低/目标/建议补货 + 地点余额 + 最近流水）
+    (main)/procurement                    # S7：采购工作台（低库存建议/待审批/已批准待转单/待收货/部分收货）
+    (main)/procurement/suppliers          # S7：供应商管理（新建/编辑/停用）
+    (main)/procurement/requests           # S7：采购申请列表 + 新建（多行）
+    (main)/procurement/requests/[id]      # S7：申请详情（提交/批准/驳回/取消/转订单，按 status + 权限）
+    (main)/procurement/orders             # S7：采购订单列表 + 新建（由申请转单 / 直接创建）
+    (main)/procurement/orders/[id]        # S7：订单详情（ordered/received/remaining/单价/金额 +
+                                          #   收货记录 + 下达/收货（部分收货）/取消剩余）
     (main)/front-desk                     # S4：前台运营指挥台（Today Summary + Search + Room Diary + 右侧 Drawer）
     (main)/settings/{users,roles,room-types,audit-logs}/page.tsx   # 管理页（T3b）
   components/                             # AppShell(侧边导航+顶栏+手机Drawer)、状态徽标、
@@ -133,10 +186,17 @@ frontend/src/
   components/housekeeping-*.tsx           # S3：工作台视图 / 任务详情视图
   components/maintenance/                 # S5：maintenance-workspace-view（工作台）、
                                           # maintenance-work-order-detail-view（详情）、report-form（现场报修）
+  components/inventory/                   # S7：inventory-workspace-view（工作台）、
+                                          # inventory-item-detail-view（详情 + 期初/编辑 Modal）、
+                                          # create-item-form / issue-form / transfer-form / stocktake-form
+  components/procurement/                 # S7：procurement-workbench-view（工作台）、suppliers-view、
+                                          # requests-view（+ CreateRequestModal）、request-detail-view
+                                          # （+ ConvertToOrderModal）、orders-view（+ CreateOrderModal）、
+                                          # order-detail-view（+ ReceiveGoodsModal 部分收货）
   components/settings/                    # 四个管理页视图 + 共享工具（分页加载/表单/表格）
   lib/api/                                # 统一 API Client（client.ts + guests/reservations/stays（Sprint 6：
                                           # roomMoveOptions / roomMove）/ availability + housekeeping（S3）+
-                                          # maintenance（S5）等资源模块 + 错误归一化）
+                                          # maintenance（S5）+ inventory / procurement（S7）等资源模块 + 错误归一化）
   lib/booking.ts                          # S2-T2：业务日期（Asia/Shanghai）、日期校验、状态标签、金额展示
   lib/front-desk.ts                       # S4：时间线几何（[ci,co) 裁剪与像素定位）、Today Summary /
                                           # Attention 四规则纯函数（A/B/C/M）、预订条 PII 安全文案、quickCreateHref；
@@ -147,6 +207,9 @@ frontend/src/
   lib/housekeeping.ts                     # S3：任务状态/优先级/来源展示元数据 + 房态联动映射（展示层）；
                                           # S6：HK_SOURCE_LABELS 增加 ROOM_MOVE「换房自动」
   lib/maintenance.ts                      # S5：工单状态/分类/严重度/来源展示元数据 + Active Blocking 判断（展示层）
+  lib/inventory.ts                        # S7：分类/流水类型/领用目的地/库存状态展示元数据 +
+                                          # computeStockStatus / recommendedReplenishment / qty / fmtQty（展示层）
+  lib/procurement.ts                      # S7：PR / PO 状态展示元数据（展示层，不复制后端状态机）
   lib/server/                             # 服务端 Cookie 读取 / 后端直连 Client
   test/setup.ts                           # Vitest 全局 setup（jest-dom + RTL cleanup）
 ```
@@ -204,6 +267,9 @@ frontend/src/
    S6 新增 Room Move 用例（324 = 300 + 24：lib 换房元数据 / 历史格式化 / 在住条几何 /
    Stay 详情换房对话框 / Front Desk 换房入口与抽屉 / Room Diary 在住条语义更新 /
    HK 来源 ROOM_MOVE），
+   S7 新增 Inventory/Procurement 用例（379 = 324 + 55：lib 库存状态计算与元数据 5 /
+   导航矩阵 4 / 库存工作台 7 / 领用·调拨·盘点表单 9 / 物资详情 5 / 采购工作台 4 /
+   采购申请·订单视图（含部分收货）11 / Dashboard 权限门控 5），
   测试日期一律基于 Asia/Shanghai 业务日期动态生成（`businessDate()` / `addDays`，禁止硬编码年月日）。
 - **Playwright E2E**（`frontend/playwright.config.ts`，`pnpm test:e2e`）：
   - 独立测试库 `stayops_test`：后端 webServer 直接运行单进程入口 `frontend/e2e/run_test_backend.py` ——
@@ -254,11 +320,22 @@ frontend/src/
     blocking Maintenance on occupied A → 换房 → A OOS+MAINTENANCE+dirty、维修仍 active；
     HTTP 并发 Move A→T vs Move B→T（1×200 + 1×409）；
     HTTP 并发 Move→T vs Create Reservation→T（no double allocation）
+   - S7 新增 `inventory-procurement.spec.ts` 4 条（辅助集中在
+     `e2e/inventory-helpers.ts`，物资代码 E2E-ITEM-* 前缀，测试库每次运行重建）：
+     Golden A（UI 新建物资 → 期初库存 → 领用 → 余额减少 → INITIAL/ISSUE 流水可见 +
+     API 口径 ledger == balance）；Golden B（调拨 → 来源减少 / 目的地增加 /
+     酒店总库存不变 + TRANSFER_OUT/IN 成对流水）；Golden C（采购申请 → 提交 → 批准 →
+     转采购订单 → 下达（PO 不改变库存断言）→ 部分收货（余额只增加实收数量）→
+     最终收货 → PO RECEIVED + 两条 PURCHASE_RECEIPT 流水）；Golden D（低库存物资 →
+     /inventory 低库存徽标 + 建议补货 → Dashboard 库存与采购预警可见）
   - 各 spec 使用专属房间号段保证用例间确定性；既有 auth/rbac/rooms/settings 4 个 spec 与
     `playwright.config.ts` 隔离机制保持不变
-- **后端 pytest**（`backend/`，317 用例 = 285 基线 + Sprint 6 Room Move 32：核心功能 22 /
-  迁移往返与历史回填 2 / 并发 stress 4×10 轮 + 汇总报告 4 + 既有语义更新）：独立测试库 `stayops_test`（与 E2E 同库策略），
-  会话级 DROP/CREATE + 迁移 + seed，用例级事务回滚隔离；并发用例（Double Booking / Check-in / Check-out / 业务单号 / Duplicate Active Task / Concurrent Start / PASS vs REWORK / D1 25 轮双订 / S5 同房双阻断创建 / 并发 verify / cancel vs verify / S6 move-vs-move / move-vs-reservation / move-vs-checkout / reservation-update-vs-move 各 10 轮 stress）用两线程 + 独立 Session 真实提交验证。
+- **后端 pytest**（`backend/`，379 用例 = 317 基线 + Sprint 7 Inventory/Procurement 62：
+  Item/地点/期初 11、Issue/Return/Transfer 10、Ledger/Stocktake/不可变 6、供应商/PR 状态机 8、
+  PO/收货 11、RBAC 矩阵 6、审计 3、seed 幂等 1、迁移往返 1、P0 并发 7×10 轮 stress + 汇总报告；
+  既有 7 个权限码计数用例（auth/permissions/roles/smoke/housekeeping-migration/
+  maintenance-migration/booking-seed）语义更新为 48）：独立测试库 `stayops_test`（与 E2E 同库策略），
+  会话级 DROP/CREATE + 迁移 + seed，用例级事务回滚隔离；并发用例（Double Booking / Check-in / Check-out / 业务单号 / Duplicate Active Task / Concurrent Start / PASS vs REWORK / D1 25 轮双订 / S5 同房双阻断创建 / 并发 verify / cancel vs verify / S6 move-vs-move / move-vs-reservation / move-vs-checkout / reservation-update-vs-move / S7 issue-vs-issue / transfer-vs-issue / stocktake-vs-issue / receipt-vs-receipt / receipt-vs-issue / receipt-vs-transfer / request-to-po-vs-request-to-po 各 10 轮 stress）用两线程 + 独立 Session 真实提交验证。
   pytest 与 Playwright E2E 共享 `stayops_test` 且互斥（不得并行运行）。
 
 ## 原则

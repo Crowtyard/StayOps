@@ -312,4 +312,43 @@ venv 因启动器硬编码旧路径而重建；requirements.txt 统一为 UTF-8 
 
 13. **测试口径（Sprint 6）**。pytest 317（285 基线 + 32 新增：功能 22 / 迁移 2 / 并发 4×10 轮 stress + 汇总报告）；Vitest 324（300 基线 + 24 新增：lib 12 / Stay 详情 5 / Front Desk 6 / HK 来源 1，含既有 2 语义更新）；Playwright 60+4（room-move spec 4 条：Golden Path、blocking MWO、move-vs-move、move-vs-reservation HTTP 并发）。E2E 复用种子房 301-308 并归一化（不新建房间，保持 28 间种子房不变——rooms.spec 28 房断言不受影响）。日期全部动态（Asia/Shanghai 业务日期）。
 
+## 2026-08-28 — Sprint 7：Inventory & Procurement（库存与采购）
+
+1. **StockMovement = 永久库存账本事实（immutable ledger fact），InventoryBalance = Projection（§2 LOCKED）**。背景：库存必须能回答「有什么、在哪里、还有多少、谁领用了、为什么变化、什么时候该采购、采购到货多少、是否真正入库」。决策：流水是唯一事实源——创建后无普通 PATCH / DELETE 端点（修正库存使用新的 ADJUSTMENT_IN / ADJUSTMENT_OUT movement）；Balance 仅为快速查询投影，唯一 (item_id, location_id)。后果：**no movement = no stock change**；每次库存事务必须在同一数据库事务内 create StockMovement + update InventoryBalance；不存在任何直接 PATCH quantity / current_stock / balance 的通道。
+
+2. **signed quantity + 符号规则（§8）**。quantity 保存 signed quantity（+ 增加 / - 减少），业务层 + DB CHECK（`ck_stock_movements_quantity_sign_by_type`）双保险：PURCHASE_RECEIPT / RETURN / TRANSFER_IN / ADJUSTMENT_IN > 0；ISSUE / TRANSFER_OUT / ADJUSTMENT_OUT < 0；INITIAL >= 0。全系统一致，无 absolute+方向 混用。
+
+3. **多库存地点 + 总库存口径（§6/§20）**。Alpha.7 第一版即支持多地点（种子 4 个：MAIN_STORAGE 总仓 / FRONT_DESK 前台 / HOUSEKEEPING 保洁间 / MAINTENANCE 维修间，幂等）。总库存 = SUM(全部已持久化 Balance)：已停用 Location 仍有库存时**不**静默从总库存消失，UI 标记 location inactive；禁止带库存删除地点（无 DELETE 端点，仅 is_active 停用）。
+
+4. **无自动客耗扣账（§2.4）**。Checkout / Housekeeping completion / Room Move 均不自动扣减客耗品库存（实际客耗与理论标准量不一致）；库存变化只能来自真实业务操作。后续可做建议领用，Alpha.7 不做自动扣账。
+
+5. **物资主数据（§3/§5）**。item_code 唯一且创建后不可变（PATCH strict schema 不含该字段）；base_unit 唯一基础单位（不做 Packaging Conversion，禁止「10 箱 240 瓶」无换算混记）；**已有库存流水的物资不允许修改 base_unit（409）**——改单位会破坏账本语义；无 DELETE，is_active 停用。
+
+6. **固定一级分类与低库存规则（§4/§19）**。7 个固定分类（GUEST_AMENITY/LINEN/CLEANING/FRONT_DESK/MAINTENANCE/OFFICE/OTHER），不做动态树形分类。低库存规则：total == 0 → OUT_OF_STOCK；minimum > 0 且 total <= minimum → LOW_STOCK；否则 NORMAL（**minimum = 0 时只有 0 是 OUT_OF_STOCK，正库存保持 NORMAL**——边界语义显式处理）。target >= minimum 由 DB CHECK + service 校验。建议补货 = max(target - total, 0)，仅建议值，不自动创建申请/订单。
+
+7. **期初库存（§10）**。INITIAL 必须通过专用动作 `POST /inventory/items/{id}/initial-stock`（inventory:item_manage），明确形成 INITIAL movement + Balance 同事务更新；不允许 Item Create payload 直接写隐藏 balance。可多次执行（每次都是真实业务动作）。
+
+8. **锁定顺序（Lock Graph，§13/§48，全局统一）**。所有减少库存操作：`SELECT InventoryBalance ... FOR UPDATE` → recheck quantity → movement → balance update；不足 409（绝不 500）。多 Item 事务按确定性顺序 **(item_id, location_id) 升序**锁 Balance 行（不得按客户端提交顺序）；目的地 Balance 缺失时 `INSERT ... ON CONFLICT DO NOTHING` 后 `SELECT FOR UPDATE`（防并发插入竞态）。全局无环：Inventory 事务只锁 Balance 行；Procurement 收货锁顺序 = PurchaseOrder row → PO lines（id 升序）→ Balance 行（(item_id, location_id) 升序）；Request→PO 只锁 Request 行。不存在 Balance → 业务文档的反向路径，与 S5/S6 锁图无环。
+
+9. **领用/归还/调拨/盘点（§11-§18）**。领用单多行整体原子（任一行不足 409 整体回滚）；destination_type=ROOM 时 room_id 必填、其它类型不得误填（schema 校验 + DB CHECK）。归还用专用简单 API（item/location/quantity/reason），不做原领用单逐行退货关联。调拨 TRANSFER_OUT / TRANSFER_IN 成对 movement 互相 reference（reference_type="stock_movement"），酒店总库存不变，多行整体原子。盘点：expected = 锁定余额、actual = 用户输入、difference = actual - expected；>0 → ADJUSTMENT_IN，<0 → ADJUSTMENT_OUT，=0 → no-op 不创建 movement；reason 必填；审计记录 expected/actual/difference。
+
+10. **采购状态机（§24/§27，后端唯一权威，无 generic PATCH status 通道）**。PR：DRAFT→SUBMITTED→APPROVED→ORDERED；SUBMITTED→REJECTED（终态，不允许 REJECTED→APPROVED，需重新创建/提交）；APPROVED→CANCELLED 与 DRAFT→CANCELLED（按任务书最小集，SUBMITTED 通过 REJECT 关闭）。PO：DRAFT→ORDERED→PARTIALLY_RECEIVED→RECEIVED；DRAFT/ORDERED/PARTIALLY_RECEIVED→CANCELLED；RECEIVED 终态不可取消。**PARTIALLY_RECEIVED→CANCELLED 允许**：代表「不再收剩余数量」，已收货库存与历史保持（§27 文档化）。
+
+11. **Request → PO exactly once（§28）**。Approved Request 转 PO：锁定 Request 行 → 校验 APPROVED → 创建 PO（DRAFT）+ 复制申请行 → Request APPROVED→ORDERED **同事务**。一张 Request 至多一张 PO：Request 行锁串行化（第二次读到 ORDERED → 409）+ `purchase_orders.purchase_request_id` UNIQUE 数据库最终仲裁。直接创建无 Request 的 PO 仅 SUPER_ADMIN / MANAGER（procurement:order）。PO 创建后无行编辑端点（状态机干净）。
+
+12. **PO 不改变库存；Goods Receipt 才是 stock-in 权威（§29/§30/§33）**。DRAFT / ORDERED PO 均不产生任何 StockMovement / InventoryBalance 变化（有测试锁定）；只有 Goods Receipt 创建 PURCHASE_RECEIPT movement 并增加库存。收货事务全原子（§30 锁链）：任一行超收 entire rollback（409）；cumulative received <= ordered 由 PO 行锁 + DB CHECK（`received_quantity <= ordered_quantity`）双重保证；PO 状态由收货推导（全部收满 → RECEIVED，否则 PARTIALLY_RECEIVED）；不允许删除历史 Goods Receipt。
+
+13. **金额与供应商（§22/§34）**。PO 保存 unit_price / line_total（服务 S8 分析）/ order_total（Decimal/Numeric，禁止 float 存金额；JSON 字符串序列化沿用 base_price 约定）；S7 不做 payment / payable / invoice accounting / tax / ledger accounting / supplier settlement；金额只表示采购业务金额。Supplier 不做 bank account / tax / contract / CRM；is_active 停用不删除。
+
+14. **RBAC（§35/§36，用 permission 判断，禁止硬编码角色名）**。新增 11 个权限码：inventory:read / inventory:issue / inventory:adjust / inventory:transfer / inventory:item_manage / procurement:read / procurement:request / procurement:approve / procurement:order / procurement:receive / procurement:supplier_manage（seed 幂等收敛 48 权限码）。矩阵：SUPER_ADMIN/MANAGER 全量；FRONT_DESK = inventory:read/issue + procurement:read/request/receive；HOUSEKEEPING/MAINTENANCE = inventory:read/issue + procurement:request；FINANCE = inventory:read + procurement:read。inventory:adjust/transfer/item_manage 与 procurement:approve/order/supplier_manage 仅 SUPER_ADMIN/MANAGER。补充语义决策：**归还（RETURN）归入 inventory:issue**（日常出入库操作）、**期初库存归入 inventory:item_manage**（物资档案设置）、**地点 PATCH 归入 inventory:item_manage**；procurement:receive 按任务书建议授予 FRONT_DESK（收货入库属前台常见职责，与 product role 判断一致）。
+
+15. **审计（§37）**。19 个 action 全覆盖（inventory.item.create/update、inventory.initial/issue/return/adjust/transfer、supplier.create/update、purchase_request.create/submit/approve/reject/cancel、purchase_order.create/order/cancel、goods_receipt.receive），记录 ID / code / quantities / state transition；**不把 Supplier phone / notes 等自由文本复制进 Audit**（supplier.update 只记字段名）；审计数量统一 `qstr()` 两位小数规范格式。
+
+16. **API 形状（§38/§39）**。遵循任务书推荐结构 + 既有路由风格；`GET /inventory/items` 聚合 total_stock / stock_status / recommended_replenishment（排序 OUT→LOW→NORMAL）；Item Detail 聚合 balances / recent movements / 低库存状态（避免巨大 API，其余组合既有端点）。Movement / Balance 只读端点（无 PATCH/DELETE）。PR/PO 状态只能经专用 action 端点变更（submit/approve/reject/cancel/order/cancel/receipts）。
+
+17. **前端（§40-§47）**。/inventory 工作台（统计卡 + 物资表格 + search/category/低库存/缺货筛选 + 权限显隐的领用/调拨/盘点/新建物资 Modal，mobile 可用 overflow-x 表格）；/inventory/items/[id] 详情（信息 + 四卡 + 地点余额（停用标记）+ 最近流水 + 期初库存/编辑）；/procurement 工作台（低库存建议/待审批/已批准待转单/待收货/部分收货，无图表）+ /procurement/suppliers + /procurement/requests(/[id]) + /procurement/orders(/[id])（部分收货表单支持按剩余一键/手工输入，超收本地拦截 + 后端 409 原文）；Dashboard「库存与采购预警」按权限分别请求 inventory / procurement API（无权限不请求不显示）；导航 库存=inventory:read、采购=procurement:read（后端 403 兜底）。前端不复制状态机，按 status + 权限显隐按钮，409 detail 原文展示。
+
+18. **测试口径（Sprint 7）**。pytest 379（317 基线 + 62 新增：Item/地点/期初 11、Issue/Return/Transfer 10、Ledger/Stocktake/不可变 6、供应商/PR 状态机 8、PO/收货 11、RBAC 矩阵 6、审计 3、seed 幂等 1、迁移往返 1、P0 并发 7×10 轮 stress + 汇总报告）；既有 7 个断言 37 权限码的用例语义更新为 48。Vitest 379（324 基线 + 55 新增：lib 元数据与状态计算 5、导航矩阵 4、库存工作台 7、表单 9、物资详情 5、采购工作台 4、采购视图 11、Dashboard 门控 5、物资详情权限 5 等）。Playwright 64 + inventory-procurement 4 条（Golden A 建物资→期初→领用→流水、Golden B 调拨总库存不变、Golden C 申请→提交→批准→订单→下达→部分/最终收货、Golden D 低库存→工作台/Dashboard 预警）。日期全部动态（Asia/Shanghai 业务日期），禁止硬编码年月日。
+
+
 

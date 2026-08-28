@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from app.database import SessionLocal
 from app.models import (
     CleaningStatus,
+    InventoryLocation,
     OccupancyStatus,
     Permission,
     Role,
@@ -84,6 +85,19 @@ PERMISSIONS: dict[str, tuple[str, str]] = {
     "maintenance_order:work": ("执行维修工单", "开始维修与提交解决"),
     "maintenance_order:verify": ("验收维修工单", "验收通过或返工"),
     "maintenance_order:cancel": ("取消维修工单", "取消进行中的维修工单"),
+    # Sprint 7：Inventory 域权限（§35/§36，用 permission 判断，不用角色名）
+    "inventory:read": ("查看库存", "查看物资、地点、余额与流水"),
+    "inventory:issue": ("领用与归还", "办理物资领用与归还"),
+    "inventory:adjust": ("盘点调整", "办理库存盘点与差异调整"),
+    "inventory:transfer": ("库存调拨", "办理库间调拨"),
+    "inventory:item_manage": ("管理库存物资", "创建与编辑物资档案、库存地点与期初库存"),
+    # Sprint 7：Procurement 域权限
+    "procurement:read": ("查看采购", "查看供应商、采购申请与采购订单"),
+    "procurement:request": ("发起采购申请", "创建、提交与取消采购申请"),
+    "procurement:approve": ("审批采购申请", "批准或驳回采购申请"),
+    "procurement:order": ("创建采购订单", "创建采购订单、下达与取消"),
+    "procurement:receive": ("办理收货", "创建收货单并入库"),
+    "procurement:supplier_manage": ("管理供应商", "创建与编辑供应商档案"),
 }
 
 ROLES: dict[str, str] = {
@@ -142,6 +156,30 @@ MWO_ALL: list[str] = [
     "maintenance_order:cancel",
 ]
 
+# Sprint 7 §36：Inventory / Procurement 域角色矩阵（SUPER_ADMIN 动态全部）
+#   SUPER_ADMIN / MANAGER = 全部 11 个新权限
+#   FRONT_DESK  = inventory:read + inventory:issue
+#               + procurement:read + procurement:request + procurement:receive
+#   HOUSEKEEPING= inventory:read + inventory:issue + procurement:request
+#   MAINTENANCE = inventory:read + inventory:issue + procurement:request
+#   FINANCE     = inventory:read + procurement:read
+# inventory:adjust / inventory:transfer / inventory:item_manage /
+# procurement:approve / procurement:order / procurement:supplier_manage
+#   仅 SUPER_ADMIN / MANAGER（§36）
+INVENTORY_PRO: list[str] = [
+    "inventory:read",
+    "inventory:issue",
+    "inventory:adjust",
+    "inventory:transfer",
+    "inventory:item_manage",
+    "procurement:read",
+    "procurement:request",
+    "procurement:approve",
+    "procurement:order",
+    "procurement:receive",
+    "procurement:supplier_manage",
+]
+
 ROLE_PERMISSIONS: dict[str, list[str]] = {
     "SUPER_ADMIN": [],
     "MANAGER": [
@@ -158,6 +196,7 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
         *ROOM_MOVE_PERMISSIONS,
         *HK_TASK_ALL,
         *MWO_ALL,
+        *INVENTORY_PRO,
     ],
     "FRONT_DESK": [
         "room:read",
@@ -170,6 +209,11 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
         "housekeeping_task:write",
         "maintenance_order:read",
         "maintenance_order:write",
+        "inventory:read",
+        "inventory:issue",
+        "procurement:read",
+        "procurement:request",
+        "procurement:receive",
     ],
     "HOUSEKEEPING": [
         "room:read",
@@ -179,14 +223,25 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
         "housekeeping_task:inspect",
         "maintenance_order:read",
         "maintenance_order:write",
+        "inventory:read",
+        "inventory:issue",
+        "procurement:request",
     ],
     "MAINTENANCE": [
         "room:read",
         "room:status_maintenance",
         "maintenance_order:read",
         "maintenance_order:work",
+        "inventory:read",
+        "inventory:issue",
+        "procurement:request",
     ],
-    "FINANCE": ["audit:read", "room:read"],
+    "FINANCE": [
+        "audit:read",
+        "room:read",
+        "inventory:read",
+        "procurement:read",
+    ],
 }
 
 # 房型：name -> (base_price, capacity, description)
@@ -350,6 +405,34 @@ def seed_rooms(db: Session, types_by_name: dict[str, RoomType]) -> None:
             room.floor = floor
 
 
+# Sprint 7 §6：库存地点（location_code -> name），种子必须幂等
+INVENTORY_LOCATIONS: list[tuple[str, str]] = [
+    ("MAIN_STORAGE", "总仓"),
+    ("FRONT_DESK", "前台"),
+    ("HOUSEKEEPING", "保洁间"),
+    ("MAINTENANCE", "维修间"),
+]
+
+
+def seed_inventory_locations(db: Session) -> None:
+    for location_code, name in INVENTORY_LOCATIONS:
+        location = db.scalar(
+            select(InventoryLocation).where(
+                InventoryLocation.location_code == location_code
+            )
+        )
+        if location is None:
+            db.add(
+                InventoryLocation(
+                    location_code=location_code,
+                    name=name,
+                    is_active=True,
+                )
+            )
+        else:
+            location.name = name
+
+
 def _count(db: Session, model: type) -> int:
     return len(db.scalars(select(model)).all())
 
@@ -362,6 +445,7 @@ def seed() -> None:
         seed_admin(db, roles["SUPER_ADMIN"])
         types_by_name = seed_room_types(db)
         seed_rooms(db, types_by_name)
+        seed_inventory_locations(db)
         db.commit()
 
         print("种子数据写入完成：")
@@ -371,6 +455,7 @@ def seed() -> None:
         print(f"  users:         {_count(db, User)}")
         print(f"  room_types:    {_count(db, RoomType)}")
         print(f"  rooms:         {_count(db, Room)}")
+        print(f"  inventory_locations: {_count(db, InventoryLocation)}")
         admin = db.scalar(
             select(User).where(User.username == ADMIN_USERNAME)
         )

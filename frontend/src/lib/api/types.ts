@@ -628,3 +628,446 @@ export interface MaintenanceAssigneeOut {
   display_name: string;
   username: string;
 }
+
+/* ------------------------------------------------------------------ */
+/* Inventory 域（Sprint 7 后端契约，字段以实际 OpenAPI 为准）            */
+/* ------------------------------------------------------------------ */
+
+export type ItemCategory =
+  | "GUEST_AMENITY"
+  | "LINEN"
+  | "CLEANING"
+  | "FRONT_DESK"
+  | "MAINTENANCE"
+  | "OFFICE"
+  | "OTHER";
+
+export type MovementType =
+  | "INITIAL"
+  | "PURCHASE_RECEIPT"
+  | "ISSUE"
+  | "RETURN"
+  | "TRANSFER_OUT"
+  | "TRANSFER_IN"
+  | "ADJUSTMENT_IN"
+  | "ADJUSTMENT_OUT";
+
+export type IssueDestinationType =
+  | "HOUSEKEEPING"
+  | "FRONT_DESK"
+  | "MAINTENANCE"
+  | "ROOM"
+  | "OTHER";
+
+/** 低库存状态（后端计算：total==0 -> OUT_OF_STOCK；total<=minimum -> LOW_STOCK） */
+export type StockStatus = "NORMAL" | "LOW_STOCK" | "OUT_OF_STOCK";
+
+export interface InventoryItemOut {
+  id: number;
+  item_code: string;
+  name: string;
+  category: ItemCategory;
+  base_unit: string;
+  specification?: string | null;
+  minimum_stock: string;
+  target_stock: string;
+  is_consumable: boolean;
+  is_active: boolean;
+  notes?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface InventoryItemCreate {
+  item_code: string;
+  name: string;
+  category: ItemCategory;
+  base_unit: string;
+  specification?: string | null;
+  minimum_stock?: number | string;
+  target_stock?: number | string;
+  is_consumable?: boolean;
+  notes?: string | null;
+}
+
+/** PATCH：item_code 不可修改；只提交变更字段（后端 strict，空/未知字段 422） */
+export interface InventoryItemUpdate {
+  name?: string;
+  category?: ItemCategory;
+  base_unit?: string;
+  specification?: string | null;
+  minimum_stock?: number | string;
+  target_stock?: number | string;
+  is_consumable?: boolean;
+  is_active?: boolean;
+  notes?: string | null;
+}
+
+/** 列表行：聚合 total_stock + 低库存状态 + 建议补货量 */
+export interface InventoryItemListRow {
+  id: number;
+  item_code: string;
+  name: string;
+  category: ItemCategory;
+  base_unit: string;
+  minimum_stock: string;
+  target_stock: string;
+  is_consumable: boolean;
+  is_active: boolean;
+  total_stock: string;
+  stock_status: StockStatus;
+  recommended_replenishment: string;
+}
+
+export interface InventoryItemListParams extends PageParams {
+  search?: string;
+  category?: ItemCategory;
+  stock_status?: StockStatus;
+  is_active?: boolean;
+}
+
+export interface InventoryBalanceOut {
+  id: number;
+  item_id: number;
+  location_id: number;
+  location_code?: string | null;
+  location_name?: string | null;
+  location_active: boolean;
+  quantity: string;
+  updated_at: string;
+}
+
+export interface StockMovementOut {
+  id: number;
+  movement_no: string;
+  item_id: number;
+  item_code?: string | null;
+  item_name?: string | null;
+  location_id: number;
+  location_code?: string | null;
+  location_name?: string | null;
+  movement_type: MovementType;
+  quantity: string;
+  reference_type?: string | null;
+  reference_id?: number | null;
+  reason?: string | null;
+  created_by_user_id?: number | null;
+  operator_name?: string | null;
+  created_at: string;
+}
+
+export interface InventoryItemDetailOut extends InventoryItemOut {
+  total_stock: string;
+  stock_status: StockStatus;
+  recommended_replenishment: string;
+  balances: InventoryBalanceOut[];
+  recent_movements: StockMovementOut[];
+}
+
+export interface InventoryLocationOut {
+  id: number;
+  location_code: string;
+  name: string;
+  is_active: boolean;
+  notes?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface InventoryLocationUpdate {
+  name?: string;
+  is_active?: boolean;
+  notes?: string | null;
+}
+
+export interface InitialStockCreate {
+  location_id: number;
+  quantity: number | string;
+  reason?: string | null;
+}
+
+export interface InitialStockOut {
+  id: number;
+  movement_no: string;
+  item_id: number;
+  item_code: string;
+  item_name: string;
+  location_id: number;
+  location_name: string;
+  quantity: string;
+  balance_quantity: string;
+  reason?: string | null;
+  created_at: string;
+}
+
+export interface IssueLineIn {
+  item_id: number;
+  quantity: number | string;
+}
+
+export interface StockIssueCreate {
+  source_location_id: number;
+  destination_type: IssueDestinationType;
+  room_id?: number | null;
+  notes?: string | null;
+  lines: IssueLineIn[];
+}
+
+export interface StockIssueLineOut {
+  id: number;
+  item_id: number;
+  item_code?: string | null;
+  item_name?: string | null;
+  base_unit?: string | null;
+  quantity: string;
+}
+
+export interface StockIssueOut {
+  id: number;
+  issue_no: string;
+  source_location_id: number;
+  source_location_name?: string | null;
+  destination_type: IssueDestinationType;
+  room_id?: number | null;
+  notes?: string | null;
+  created_by_user_id?: number | null;
+  operator_name?: string | null;
+  created_at: string;
+  lines: StockIssueLineOut[];
+}
+
+export interface StockReturnCreate {
+  item_id: number;
+  location_id: number;
+  quantity: number | string;
+  reason: string;
+}
+
+export interface StockReturnOut {
+  id: number;
+  movement_no: string;
+  item_id: number;
+  item_code: string;
+  item_name: string;
+  location_id: number;
+  location_name: string;
+  quantity: string;
+  reason: string;
+  created_at: string;
+}
+
+export interface TransferLineIn {
+  item_id: number;
+  quantity: number | string;
+}
+
+export interface StockTransferCreate {
+  source_location_id: number;
+  destination_location_id: number;
+  reason?: string | null;
+  lines: TransferLineIn[];
+}
+
+export interface StockTransferOut {
+  source_location_id: number;
+  source_location_name: string;
+  destination_location_id: number;
+  destination_location_name: string;
+  reason?: string | null;
+  created_by_user_id?: number | null;
+  operator_name?: string | null;
+  created_at: string;
+  lines: StockIssueLineOut[];
+  movement_ids: number[];
+}
+
+export interface StocktakeCreate {
+  item_id: number;
+  location_id: number;
+  actual_quantity: number | string;
+  reason: string;
+}
+
+export interface StocktakeOut {
+  item_id: number;
+  item_code: string;
+  item_name: string;
+  location_id: number;
+  location_name: string;
+  expected_quantity: string;
+  actual_quantity: string;
+  difference: string;
+  movement_type?: MovementType | null;
+  movement_id?: number | null;
+  balance_quantity: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Procurement 域（Sprint 7 后端契约，字段以实际 OpenAPI 为准）         */
+/* ------------------------------------------------------------------ */
+
+export type PurchaseRequestStatus =
+  | "DRAFT"
+  | "SUBMITTED"
+  | "APPROVED"
+  | "ORDERED"
+  | "REJECTED"
+  | "CANCELLED";
+
+export type PurchaseOrderStatus =
+  | "DRAFT"
+  | "ORDERED"
+  | "PARTIALLY_RECEIVED"
+  | "RECEIVED"
+  | "CANCELLED";
+
+export interface SupplierOut {
+  id: number;
+  supplier_code: string;
+  name: string;
+  contact_name?: string | null;
+  phone?: string | null;
+  wechat?: string | null;
+  notes?: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SupplierCreate {
+  supplier_code: string;
+  name: string;
+  contact_name?: string | null;
+  phone?: string | null;
+  wechat?: string | null;
+  notes?: string | null;
+}
+
+export interface SupplierUpdate {
+  name?: string;
+  contact_name?: string | null;
+  phone?: string | null;
+  wechat?: string | null;
+  notes?: string | null;
+  is_active?: boolean;
+}
+
+export interface PurchaseRequestLineOut {
+  id: number;
+  item_id: number;
+  item_code?: string | null;
+  item_name?: string | null;
+  base_unit?: string | null;
+  quantity: string;
+  notes?: string | null;
+}
+
+export interface PurchaseRequestOut {
+  id: number;
+  request_no: string;
+  status: PurchaseRequestStatus;
+  requested_by_user_id?: number | null;
+  requester_name?: string | null;
+  approved_by_user_id?: number | null;
+  approved_by_name?: string | null;
+  submitted_at?: string | null;
+  approved_at?: string | null;
+  rejected_at?: string | null;
+  cancelled_at?: string | null;
+  notes?: string | null;
+  created_at: string;
+  updated_at: string;
+  lines: PurchaseRequestLineOut[];
+}
+
+export interface PurchaseRequestLineIn {
+  item_id: number;
+  quantity: number | string;
+  notes?: string | null;
+}
+
+export interface PurchaseRequestCreate {
+  notes?: string | null;
+  lines: PurchaseRequestLineIn[];
+}
+
+export interface PurchaseOrderLineOut {
+  id: number;
+  item_id: number;
+  item_code?: string | null;
+  item_name?: string | null;
+  base_unit?: string | null;
+  ordered_quantity: string;
+  received_quantity: string;
+  remaining_quantity: string;
+  unit_price?: string | null;
+  line_total?: string | null;
+}
+
+export interface GoodsReceiptLineOut {
+  id: number;
+  purchase_order_line_id: number;
+  item_id?: number | null;
+  item_code?: string | null;
+  item_name?: string | null;
+  base_unit?: string | null;
+  received_quantity: string;
+}
+
+export interface GoodsReceiptOut {
+  id: number;
+  receipt_no: string;
+  purchase_order_id: number;
+  inventory_location_id: number;
+  inventory_location_name?: string | null;
+  received_by_user_id?: number | null;
+  receiver_name?: string | null;
+  received_at?: string | null;
+  notes?: string | null;
+  created_at: string;
+  lines: GoodsReceiptLineOut[];
+}
+
+export interface PurchaseOrderOut {
+  id: number;
+  order_no: string;
+  supplier_id: number;
+  supplier_code?: string | null;
+  supplier_name?: string | null;
+  purchase_request_id?: number | null;
+  request_no?: string | null;
+  status: PurchaseOrderStatus;
+  ordered_at?: string | null;
+  cancelled_at?: string | null;
+  created_by_user_id?: number | null;
+  notes?: string | null;
+  created_at: string;
+  updated_at: string;
+  order_total: string;
+  lines: PurchaseOrderLineOut[];
+  receipts: GoodsReceiptOut[];
+}
+
+export interface PurchaseOrderLineIn {
+  item_id: number;
+  ordered_quantity: number | string;
+  unit_price?: number | string | null;
+}
+
+export interface PurchaseOrderCreate {
+  supplier_id: number;
+  purchase_request_id?: number | null;
+  notes?: string | null;
+  lines?: PurchaseOrderLineIn[] | null;
+}
+
+export interface GoodsReceiptLineIn {
+  purchase_order_line_id: number;
+  received_quantity: number | string;
+}
+
+export interface GoodsReceiptCreate {
+  inventory_location_id: number;
+  notes?: string | null;
+  lines: GoodsReceiptLineIn[];
+}

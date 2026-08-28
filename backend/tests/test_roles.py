@@ -18,9 +18,11 @@ def test_list_seeded_roles(client, admin_headers):
     body = resp.json()
     assert body["total"] == 6
     assert {r["name"] for r in body["items"]} == SEEDED_ROLES
-    # SUPER_ADMIN 拥有全部 37 个权限（17 基线 + 10 Booking + 5 Housekeeping + 5 Maintenance）
+    # SUPER_ADMIN 拥有全部 48 个权限（Sprint 1 的 17 + Booking 的 10 +
+    # Housekeeping 的 5 + Maintenance 的 5 + Room Move 的 1 +
+    # Sprint 7 Inventory/Procurement 的 11）
     super_admin = next(r for r in body["items"] if r["name"] == "SUPER_ADMIN")
-    assert len(super_admin["permissions"]) == 37
+    assert len(super_admin["permissions"]) == 48
 
 
 def test_create_and_get_role(client, admin_headers):

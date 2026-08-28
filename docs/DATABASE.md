@@ -5,6 +5,7 @@
 > Sprint 3 新增：`housekeeping_tasks`（另含 PG 枚举 `hk_task_status` / `hk_task_source` / `hk_task_priority`、Sequence `housekeeping_task_no_seq`、部分唯一索引 `uq_housekeeping_tasks_active_room`）。
 > Sprint 5 新增：`maintenance_work_orders` + `rooms.unavailability_source`（另含 PG 枚举 `mwo_status` / `mwo_category` / `mwo_severity` / `mwo_source` / `unavailability_source`、Sequence `maintenance_work_order_no_seq`、CHECK 约束 `ck_rooms_unavailability_source`、部分索引 `ix_mwo_active_blocking_room`）。
 > Sprint 6 新增：`stay_room_assignments`（另含 PG 枚举 `room_move_reason`、CHECK 约束 `ck_stay_room_assignments_interval`、部分唯一索引 `uq_stay_room_assignments_active_stay`、排他约束 `ex_stay_room_assignments_no_overlap`；`hk_task_source` 增加 ROOM_MOVE；Reservation 排他约束调整为 CONFIRMED-only；既有 Stay 历史回填）。
+> Sprint 7 新增：Inventory 域（`inventory_items` / `inventory_locations` / `inventory_balances` / `stock_movements` / `stock_issues` / `stock_issue_lines`）与 Procurement 域（`suppliers` / `purchase_requests` / `purchase_request_lines` / `purchase_orders` / `purchase_order_lines` / `goods_receipts` / `goods_receipt_lines`），另含 PG 枚举 `item_category` / `movement_type` / `issue_destination_type` / `purchase_request_status` / `purchase_order_status` 与 5 个业务单号 Sequence。
 
 ## 表结构（Sprint 1）
 
@@ -218,9 +219,83 @@ cleaning_status（清洁状态，PG 枚举 cleaning_status）：
 
 状态机合法转换见 `backend/app/core/state_machine.py`，由 API 层强制（非法转换 409）。
 
+## Inventory 域表结构（Sprint 7，Migration `e3a91f5c8d24`）
+
+| 表 | 关键字段 | 说明 |
+|---|---|---|
+| inventory_items | id, item_code(unique，创建后不可变), name, category(枚举), base_unit(唯一基础单位), specification, minimum_stock(Numeric(12,2)), target_stock, is_consumable, is_active, notes, created_at, updated_at | 库存物资档案；CHECK `minimum_stock >= 0` / `target_stock >= 0` / `target_stock >= minimum_stock`；停用不删除 |
+| inventory_locations | id, location_code(unique), name, is_active, notes, created_at, updated_at | 多库存地点（种子：MAIN_STORAGE 总仓 / FRONT_DESK 前台 / HOUSEKEEPING 保洁间 / MAINTENANCE 维修间） |
+| inventory_balances | id, item_id(FK RESTRICT), location_id(FK RESTRICT), quantity(Numeric(12,2)), updated_at | **余额 Projection（投影），不是独立事实**；UNIQUE(item_id, location_id)；CHECK `quantity >= 0`；每次库存事务与 StockMovement 同事务更新 |
+| stock_movements | id, movement_no(unique), item_id, location_id, movement_type(枚举), quantity(signed), reference_type, reference_id, reason, created_by_user_id(SET NULL), created_at | **永久库存账本事实（immutable ledger）**；无普通 PATCH / DELETE 通道；CHECK 按类型校验符号（PURCHASE_RECEIPT/RETURN/TRANSFER_IN/ADJUSTMENT_IN > 0；ISSUE/TRANSFER_OUT/ADJUSTMENT_OUT < 0；INITIAL >= 0） |
+| stock_issues | id, issue_no(unique), source_location_id, destination_type(枚举), room_id(FK RESTRICT, nullable), notes, created_by_user_id, created_at | 领用单（多行整体原子）；CHECK `destination_type='ROOM' AND room_id IS NOT NULL OR destination_type<>'ROOM' AND room_id IS NULL` |
+| stock_issue_lines | id, issue_id(FK CASCADE), item_id(FK RESTRICT), quantity | 领用行；CHECK `quantity > 0` |
+
+### Inventory 域 PG 枚举
+
+```text
+item_category:            GUEST_AMENITY / LINEN / CLEANING / FRONT_DESK /
+                          MAINTENANCE / OFFICE / OTHER
+movement_type:            INITIAL / PURCHASE_RECEIPT / ISSUE / RETURN /
+                          TRANSFER_OUT / TRANSFER_IN / ADJUSTMENT_IN /
+                          ADJUSTMENT_OUT
+issue_destination_type:   HOUSEKEEPING / FRONT_DESK / MAINTENANCE / ROOM / OTHER
+```
+
+### 业务单号 Sequence
+
+- `stock_movement_no_seq`（SMV{YYYYMMDD}-{NNNN}）/ `stock_issue_no_seq`（SIS{YYYYMMDD}-{NNNN}）
+- 应用层 `nextval` 原子取号（日期 = Property Business Date），UNIQUE 约束兜底。禁止 SELECT MAX+1。
+
+### 关键不变量（Sprint 7 §2 LOCKED）
+
+- **no movement = no stock change**：库存变化只能来自业务动作；
+  不允许直接 PATCH quantity / current_stock / balance。
+- **Ledger == Balance**：`InventoryBalance.quantity == SUM(StockMovement.quantity)`
+  for (item, location)，覆盖 INITIAL / ISSUE / RETURN / TRANSFER / ADJUSTMENT /
+  PURCHASE_RECEIPT 全部正常业务路径。
+- **无负库存**：所有减少库存的操作 SELECT ... FOR UPDATE -> recheck quantity
+  -> movement -> balance update；不足返回 409；DB CHECK `quantity >= 0` 兜底。
+- 总库存 = SUM(所有已持久化 Balance)，已停用 Location 的库存**不**静默消失（UI 标记 inactive）。
+
+## Procurement 域表结构（Sprint 7，Migration `e3a91f5c8d24`）
+
+| 表 | 关键字段 | 说明 |
+|---|---|---|
+| suppliers | id, supplier_code(unique), name, contact_name, phone, wechat, notes, is_active, created_at, updated_at | 供应商（无银行/税务/合同字段）；停用不删除 |
+| purchase_requests | id, request_no(unique), status(枚举), requested_by_user_id, approved_by_user_id, submitted_at, approved_at, rejected_at, cancelled_at, notes, created_at, updated_at | 采购申请；状态机 DRAFT→SUBMITTED→APPROVED→ORDERED、SUBMITTED→REJECTED、DRAFT/APPROVED→CANCELLED |
+| purchase_request_lines | id, request_id(FK CASCADE), item_id(FK RESTRICT), quantity, notes | 申请行；CHECK `quantity > 0` |
+| purchase_orders | id, order_no(unique), supplier_id(FK RESTRICT), purchase_request_id(FK RESTRICT, nullable, **UNIQUE**), status(枚举), ordered_at, cancelled_at, created_by_user_id, notes, created_at, updated_at | 采购订单；**一张 Request 至多一张 PO**（DB UNIQUE 最终仲裁）；状态机 DRAFT→ORDERED→PARTIALLY_RECEIVED→RECEIVED、DRAFT/ORDERED/PARTIALLY_RECEIVED→CANCELLED |
+| purchase_order_lines | id, order_id(FK CASCADE), item_id(FK RESTRICT), ordered_quantity, received_quantity, unit_price(Numeric(12,2)) | 订单行；CHECK `ordered_quantity > 0` / `received_quantity >= 0` / **`received_quantity <= ordered_quantity`**（数据库级防超收） |
+| goods_receipts | id, receipt_no(unique), purchase_order_id(FK RESTRICT), inventory_location_id(FK RESTRICT), received_by_user_id, received_at, notes, created_at | 收货单；**收货才是库存增加权威**；历史不删除 |
+| goods_receipt_lines | id, receipt_id(FK CASCADE), purchase_order_line_id(FK RESTRICT), received_quantity | 收货行；CHECK `received_quantity > 0` |
+
+### Procurement 域 PG 枚举
+
+```text
+purchase_request_status:  DRAFT / SUBMITTED / APPROVED / ORDERED /
+                          REJECTED / CANCELLED
+purchase_order_status:    DRAFT / ORDERED / PARTIALLY_RECEIVED /
+                          RECEIVED / CANCELLED
+```
+
+### 业务单号 Sequence
+
+- `purchase_request_no_seq`（PRQ{YYYYMMDD}-{NNNN}）/ `purchase_order_no_seq`（PO{YYYYMMDD}-{NNNN}）/ `goods_receipt_no_seq`（GR{YYYYMMDD}-{NNNN}）
+- 原子取号 + UNIQUE 兜底，禁止 SELECT MAX+1。
+
+### 关键语义（Sprint 7 §27/§28/§31/§33）
+
+- **PO 不改变库存**：DRAFT / ORDERED PO 均无 movement / balance 变化；
+  只有 Goods Receipt 创建 PURCHASE_RECEIPT movement 并增加库存。
+- **部分收货**：cumulative received <= ordered（PO 行锁串行化 + DB CHECK）；
+  PO 状态由收货推导（全部收满 → RECEIVED，否则 PARTIALLY_RECEIVED）。
+- **PARTIALLY_RECEIVED → CANCELLED**：代表「不再收剩余数量」，
+  已收货库存与历史保持；RECEIVED 终态不可取消。
+- 金额使用 Numeric/Decimal（禁止 float 存金额）；S7 不做付款/应付/发票/税务。
+
 ## 约定
 
 - PostgreSQL 16，通过 Docker Compose 提供开发实例（`stayops` 库；pytest 用独立 `stayops_test` 库）
 - Schema 修改必须使用 Alembic Migration（禁止直接改表）
 - 凭据不硬编码进 Git，通过 `.env` 加载
-- 种子数据（权限/角色/admin/28 房间/6 房型）由 `python -m app.seed` 幂等写入；Sprint 2 新增 9 个 Booking 权限码（共 26 个），Sprint 3 新增 5 个 Housekeeping 权限码（共 31 个），Sprint 5 新增 5 个 Maintenance 权限码（共 36 个），seed 幂等收敛不变
+- 种子数据（权限/角色/admin/28 房间/6 房型/4 库存地点）由 `python -m app.seed` 幂等写入；Sprint 2 新增 9 个 Booking 权限码（共 26 个），Sprint 3 新增 5 个 Housekeeping 权限码（共 31 个），Sprint 5 新增 5 个 Maintenance 权限码（共 36 个），Sprint 6 新增 1 个 Room Move 权限码（共 37 个），Sprint 7 新增 11 个 Inventory/Procurement 权限码（共 48 个），seed 幂等收敛不变

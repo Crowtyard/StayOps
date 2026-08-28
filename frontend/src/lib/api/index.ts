@@ -9,8 +9,10 @@ import { createAuditLogsApi, type AuditLogsApi } from "./audit-logs";
 import { createAvailabilityApi, type AvailabilityApi } from "./availability";
 import { createGuestsApi, type GuestsApi } from "./guests";
 import { createHousekeepingApi, type HousekeepingApi } from "./housekeeping";
+import { createInventoryApi, type InventoryApi } from "./inventory";
 import { createMaintenanceApi, type MaintenanceApi } from "./maintenance";
 import { createPermissionsApi, type PermissionsApi } from "./permissions";
+import { createProcurementApi, type ProcurementApi } from "./procurement";
 import { createReservationsApi, type ReservationsApi } from "./reservations";
 import { createRolesApi, type RolesApi } from "./roles";
 import { createRoomsApi, type RoomsApi } from "./rooms";
@@ -31,6 +33,8 @@ export interface ApiClient {
   availability: AvailabilityApi;
   housekeeping: HousekeepingApi;
   maintenance: MaintenanceApi;
+  inventory: InventoryApi;
+  procurement: ProcurementApi;
 }
 
 export function createApiClient(transport: Transport): ApiClient {
@@ -47,6 +51,8 @@ export function createApiClient(transport: Transport): ApiClient {
     availability: createAvailabilityApi(transport),
     housekeeping: createHousekeepingApi(transport),
     maintenance: createMaintenanceApi(transport),
+    inventory: createInventoryApi(transport),
+    procurement: createProcurementApi(transport),
   };
 }
 

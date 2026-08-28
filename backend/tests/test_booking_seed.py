@@ -55,7 +55,7 @@ def test_seed_idempotent_and_booking_role_mapping(_database):
     second = _snapshot()
     assert first == second, "连续执行两次 seed 必须收敛到一致状态"
 
-    assert first["permissions"] == 37  # Sprint 1 的 17 + Booking 的 10 + Housekeeping 的 5 + Maintenance 的 5
+    assert first["permissions"] == 48  # Sprint 1 的 17 + Booking 的 10 + Housekeeping 的 5 + Maintenance 的 5 + Room Move 的 1 + S7 Inventory/Procurement 的 11
     mapping = first["mapping"]
     assert BOOKING_CODES <= mapping["SUPER_ADMIN"]
     assert BOOKING_CODES <= mapping["MANAGER"]

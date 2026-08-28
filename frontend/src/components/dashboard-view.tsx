@@ -205,6 +205,167 @@ export default function DashboardView() {
 
       <BookingOverview permissions={permissions} />
       <HousekeepingOverview permissions={permissions} />
+      <InventoryAlertsOverview permissions={permissions} />
+    </div>
+  );
+}
+
+/**
+ * 库存预警概览（Sprint 7 §45，轻量）：低库存数 / 缺货数（inventory:read）+
+ * 待审批申请数 / 待收货订单数（procurement:read）。
+ * 无对应权限不请求、不显示（不产生无权限错误）；不做 S8 Analytics 图表。
+ */
+function InventoryAlertsOverview({ permissions }: { permissions: Set<string> }) {
+  const canReadInventory = permissions.has("inventory:read");
+  const canReadProcurement = permissions.has("procurement:read");
+
+  const [stockCounts, setStockCounts] = useState<{
+    low: number;
+    out: number;
+  } | null>(null);
+  const [procurementCounts, setProcurementCounts] = useState<{
+    pendingApproval: number;
+    pendingReceipt: number;
+  } | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!canReadInventory && !canReadProcurement) return;
+    let cancelled = false;
+    const jobs: Promise<void>[] = [];
+
+    if (canReadInventory) {
+      jobs.push(
+        (async () => {
+          const all: import("@/lib/api/types").InventoryItemListRow[] = [];
+          let page = 1;
+          for (;;) {
+            const result = await api.inventory.listItems({
+              page,
+              page_size: 100,
+            });
+            all.push(...result.items);
+            if (result.page * result.page_size >= result.total) break;
+            page += 1;
+          }
+          if (!cancelled) {
+            setStockCounts({
+              low: all.filter((i) => i.stock_status === "LOW_STOCK").length,
+              out: all.filter((i) => i.stock_status === "OUT_OF_STOCK").length,
+            });
+          }
+        })(),
+      );
+    }
+    if (canReadProcurement) {
+      jobs.push(
+        (async () => {
+          const submitted = await api.procurement.listRequests({
+            status: "SUBMITTED",
+            page: 1,
+            page_size: 100,
+          });
+          if (cancelled) return;
+          const ordered = await api.procurement.listOrders({
+            status: "ORDERED",
+            page: 1,
+            page_size: 100,
+          });
+          if (cancelled) return;
+          const partial = await api.procurement.listOrders({
+            status: "PARTIALLY_RECEIVED",
+            page: 1,
+            page_size: 100,
+          });
+          if (!cancelled) {
+            setProcurementCounts({
+              pendingApproval: submitted.total,
+              pendingReceipt: ordered.total + partial.total,
+            });
+          }
+        })(),
+      );
+    }
+    Promise.all(jobs).catch(() => {
+      if (!cancelled) setLoadError("库存/采购预警加载失败");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [canReadInventory, canReadProcurement]);
+
+  if (!canReadInventory && !canReadProcurement) return null;
+
+  const cards: { label: string; value: number | null; accent: string }[] = [];
+  if (canReadInventory) {
+    cards.push({
+      label: "低库存",
+      value: stockCounts?.low ?? null,
+      accent: "text-amber-600",
+    });
+    cards.push({
+      label: "缺货",
+      value: stockCounts?.out ?? null,
+      accent: "text-red-600",
+    });
+  }
+  if (canReadProcurement) {
+    cards.push({
+      label: "待审批申请",
+      value: procurementCounts?.pendingApproval ?? null,
+      accent: "text-gray-900",
+    });
+    cards.push({
+      label: "待收货订单",
+      value: procurementCounts?.pendingReceipt ?? null,
+      accent: "text-gray-900",
+    });
+  }
+
+  return (
+    <div className="mt-6">
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-gray-900">库存与采购预警</h2>
+        <span className="flex gap-3 text-xs text-gray-500">
+          {canReadInventory ? (
+            <Link href="/inventory" className="hover:underline">
+              库存 →
+            </Link>
+          ) : null}
+          {canReadProcurement ? (
+            <Link href="/procurement" className="hover:underline">
+              采购 →
+            </Link>
+          ) : null}
+        </span>
+      </div>
+
+      {loadError ? (
+        <p
+          role="alert"
+          className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 ring-1 ring-inset ring-red-200"
+        >
+          {loadError}
+        </p>
+      ) : cards.every((c) => c.value === null) ? (
+        <p className="text-sm text-gray-400">正在加载库存与采购数据…</p>
+      ) : (
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {cards.map((card) => (
+            <div
+              key={card.label}
+              className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm"
+            >
+              <p className="text-xs text-gray-500">{card.label}</p>
+              <p
+                className={`mt-1.5 text-2xl font-semibold tabular-nums ${card.accent}`}
+              >
+                {card.value ?? "…"}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

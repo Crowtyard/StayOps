@@ -159,15 +159,16 @@ Sprint 5 范围：MaintenanceWorkOrder 正式领域（第三独立业务领域�
 
 Sprint 5 进展：DSH 单会话完成全部实现（Implementation Complete，无 commit）：pytest 285（220 基线 + 65 新增）/ Vitest 285（240 基线 + 45 新增）/ Playwright 59（46 基线 + maintenance 2 spec 13 条）全绿；lint / typecheck / build PASS；Clean Bootstrap（empty stayops_test → alembic upgrade head → seed → :8001 / :3001 → full Playwright）PASS；Sprint 1–4 回归全部保留。Kun Fast QA 首轮 FAILED（Blocking Product Defect：occupied + blocking MWO + 未来预订 → Front Desk 无主动维修风险提示）；DSH 已修复（Attention 新增 Rule M：预订存在维修风险，与 Room 占用无关，RESOLVED 仍报警，一条预订一条卡片，M 优先抑制重复 Rule C，桌面 + 移动共享）；Kun Fast RE-QA 独立重跑全绿（pytest 285 / Vitest 300（285 基线 + 15 修复增量）/ Playwright 60（59 基线 + 修复场景 1 条），lint / typecheck / build PASS），缺陷修复复审通过；`v1.0.0-alpha.4` 冻结不动，`v1.0.0-alpha.5` 已创建为 Sprint 5 Release Commit。
 
-## Sprint 6（CODING COMPLETE · 等待 Kun Fast QA）
+## Sprint 6（COMPLETE · RELEASED）
 
 ```text
 Sprint 6                = Room Move & In-Stay Recovery（住中换房与在住异常恢复）
 正式名称                = Room Move & In-Stay Recovery
-Release                 = v1.0.0-alpha.6（计划，待 Kun QA PASS 后发布）
+Release                 = v1.0.0-alpha.6（RELEASED）
+Release Commit          = 2791c8b14a6965cb01ef7f998775e73d37192967
 开发模式                = FAST TRACK + REUSE FIRST + ONE SPRINT / ONE DSH SESSION（不拆 T1/T2/T3）
 Sprint 6 Coding         = IMPLEMENTATION COMPLETE（单会话完成，无 commit）
-Sprint 6 Fast QA        = 待 Kun 独立 QA
+Sprint 6 Fast QA        = PASS（Kun 独立 QA）
 DSH                     = STOPPED（完成后停止，不进入 Sprint 7）
 Kun                     = PROJECT MANAGER + QA
 ```
@@ -205,4 +206,72 @@ Sprint 6 进展：DSH 单会话完成全部实现（Implementation Complete，�
 pytest 317 / Vitest 324 / Playwright room-move spec 4 条全绿；lint / typecheck / build PASS；
 开发库 stayops `alembic upgrade head`（c8e2b7a4d1f3）+ seed 幂等收敛（37 权限码）；
 Sprint 1–5 回归全部保留（pytest 285 基线 / Vitest 300 基线 / Playwright 60 基线）。
-`v1.0.0-alpha.5` 冻结不动；待 Kun Fast QA PASS 后创建 `v1.0.0-alpha.6` Release Commit。
+Kun Fast QA PASS；`v1.0.0-alpha.5` 冻结不动，`v1.0.0-alpha.6` 已创建为
+Sprint 6 Release Commit（2791c8b）。
+
+## Sprint 7（IMPLEMENTATION COMPLETE · 等待 Kun Fast QA）
+
+```text
+Sprint 7                = Inventory & Procurement（库存与采购）
+Release                 = v1.0.0-alpha.7（计划，待 Kun QA PASS 后发布）
+开发模式                = FAST TRACK + REUSE FIRST + ONE SPRINT / ONE DSH SESSION（不拆 T1/T2/T3）
+Sprint 7 Coding         = IMPLEMENTATION COMPLETE（无 commit）
+Sprint 7 Fast QA        = 待 Kun 独立 QA
+DSH                     = STOPPED（完成后停止，不进入 Sprint 8）
+Kun                     = PROJECT MANAGER + QA
+```
+
+Sprint 7 范围（任务书 §1–§61）：
+
+- **LOCKED 架构（§2）**：StockMovement = 永久库存账本事实（immutable ledger，
+  无 PATCH/DELETE）；InventoryBalance = Projection（唯一 (item_id, location_id)）；
+  no movement = no stock change（流水+余额同事务）；无直接 balance PATCH；
+  无负库存（FOR UPDATE + recheck + DB CHECK）；多库存地点（4 个种子地点）；
+  无自动客耗扣账（Checkout / Housekeeping / Room Move 不扣库存）。
+- **库存域**：InventoryItem（item_code 唯一不可变、base_unit 唯一基础单位、
+  minimum/target CHECK target>=minimum、is_active 停用）/ InventoryLocation /
+  InventoryBalance / StockMovement（signed quantity + 类型符号 CHECK）/
+  StockIssue+Lines（多行整体原子、ROOM 目的地 room_id 一致性）；
+  期初库存（INITIAL 专用动作）/ 领用 / 归还 / 调拨（OUT↔IN 成对互指，总库存不变）/
+  盘点（差异→ADJUSTMENT_IN/OUT，平账 no-op）；低库存（total==0 → OUT_OF_STOCK，
+  total<=minimum → LOW_STOCK，minimum=0 边界语义）/ 建议补货（仅建议不自动下单）。
+- **采购域**：Supplier（停用不删除，审计不复制 phone/notes 自由文本）/
+  PurchaseRequest（DRAFT→SUBMITTED→APPROVED→ORDERED、SUBMITTED→REJECTED、
+  DRAFT/APPROVED→CANCELLED，审批与申请分离）/ PurchaseOrder
+  （DRAFT→ORDERED→PARTIALLY_RECEIVED→RECEIVED，部分收货后取消=不再收剩余，
+  已收货保持）/ GoodsReceipt（收货才是 stock-in 权威；超收整体回滚 409）；
+  Request→PO exactly-once（同事务 APPROVED→ORDERED + DB UNIQUE）；
+  **PO 不改变库存**；金额 Decimal（不做付款/应付/发票/税务）。
+- **并发（Lock Graph）**：Inventory 事务只锁 Balance 行（(item_id, location_id) 升序，
+  INSERT ON CONFLICT + FOR UPDATE）；收货 = PO → PO lines → Balance 行；
+  全局无环；40P01/40001 → 409，其它 OperationalError 原样传播；
+  P0 stress：issue-vs-issue / transfer-vs-issue / stocktake-vs-issue /
+  receipt-vs-receipt / receipt-vs-issue / receipt-vs-transfer /
+  request-to-po-vs-request-to-po 各 10 轮真实 PostgreSQL，
+  unexpected 500 = 0、deadlocks = 0。
+- **RBAC / 审计**：11 个新权限码（48 总）；矩阵 §36（inventory:adjust/transfer/
+  item_manage 与 procurement:approve/order/supplier_manage 仅 SUPER_ADMIN/MANAGER；
+  receive 按建议授予 FRONT_DESK）；19 个审计 action，记录 ID/code/quantities/
+  state transition。
+- **前端**：/inventory 工作台 + /inventory/items/[id] 详情 + 领用/调拨/盘点/
+  新建物资/期初库存/编辑表单（Mobile 可用）；/procurement 工作台 + suppliers +
+  requests(/[id]) + orders(/[id])（部分收货表单、按剩余一键收货）；
+  Dashboard「库存与采购预警」按权限门控；导航 库存=inventory:read、
+  采购=procurement:read（后端 403 兜底）；前端不复制状态机，409 原文展示。
+- **迁移 `e3a91f5c8d24`**：13 张新表、5 个 PG 枚举、5 个 Sequence、
+  UNIQUE(item,location) / movement 符号 CHECK / received<=ordered CHECK /
+  PR→PO UNIQUE；downgrade 往返仅 scratch 库验证（正常开发库不降级）。
+- **测试口径**：pytest 379（317 基线 + 62 新增，含 P0 并发 7×10 轮 stress +
+  汇总报告、Ledger==Balance 对账、迁移往返、seed 幂等；既有 6 个权限码计数用例
+  语义更新为 48）；Vitest 379（324 基线 + 55 新增）；Playwright 64 +
+  inventory-procurement 4 条（Golden A 建物资→期初→领用→流水、Golden B 调拨
+  总库存不变、Golden C 申请→提交→批准→订单→下达→部分/最终收货、
+  Golden D 低库存→工作台/Dashboard 预警）；lint / typecheck / build PASS。
+
+Sprint 7 进展：DSH 完成全部实现（Implementation Complete，无 commit）：
+pytest 379 / Vitest 379 / Playwright inventory-procurement 4 条全绿；
+lint / typecheck / build PASS；开发库 stayops `alembic upgrade head`
+（e3a91f5c8d24）+ seed 幂等收敛（48 权限码 + 4 库存地点）；
+Sprint 1–6 回归全部保留（pytest 317 基线 / Vitest 324 基线 / Playwright 64 基线）。
+`v1.0.0-alpha.6`（2791c8b）冻结不动；待 Kun Fast QA PASS 后创建
+`v1.0.0-alpha.7` Release Commit。

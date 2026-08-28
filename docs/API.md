@@ -1,6 +1,6 @@
 # StayOps API
 
-> Sprint 1 第二阶段已实现，Sprint 2 S2-T1 扩展 Booking 域，Sprint 3 扩展 Housekeeping 域，Sprint 4 扩展日期窗口重叠查询，Sprint 5 扩展 Maintenance 域（维修运营与客房可用性闭环），Sprint 6 扩展 Room Move 域（住中换房与在住异常恢复）。统一前缀 `/api/v1`，JSON 请求/响应，JWT（Bearer）认证。
+> Sprint 1 第二阶段已实现，Sprint 2 S2-T1 扩展 Booking 域，Sprint 3 扩展 Housekeeping 域，Sprint 4 扩展日期窗口重叠查询，Sprint 5 扩展 Maintenance 域（维修运营与客房可用性闭环），Sprint 6 扩展 Room Move 域（住中换房与在住异常恢复），Sprint 7 扩展 Inventory 域（库存账本与业务动作）与 Procurement 域（采购申请/订单/收货闭环）。统一前缀 `/api/v1`，JSON 请求/响应，JWT（Bearer）认证。
 
 ## 约定
 
@@ -30,7 +30,7 @@
 | PUT | /roles/{id} | 更新角色 | role:write |
 | DELETE | /roles/{id} | 删除角色（级联清理关联） | role:delete |
 | POST | /roles/{id}/permissions | 设置角色权限（整体替换，空=清空） | role:write |
-| GET | /permissions | 权限列表（分页，37 个 = Sprint 1 的 17 + Booking 的 10 + Housekeeping 的 5 + Maintenance 的 5） | role:read |
+| GET | /permissions | 权限列表（分页，48 个 = Sprint 1 的 17 + Booking 的 10 + Housekeeping 的 5 + Maintenance 的 5 + Room Move 的 1 + Sprint 7 Inventory/Procurement 的 11） | role:read |
 | GET | /room-types | 房型列表（分页，含 room_count） | room_type:read |
 | POST | /room-types | 创建房型 | room_type:write |
 | GET | /room-types/{id} | 房型详情 | room_type:read |
@@ -80,6 +80,36 @@
 | POST | /maintenance/orders/{id}/rework | 验收不通过（仅 RESOLVED → IN_PROGRESS；记录返工原因；blocking 继续阻断） | maintenance_order:verify |
 | POST | /maintenance/orders/{id}/cancel | 取消工单（非终态 → CANCELLED；最后一张 blocking 且 Room OOS+MAINTENANCE → Room 恢复） | maintenance_order:cancel |
 | GET | /maintenance/assignees | 派单候选人（持有 maintenance_order:work 的在职用户；不要求 user:read） | maintenance_order:write |
+| GET | /inventory/items | 物资列表（分页；`?search=`（code/name）/ `?category=` / `?stock_status=`（NORMAL/LOW_STOCK/OUT_OF_STOCK）/ `?is_active=`；聚合 total_stock + stock_status + recommended_replenishment；排序 OUT_OF_STOCK → LOW_STOCK → NORMAL） | inventory:read |
+| POST | /inventory/items | 创建物资（item_code 唯一且创建后不可变；target ≥ minimum 校验；strict schema） | inventory:item_manage |
+| GET | /inventory/items/{id} | 物资详情（聚合 balances / recent movements / 低库存状态 / 建议补货） | inventory:read |
+| PATCH | /inventory/items/{id} | 编辑物资（item_code 不可修改；已有库存流水的物资 base_unit 不可修改（409）；minimum/target 最终配对校验；strict schema） | inventory:item_manage |
+| POST | /inventory/items/{id}/initial-stock | 期初库存（专用动作，形成 INITIAL movement + Balance 同事务更新；不允许 Item Create 写隐藏 balance） | inventory:item_manage |
+| GET | /inventory/locations | 库存地点列表（分页，`?is_active=`） | inventory:read |
+| PATCH | /inventory/locations/{id} | 编辑地点（停用用 is_active，不物理删除；有库存地点仍计入总库存） | inventory:item_manage |
+| GET | /inventory/balances | 余额投影列表（分页，`?item_id=` / `?location_id=`；只读，无写端点） | inventory:read |
+| GET | /inventory/movements | 库存流水列表（分页，`?item_id=` / `?location_id=` / `?movement_type=` / `?reference_type=`；**不可变账本，无 PATCH/DELETE 端点**） | inventory:read |
+| POST | /inventory/issues | 领用单（多行整体原子：锁定相关 Balance 行（确定性顺序）→ 校验全部数量 → Issue+Lines → ISSUE movements → Balance 更新 → 审计 → commit；任一行不足 409 整体回滚；ROOM 目的地 room_id 必填且房间存在） | inventory:issue |
+| POST | /inventory/returns | 归还（专用简单 API：item/location/quantity/reason；RETURN movement + Balance + 审计同事务） | inventory:issue |
+| POST | /inventory/transfers | 库间调拨（多行整体原子；source ≠ destination；TRANSFER_OUT / TRANSFER_IN 成对 movement 互相 reference；酒店总库存不变；Source 不足整体回滚） | inventory:transfer |
+| POST | /inventory/stocktakes | 盘点（锁定 Balance → expected = 当前余额；difference = actual - expected；>0 → ADJUSTMENT_IN，<0 → ADJUSTMENT_OUT，=0 → no-op 不创建 movement；reason 必填；审计记录 expected/actual/difference） | inventory:adjust |
+| GET | /procurement/suppliers | 供应商列表（分页，`?search=` / `?is_active=`） | procurement:read |
+| POST | /procurement/suppliers | 创建供应商 | procurement:supplier_manage |
+| GET | /procurement/suppliers/{id} | 供应商详情 | procurement:read |
+| PATCH | /procurement/suppliers/{id} | 编辑供应商（停用用 is_active；strict schema） | procurement:supplier_manage |
+| GET | /procurement/requests | 采购申请列表（分页，`?status=` / `?search=`；含 lines） | procurement:read |
+| POST | /procurement/requests | 创建采购申请（DRAFT；多行，数量 > 0；strict schema） | procurement:request |
+| GET | /procurement/requests/{id} | 申请详情（含 lines 与关键时间戳） | procurement:read |
+| POST | /procurement/requests/{id}/submit | 提交申请（DRAFT → SUBMITTED；记录 submitted_at） | procurement:request |
+| POST | /procurement/requests/{id}/approve | 批准（仅 SUBMITTED → APPROVED；记录 approved_by/approved_at；申请与审批分离，无 generic PATCH status） | procurement:approve |
+| POST | /procurement/requests/{id}/reject | 驳回（仅 SUBMITTED → REJECTED，终态；不允许 REJECTED → APPROVED） | procurement:approve |
+| POST | /procurement/requests/{id}/cancel | 取消（仅 DRAFT / APPROVED → CANCELLED） | procurement:request |
+| GET | /procurement/orders | 采购订单列表（分页，`?status=` / `?supplier_id=` / `?search=`） | procurement:read |
+| POST | /procurement/orders | 创建 PO（purchase_request_id 提供 = 申请转订单：锁定 Request → 校验 APPROVED → 复制 lines → Request APPROVED→ORDERED **同事务**；一张 Request 至多一张 PO（DB UNIQUE + 行锁）；不提供 = 直接创建（仅 SUPER_ADMIN/MANAGER）） | procurement:order |
+| GET | /procurement/orders/{id} | 订单详情（含 lines（ordered/received/remaining/unit_price/line_total）、order_total、receipts） | procurement:read |
+| POST | /procurement/orders/{id}/order | 下达订单（DRAFT → ORDERED；记录 ordered_at；**不产生任何库存变化**） | procurement:order |
+| POST | /procurement/orders/{id}/cancel | 取消订单（DRAFT / ORDERED / PARTIALLY_RECEIVED → CANCELLED；部分收货后取消 = 不再收剩余数量，已收货库存与历史保持；RECEIVED 终态不可取消） | procurement:order |
+| POST | /procurement/orders/{id}/receipts | 收货（原子：锁定 PO → 锁定 PO lines → 校验 received ≤ remaining → 锁定/创建 Balance → 创建 GoodsReceipt → 更新 received_quantity → 创建 PURCHASE_RECEIPT movements → 更新 balances → PO 状态推导（全部收满 RECEIVED 否则 PARTIALLY_RECEIVED）→ 审计 → commit；任一行超收整体回滚 409；支持部分收货） | procurement:receive |
 
 ## 认证与权限
 
@@ -447,6 +477,221 @@ CHECKED_IN 预订 PATCH room_id → 409（§17）。
       "floor": 2,
       "eligible": true,
       "reason": null
+    }
+  ]
+}
+```
+
+（示例日期仅为文档说明；自动化测试一律动态日期。响应不含 Guest PII。）
+
+## Inventory 域（Sprint 7）
+
+### 领域原则（§2 LOCKED Architecture Decision）
+
+```text
+StockMovement   = 永久库存账本事实（immutable ledger fact）
+InventoryBalance = 快速查询 Projection（投影），不是独立事实
+```
+
+- **no movement = no stock change**：所有库存变化必须来自业务动作
+  （INITIAL / PURCHASE_RECEIPT / ISSUE / RETURN / TRANSFER_OUT /
+  TRANSFER_IN / ADJUSTMENT_IN / ADJUSTMENT_OUT）。
+- 每次库存事务必须 create StockMovement + update InventoryBalance
+  **在同一数据库事务**完成；不允许只更新其一。
+- **不允许任何直接 PATCH quantity / current_stock / balance 的通道**；
+  `GET /inventory/balances` / `GET /inventory/movements` 均为只读端点。
+- StockMovement 创建后无普通 PATCH / DELETE 端点；修正库存使用新的
+  ADJUSTMENT_IN / ADJUSTMENT_OUT movement（§9）。
+- 多库存地点（Alpha.7 第一版即支持）：每个 (item, location) 一个 Balance 行；
+  总库存 = SUM(全部已持久化 Balance)（已停用地点库存不静默消失，UI 标记 inactive）。
+- **不自动扣账**：Checkout / Housekeeping completion / Room Move 均不自动
+  扣减客耗品库存；库存变化只能来自真实业务操作（§2.4）。
+
+### 流水符号规则（§8，业务层 + DB CHECK 双保险）
+
+```text
+PURCHASE_RECEIPT > 0   RETURN > 0   TRANSFER_IN > 0   ADJUSTMENT_IN > 0
+INITIAL >= 0
+ISSUE < 0   TRANSFER_OUT < 0   ADJUSTMENT_OUT < 0
+```
+
+### 并发模型（§13/§48 Lock Graph）
+
+- 所有减少库存的操作：`SELECT InventoryBalance ... FOR UPDATE` → recheck
+  quantity → movement → balance update；不足返回 **409**（绝不 500）。
+- 多 Item 事务按确定性顺序 `(item_id, location_id)` 升序锁 Balance 行
+  （不按客户端提交顺序）；目的地 Balance 缺失时
+  `INSERT ... ON CONFLICT DO NOTHING` 后 `SELECT FOR UPDATE`。
+- 全局无环：Inventory 事务只锁 Balance 行；Procurement 收货锁顺序为
+  PurchaseOrder → PO lines → Balance 行（Balance 永远在锁链末端）。
+- 并发仲裁窄分类：40P01/40001 → 409；其它 OperationalError 原样传播。
+
+### 低库存 / 建议补货（§19/§20/§21）
+
+```text
+total == 0                        -> OUT_OF_STOCK
+minimum > 0 且 total <= minimum   -> LOW_STOCK
+否则                               -> NORMAL
+（minimum = 0：只有 0 是 OUT_OF_STOCK，正库存保持 NORMAL）
+
+recommended_replenishment = max(target_stock - total, 0)   # 仅建议值，
+# 不自动创建 Purchase Request / Purchase Order
+```
+
+### 409 / 422 场景清单（Inventory 域）
+
+409：领用/调拨库存不足（整体回滚）、并发仲裁（40P01/40001）、
+已有库存流水的物资修改 base_unit、期初/归还/盘点数据冲突。
+422：strict schema 未知字段/空 payload、quantity ≤ 0、target < minimum、
+ROOM 目的地缺 room_id / 非 ROOM 目的地误填 room_id、房间不存在、
+source == destination、重复物资行、物资不存在、盘点原因缺失。
+404：物资/地点不存在。
+
+### 响应示例
+
+`GET /api/v1/inventory/items/{id}`（quantity 为 Decimal 字符串序列化）：
+
+```json
+{
+  "id": 1,
+  "item_code": "AMEN-WATER-500",
+  "name": "矿泉水",
+  "category": "GUEST_AMENITY",
+  "base_unit": "瓶",
+  "minimum_stock": "20",
+  "target_stock": "100",
+  "is_consumable": true,
+  "is_active": true,
+  "total_stock": "15",
+  "stock_status": "LOW_STOCK",
+  "recommended_replenishment": "85",
+  "balances": [
+    {
+      "id": 1,
+      "item_id": 1,
+      "location_id": 1,
+      "location_code": "MAIN_STORAGE",
+      "location_name": "总仓",
+      "location_active": true,
+      "quantity": "15",
+      "updated_at": "2026-08-28T10:00:00+08:00"
+    }
+  ],
+  "recent_movements": [
+    {
+      "id": 2,
+      "movement_no": "SMV20260828-0002",
+      "item_id": 1,
+      "location_id": 1,
+      "movement_type": "INITIAL",
+      "quantity": "15",
+      "operator_name": "系统管理员",
+      "created_at": "2026-08-28T10:00:00+08:00"
+    }
+  ]
+}
+```
+
+（示例日期仅为文档说明；自动化测试一律动态日期。响应不含 Guest PII。）
+
+## Procurement 域（Sprint 7）
+
+### 状态机（后端唯一权威；无 generic PATCH status 通道，§24/§27）
+
+```text
+PurchaseRequest:  DRAFT → SUBMITTED → APPROVED → ORDERED
+                  SUBMITTED → REJECTED（终态；不允许 REJECTED → APPROVED，
+                  需重新创建/重新提交流程）
+                  APPROVED → CANCELLED / DRAFT → CANCELLED
+
+PurchaseOrder:    DRAFT → ORDERED → PARTIALLY_RECEIVED → RECEIVED
+                  DRAFT / ORDERED / PARTIALLY_RECEIVED → CANCELLED
+                  RECEIVED 为终态不可取消
+```
+
+### 关键语义（§28/§30/§31/§33）
+
+- **Request → PO exactly once**：Approved Request 转 PO 成功后
+  PurchaseRequest APPROVED → ORDERED **同事务**；一张 Request 至多一张 PO
+  （Request 行锁串行化 + `purchase_orders.purchase_request_id` UNIQUE 兜底）；
+  直接创建无 Request 的 PO 仅 SUPER_ADMIN / MANAGER（procurement:order）。
+- **PO 不改变库存**：DRAFT / ORDERED PO 均不产生任何 StockMovement /
+  InventoryBalance 变化；只有 Goods Receipt 创建 PURCHASE_RECEIPT movement
+  并增加库存（收货才是 stock-in 权威）。
+- **部分收货**：cumulative received <= ordered（PO 行锁 + DB CHECK）；
+  任一行超收 → entire receipt rollback（409）；PO 状态由收货推导。
+- **PARTIALLY_RECEIVED → CANCELLED**：代表「不再收剩余数量」，
+  已收货库存与历史保持；不允许删除历史 Goods Receipt。
+- 金额使用 Numeric/Decimal（JSON 字符串序列化，禁止 float 存金额）；
+  S7 不做付款/应付/发票/税务/账务（§34）。
+
+### 收货事务（§30，原子）
+
+```text
+lock PurchaseOrder → lock PO lines（id 升序）→ 校验 status（ORDERED /
+PARTIALLY_RECEIVED）→ 校验每行 received <= remaining
+→ lock/create InventoryBalance（(item_id, location_id) 升序）
+→ create GoodsReceipt + Lines → update received_quantity
+→ create PURCHASE_RECEIPT movements → update balances
+→ update PO status（全部收满 RECEIVED 否则 PARTIALLY_RECEIVED）
+→ audit goods_receipt.receive → commit
+```
+
+### 409 / 422 场景清单（Procurement 域）
+
+409：供应商代码重复、非 APPROVED 申请转单、同一申请重复转单、
+仅 DRAFT 申请可提交、仅 SUBMITTED 申请可批准/驳回、仅 DRAFT/APPROVED 申请可取消、
+仅 DRAFT 订单可下达、RECEIVED 订单不可取消/收货、已取消订单不可收货、
+收货超剩余数量、并发收货仲裁（40P01/40001）。
+422：strict schema 未知字段/空 payload、数量 ≤ 0、重复行、供应商/物资不存在、
+转单同时携带 lines、直接创建缺 lines。
+
+### 响应示例
+
+`GET /api/v1/procurement/orders/{id}`（quantity/金额为 Decimal 字符串序列化）：
+
+```json
+{
+  "id": 1,
+  "order_no": "PO20260828-0001",
+  "supplier_id": 1,
+  "supplier_code": "SUP-001",
+  "supplier_name": "泉城日用品",
+  "purchase_request_id": 2,
+  "request_no": "PRQ20260828-0002",
+  "status": "PARTIALLY_RECEIVED",
+  "order_total": "150.00",
+  "lines": [
+    {
+      "id": 11,
+      "item_id": 1,
+      "item_code": "AMEN-WATER-500",
+      "item_name": "矿泉水",
+      "base_unit": "瓶",
+      "ordered_quantity": "100",
+      "received_quantity": "60",
+      "remaining_quantity": "40",
+      "unit_price": "1.50",
+      "line_total": "150.00"
+    }
+  ],
+  "receipts": [
+    {
+      "id": 1,
+      "receipt_no": "GR20260828-0001",
+      "purchase_order_id": 1,
+      "inventory_location_id": 1,
+      "inventory_location_name": "总仓",
+      "received_at": "2026-08-28T11:00:00+08:00",
+      "lines": [
+        {
+          "id": 1,
+          "purchase_order_line_id": 11,
+          "item_id": 1,
+          "item_name": "矿泉水",
+          "received_quantity": "60"
+        }
+      ]
     }
   ]
 }

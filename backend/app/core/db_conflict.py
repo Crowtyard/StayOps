@@ -35,3 +35,22 @@ def is_transaction_conflict(exc: OperationalError) -> bool:
     其它任何 OperationalError 一律不得转换 —— 必须 rollback 后原样 re-raise。
     """
     return pgcode(exc) in ("40P01", "40001")
+
+
+def classify(exc: IntegrityError | OperationalError) -> str:
+    """SQLSTATE 分类：唯一冲突 / 检查约束 / 排他约束 / 并发仲裁，其余原样。
+
+    唯一权威（Sprint 4 D1，Sprint 5/7 复用）：
+    - 23505 unique_violation      -> "unique"
+    - 23514 check_violation       -> "check"
+    - 23P01 exclusion_violation   -> "exclusion"
+    - 40P01 / 40001               -> "transaction"
+    - 其它                        -> "other"（不得转换为业务错误）
+    """
+    return {
+        "23505": "unique",
+        "23514": "check",
+        "23P01": "exclusion",
+        "40P01": "transaction",
+        "40001": "transaction",
+    }.get(pgcode(exc), "other")

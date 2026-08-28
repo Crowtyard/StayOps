@@ -248,3 +248,24 @@ export function IconMaintenance({ className }: IconProps) {
     </Svg>
   );
 }
+
+/** Sprint 7：库存（货架 + 箱） */
+export function IconInventory({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <path d="M3 9.5 12 4l9 5.5v5L12 20l-9-5.5v-5Z" />
+      <path d="M3 9.5 12 15l9-5.5" />
+      <path d="M12 15v5" />
+    </Svg>
+  );
+}
+
+/** Sprint 7：采购（购物袋） */
+export function IconProcurement({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <path d="M5.2 8.5h13.6l-1.3 10a2 2 0 0 1-2 1.7H8.5a2 2 0 0 1-2-1.7l-1.3-10Z" />
+      <path d="M8.8 8.5V7a3.2 3.2 0 0 1 6.4 0v1.5" />
+    </Svg>
+  );
+}

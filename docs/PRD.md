@@ -35,6 +35,29 @@ StayRoomAssignment  = 实际住宿期间的房间历史（ended_at = NULL 表示
   ACTIVE Stay 的当前房间一律来自 `Stay.room_id` / current Assignment；
   Reservation 排他约束仅作用于 CONFIRMED（未来分配），实际占用由 Stay 表达。
 
+## 库存与采购领域模型（Sprint 7 起，Domain Decision LOCKED）
+
+```text
+InventoryItem      = 库存物资档案（item_code 唯一不可变，base_unit 唯一基础单位）
+InventoryLocation  = 库存地点（多地点：总仓 / 前台 / 保洁间 / 维修间）
+StockMovement      = 永久库存账本事实（immutable ledger；无 PATCH/DELETE）
+InventoryBalance   = 快速查询 Projection（投影），唯一 (item_id, location_id)
+StockIssue         = 领用单（多行整体原子）
+Supplier           = 供应商（停用不删除）
+PurchaseRequest    = 采购申请（DRAFT → SUBMITTED → APPROVED → ORDERED）
+PurchaseOrder      = 采购订单（DRAFT → ORDERED → PARTIALLY_RECEIVED → RECEIVED）
+GoodsReceipt       = 收货单（收货才是库存增加权威）
+```
+
+- **no movement = no stock change**：库存变化只能来自业务动作
+  （INITIAL / PURCHASE_RECEIPT / ISSUE / RETURN / TRANSFER_OUT /
+  TRANSFER_IN / ADJUSTMENT_IN / ADJUSTMENT_OUT），流水与余额同事务更新。
+- **PO 不改变库存**；只有 Goods Receipt 创建 PURCHASE_RECEIPT 流水并增加库存；
+  部分收货 cumulative received <= ordered。
+- 无自动客耗扣账（Checkout / Housekeeping / Room Move 不扣库存）。
+- 低库存：total==0 → OUT_OF_STOCK，total<=minimum → LOW_STOCK；
+  建议补货 = max(target-total, 0)，仅建议不自动下单。
+
 ## V1 核心模块
 
 1. 登录与 RBAC 权限

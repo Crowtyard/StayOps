@@ -77,15 +77,15 @@ Copy-Item .env.example .env.local   # BACKEND_API_URL / NEXT_PUBLIC_APP_NAME
 ## 测试
 
 ```powershell
-# 后端 pytest（独立测试库 stayops_test，285 用例 = 87 基线 + 76 Booking + 4 严格 PATCH + 35 Housekeeping + 11 Front Desk 窗口查询 + 7 D1 死锁窄分类 + 65 Maintenance）
+# 后端 pytest（独立测试库 stayops_test，379 用例 = 317 基线 + S7 Inventory/Procurement 62，含 P0 并发 7×10 轮 stress）
 cd backend
 .venv\Scripts\python.exe -m pytest -q
 
-# 前端单元/组件测试（Vitest，300 用例 = 74 基线 + 65 Booking UI + 31 Housekeeping UI + 70 Front Desk UI + 60 Maintenance UI 与修复增量）
+# 前端单元/组件测试（Vitest，379 用例 = 324 基线 + S7 Inventory/Procurement 55）
 cd frontend
 pnpm.cmd test
 
-# Playwright E2E（独立 stayops_test 库 + 专用端口 8001/3001，60 用例 = Sprint 1 基线 10 + S2-T3 新增 19 + S3 新增 7 + S4 新增 10 + S5 新增 14；不触碰开发数据）
+# Playwright E2E（独立 stayops_test 库 + 专用端口 8001/3001，68 用例 = 64 基线 + S7 inventory-procurement 4 条；不触碰开发数据）
 cd frontend
 Copy-Item e2e\test-creds.example e2e\.env.test-creds   # 首次：填入测试库凭据（gitignored）
 pnpm.cmd test:e2e
@@ -184,6 +184,35 @@ pnpm.cmd test:e2e
 - 旧房释放复用 S5 maintenance-aware 语义（阻断维修 → OOS+MAINTENANCE；人工停用保持）；
   换房绝不触碰原房维修工单生命周期
 
+## 库存与采购（Sprint 7）
+
+- 页面：`/inventory`（库存工作台：总物资/低库存/缺货/地点统计 + 物资表格 +
+  搜索/分类/低库存/缺货筛选 + 新建物资/领用/调拨/盘点）、`/inventory/items/[id]`
+  （物资详情：总/最低/目标/建议补货 + 地点余额（停用标记）+ 最近流水 +
+  期初库存/编辑）、`/procurement`（采购工作台：低库存建议/待审批/已批准待转单/
+  待收货/部分收货）、`/procurement/suppliers`、`/procurement/requests(/[id])`、
+  `/procurement/orders(/[id])`（部分收货表单 + 收货记录）
+- LOCKED 架构：StockMovement = 永久库存账本事实（无 PATCH/DELETE）；
+  InventoryBalance = 快速查询 Projection；**no movement = no stock change**
+  （流水+余额同事务）；无直接 balance PATCH；无负库存（FOR UPDATE + recheck +
+  DB CHECK）；多库存地点；无自动客耗扣账（Checkout / Housekeeping / Room Move 不扣库存）
+- 业务动作：期初库存（INITIAL 专用动作）/ 领用（多行整体原子）/ 归还 / 调拨
+  （OUT↔IN 成对，总库存不变）/ 盘点（差异 → ADJUSTMENT_IN/OUT，平账 no-op）
+- 采购闭环：申请（DRAFT→SUBMITTED→APPROVED→ORDERED）→ 审批（申请与审批分离）→
+  订单（DRAFT→ORDERED→PARTIALLY_RECEIVED→RECEIVED）→ 收货（**收货才增加库存**，
+  部分收货支持，超收整体回滚）；Request→PO exactly-once；**PO 不改变库存**；
+  金额 Decimal（不做付款/应付/发票/税务）
+- 低库存：total==0 → OUT_OF_STOCK、total<=minimum → LOW_STOCK；
+  建议补货 = max(target-total, 0)（仅建议，不自动下单）
+- RBAC：11 个新权限码（共 48）；inventory:adjust/transfer/item_manage 与
+  procurement:approve/order/supplier_manage 仅 SUPER_ADMIN/MANAGER；
+  procurement:receive 授予 SUPER_ADMIN/MANAGER/FRONT_DESK；
+  导航 库存=inventory:read、采购=procurement:read（后端 403 兜底）
+- 并发安全（Lock Graph）：Inventory 事务只锁 Balance 行（(item_id, location_id)
+  升序）；收货 = PO → PO lines → Balance 行；全局无环；P0 stress 7 场景 × 10 轮
+  真实 PostgreSQL（unexpected 500 = 0、死锁 = 0）；Ledger == Balance 对账；
+  19 个审计 action
+
 ## 文档
 
 - [PRD](docs/PRD.md) — 产品需求
@@ -206,19 +235,22 @@ pnpm.cmd test:e2e
 > 房间不可售来源 / Availability·Check-in·Checkout 集成 / 保洁·前台最小集成 / PRE_OPENING / RBAC / PII / 审计 / 并发安全），
 > Kun Fast QA 首轮发现 Blocking Defect（occupied + blocking 工单 + 未来预订 → 前台无主动维修风险提示）已修复，
 > Fast RE-QA PASS（pytest 285 / Vitest 300 / Playwright 60 / lint / typecheck / build 全绿），v1.0.0-alpha.5 已发布。
-> Sprint 6 开发完成（Room Move & In-Stay Recovery：在住房间分配历史 / 原子换房 / Room Row Lock 并发模型 /
+> Sprint 6 开发完成并已发布（Room Move & In-Stay Recovery：在住房间分配历史 / 原子换房 / Room Row Lock 并发模型 /
 > CONFIRMED-only 排他约束 / Front Desk 换房入口 / Room Diary 实际占用语义），
-> 自测全绿（pytest 317 / Vitest 324 / Playwright 60 + room-move 4 条 / lint / typecheck / build），
-> 等待 Kun Fast QA；`v1.0.0-alpha.6` 待 QA PASS 后发布。
+> Kun Fast QA PASS，v1.0.0-alpha.6 已发布（2791c8b）。
+> Sprint 7 开发完成（Inventory & Procurement：库存账本 / 多地点 / 领用调拨盘点 /
+> 低库存 / 采购申请审批 / 采购订单 / 部分收货闭环 / RBAC / 审计 / P0 并发安全），
+> 自测全绿（pytest 379 / Vitest 379 / Playwright 64 + inventory-procurement 4 条 /
+> lint / typecheck / build），等待 Kun Fast QA；`v1.0.0-alpha.7` 待 QA PASS 后发布。
 
 ## Current Release
 
-Version: v1.0.0-alpha.5（当前已发布）
+Version: v1.0.0-alpha.6（当前已发布，Release Commit 2791c8b）
 
-Status: Sprint 6 CODING COMPLETE（Room Move & In-Stay Recovery）— 等待 Kun Fast QA
+Status: Sprint 7 IMPLEMENTATION COMPLETE（Inventory & Procurement）— 等待 Kun Fast QA
 
-This is the fifth stable Alpha development baseline of StayOps（Maintenance Operations & Room Readiness）。
+This is the sixth stable Alpha development baseline of StayOps（Room Move & In-Stay Recovery）。
 
-Sprint 6 implementation complete（无 commit）：pytest 317 / Vitest 324 / Playwright 60 + room-move 4 条全绿；lint / typecheck / build PASS；开发库 stayops 已迁移至 `c8e2b7a4d1f3`（alembic current == head）。待 Kun Fast QA PASS 后创建 `v1.0.0-alpha.6` Release Commit。
+Sprint 7 implementation complete（无 commit）：pytest 379 / Vitest 379 / Playwright 64 + inventory-procurement 4 条全绿；lint / typecheck / build PASS；开发库 stayops 已迁移至 `e3a91f5c8d24`（alembic current == head，48 权限码 + 4 库存地点 seed 幂等收敛）。待 Kun Fast QA PASS 后创建 `v1.0.0-alpha.7` Release Commit。
 
 Not intended for production deployment.
