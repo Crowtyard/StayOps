@@ -77,15 +77,15 @@ Copy-Item .env.example .env.local   # BACKEND_API_URL / NEXT_PUBLIC_APP_NAME
 ## 测试
 
 ```powershell
-# 后端 pytest（独立测试库 stayops_test，379 用例 = 317 基线 + S7 Inventory/Procurement 62，含 P0 并发 7×10 轮 stress）
+# 后端 pytest（独立测试库 stayops_test，440 用例 = 379 基线 + S8 Analytics 37 + QA 修复 24，含 P0 并发 stress）
 cd backend
 .venv\Scripts\python.exe -m pytest -q
 
-# 前端单元/组件测试（Vitest，379 用例 = 324 基线 + S7 Inventory/Procurement 55）
+# 前端单元/组件测试（Vitest，419 用例 = 379 基线 + S8 Analytics 35 + QA 修复 5）
 cd frontend
 pnpm.cmd test
 
-# Playwright E2E（独立 stayops_test 库 + 专用端口 8001/3001，68 用例 = 64 基线 + S7 inventory-procurement 4 条；不触碰开发数据）
+# Playwright E2E（独立 stayops_test 库 + 专用端口 8001/3001，74 用例 = 68 基线 + S8 analytics 6 条；不触碰开发数据）
 cd frontend
 Copy-Item e2e\test-creds.example e2e\.env.test-creds   # 首次：填入测试库凭据（gitignored）
 pnpm.cmd test:e2e
@@ -213,6 +213,34 @@ pnpm.cmd test:e2e
   真实 PostgreSQL（unexpected 500 = 0、死锁 = 0）；Ledger == Balance 对账；
   19 个审计 action
 
+## 经营分析（Sprint 8）
+
+- 页面：`/analytics`（经营分析管理驾驶舱，四 Tab：总览 / 客房与预订 / 运营效率 /
+  库存与采购；顶部统一 Date Selector：过去7天 / 过去30天 / 过去90天 / 本月 /
+  上月 / 自定义（默认 30 天）+「与上一周期对比」；KPI Cards + 折线/柱状图 +
+  排名表，Mobile 自适应）
+- LOCKED 架构：Analytics = **read-only derived layer**——正式业务表仍是
+  Source of Truth；不建立第二套业务事实表，无 ETL、无自动物化；Backend 是
+  指标计算唯一权威，Frontend 只 request → format / visualize
+- Actual 与 On-Books / Forecast 严格分离；全部区间 `[from, to)` +
+  Business Date（Asia/Shanghai）；Actual 至多统计到业务日期当天之前（§3）
+- 占用：酒店总体实际房晚 MUST derive from Stay（Room Move 防重复计数）；
+  Physical Occupancy ✅ / Sellable Occupancy ❌；On-Books 7/14/30
+  （CONFIRMED + ACTIVE remaining，distinct 房晚去重）
+- 经营：合同房费金额 / 合同 ADR / 合同 RevPAR（非实际收款语义；无价房晚显式暴露）
+- 运营：保洁（完成/周期/翻房/积压）、维修（MTTR/验收/阻断/高频报修房间）、
+  换房（次数/换房率/原因/换出房）；库存（每物资每单位领用量与强度，不跨单位
+  求和）；采购（到货采购金额按收货日归属，≠ 已付款）
+- 对比（§31/§32 + D1）：`comparison_mode` = equal_length（7/30/90 天、自定义）/
+  previous_calendar_month（上月）/ previous_month_elapsed（本月，clamp 于上月
+  月末）；比率 → percentage points；数量/金额/平均 → percent（previous=0 →
+  null，无 Infinity%）；零数据 0 / null / []（Pre-opening 安全）
+- RBAC：`analytics:operations_read`（SUPER_ADMIN/MANAGER/FRONT_DESK）与
+  `analytics:business_read`（SUPER_ADMIN/MANAGER/FINANCE）——共 50 权限码；
+  无权限域不请求不显示（后端 403 兜底）；Analytics 不返回 Guest / Supplier
+  联系信息（PII）
+- 指标字典：见 [docs/ANALYTICS.md](docs/ANALYTICS.md)
+
 ## 文档
 
 - [PRD](docs/PRD.md) — 产品需求
@@ -221,6 +249,7 @@ pnpm.cmd test:e2e
 - [DATABASE](docs/DATABASE.md) — 数据库
 - [API](docs/API.md) — API 约定
 - [DECISIONS](docs/DECISIONS.md) — 架构决策记录
+- [ANALYTICS](docs/ANALYTICS.md) — 经营分析指标字典（Sprint 8）
 
 ## 开发规则
 
@@ -242,15 +271,26 @@ pnpm.cmd test:e2e
 > 低库存 / 采购申请审批 / 采购订单 / 部分收货闭环 / RBAC / 审计 / P0 并发安全），
 > 自测全绿（pytest 379 / Vitest 379 / Playwright 64 + inventory-procurement 4 条 /
 > lint / typecheck / build），等待 Kun Fast QA；`v1.0.0-alpha.7` 待 QA PASS 后发布。
+> Sprint 8 开发完成（Business Analytics：经营分析与管理驾驶舱——Metric
+> Dictionary / Analytics Service（read-only derived layer）/ operations 与
+> business 权限域 API / /analytics 四 Tab / On-Books Forecast / 周期对比 /
+> Golden Dataset / RBAC / PII），自测全绿（pytest 416 / Vitest 414 /
+> Playwright 64 + analytics 5 条 / lint / typecheck / build），等待 Kun Fast QA；
+> `v1.0.0-alpha.8` 待 QA PASS 后发布。
+> Sprint 8 QA 修复完成（D1 Calendar Comparison Modes：equal_length /
+> previous_calendar_month / previous_month_elapsed（月末 clamp）；D2 E2E
+> Backdate 脚本安全：stayops_test 硬守卫 + 显式行 ID + 单事务），
+> 自测全绿（pytest 440 / Vitest 419 / Playwright 74 / lint / typecheck / build），
+> 等待 Kun Re-QA；`v1.0.0-alpha.8` 待 Re-QA PASS 后发布。
 
 ## Current Release
 
-Version: v1.0.0-alpha.6（当前已发布，Release Commit 2791c8b）
+Version: v1.0.0-alpha.7（当前正式基线，Sprint 7 Release）
 
-Status: Sprint 7 IMPLEMENTATION COMPLETE（Inventory & Procurement）— 等待 Kun Fast QA
+Status: Sprint 8 IMPLEMENTATION COMPLETE（Business Analytics）— 等待 Kun Fast QA
 
-This is the sixth stable Alpha development baseline of StayOps（Room Move & In-Stay Recovery）。
+This is the seventh stable Alpha development baseline of StayOps（Inventory & Procurement）。
 
-Sprint 7 implementation complete（无 commit）：pytest 379 / Vitest 379 / Playwright 64 + inventory-procurement 4 条全绿；lint / typecheck / build PASS；开发库 stayops 已迁移至 `e3a91f5c8d24`（alembic current == head，48 权限码 + 4 库存地点 seed 幂等收敛）。待 Kun Fast QA PASS 后创建 `v1.0.0-alpha.7` Release Commit。
+Sprint 8 implementation complete + QA defect fixes（无 commit）：pytest 440 / Vitest 419 / Playwright 68 + analytics 6 条全绿；lint / typecheck / build PASS；开发库 stayops seed 幂等收敛至 50 权限码；Alembic head 保持 `e3a91f5c8d24`（Sprint 8 无 Schema Migration，Analytics 为只读派生层）。QA 修复：D1 comparison_mode（equal_length / previous_calendar_month / previous_month_elapsed）、D2 backdate 脚本 stayops_test 硬守卫 + 显式行 ID。待 Kun Re-QA PASS 后创建 `v1.0.0-alpha.8` Release Commit。
 
 Not intended for production deployment.

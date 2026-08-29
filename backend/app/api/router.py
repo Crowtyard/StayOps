@@ -3,6 +3,7 @@
 from fastapi import APIRouter
 
 from app.api.routes import (
+    analytics,
     audit_logs,
     auth,
     availability,
@@ -38,3 +39,4 @@ api_router.include_router(maintenance.router)
 api_router.include_router(maintenance.assignees_router)
 api_router.include_router(inventory.router)
 api_router.include_router(procurement.router)
+api_router.include_router(analytics.router)

@@ -1071,3 +1071,246 @@ export interface GoodsReceiptCreate {
   notes?: string | null;
   lines: GoodsReceiptLineIn[];
 }
+
+/* ------------------------------------------------------------------ */
+/* Sprint 8 Analytics（read-only derived layer）                       */
+/* ------------------------------------------------------------------ */
+
+export interface AnalyticsPeriodOut {
+  from: string;
+  to: string;
+  days: number;
+}
+
+export interface OnBooksHorizonOut {
+  days: number;
+  physical_room_nights: number;
+  on_books_room_nights: number;
+  occupancy_rate: number | null;
+}
+
+export interface OperationsOverviewMetricsOut {
+  actual_occupied_room_nights: number;
+  physical_room_nights: number;
+  physical_occupancy_rate: number | null;
+  completed_stays: number;
+  average_length_of_stay: number | null;
+  scheduled_arrivals: number;
+  cancelled_arrivals: number;
+  cancellation_rate: number | null;
+  no_show_count: number;
+  no_show_rate: number | null;
+  average_booking_lead_days: number | null;
+  room_move_count: number;
+  moved_stay_count: number;
+  room_move_rate: number | null;
+  housekeeping_completed_tasks: number;
+}
+
+export interface OperationsSnapshotOut {
+  active_stays: number;
+  overdue_active_stays: number;
+  housekeeping_backlog: number;
+  active_maintenance: number;
+  active_blocking_maintenance: number;
+}
+
+export interface ComparisonChangeOut {
+  percent_change?: number | null;
+  pp_delta?: number | null;
+}
+
+export interface OperationsOverviewComparisonOut {
+  period: AnalyticsPeriodOut;
+  metrics: OperationsOverviewMetricsOut;
+  changes: Record<string, ComparisonChangeOut>;
+}
+
+export interface OperationsOverviewOut {
+  business_date: string;
+  period: AnalyticsPeriodOut;
+  metrics: OperationsOverviewMetricsOut;
+  snapshot: OperationsSnapshotOut;
+  on_books: Record<"7d" | "14d" | "30d", OnBooksHorizonOut>;
+  comparison: OperationsOverviewComparisonOut | null;
+}
+
+export interface LeadBucketOut {
+  bucket: string;
+  count: number;
+}
+
+export interface DailyOccupancyOut {
+  business_date: string;
+  occupied_room_nights: number;
+  physical_room_nights: number;
+  occupancy_rate: number | null;
+}
+
+export interface BookingsOut {
+  business_date: string;
+  period: AnalyticsPeriodOut;
+  scheduled_arrivals: number;
+  cancelled_arrivals: number;
+  cancellation_rate: number | null;
+  no_show_count: number;
+  no_show_rate: number | null;
+  average_booking_lead_days: number | null;
+  booking_lead_distribution: LeadBucketOut[];
+  completed_stays: number;
+  average_length_of_stay: number | null;
+  room_move_count: number;
+  moved_stay_count: number;
+  room_move_rate: number | null;
+  daily: DailyOccupancyOut[];
+}
+
+export interface DailyHousekeepingOut {
+  business_date: string;
+  completed_tasks: number;
+}
+
+export interface HousekeepingOut {
+  business_date: string;
+  period: AnalyticsPeriodOut;
+  housekeeping_completed_tasks: number;
+  average_housekeeping_cycle_minutes: number | null;
+  checkout_turnover_minutes: number | null;
+  room_move_cleaning_tasks: number;
+  housekeeping_backlog: number;
+  daily: DailyHousekeepingOut[];
+}
+
+export interface MaintenanceCategoryCountOut {
+  category: string;
+  count: number;
+}
+
+export interface MaintenanceRoomCountOut {
+  room_id: number;
+  room_number: string;
+  count: number;
+}
+
+export interface MaintenanceOut {
+  business_date: string;
+  period: AnalyticsPeriodOut;
+  maintenance_created: number;
+  maintenance_completed: number;
+  active_maintenance: number;
+  active_blocking_maintenance: number;
+  mean_time_to_resolution_minutes: number | null;
+  mean_verification_minutes: number | null;
+  maintenance_by_category: MaintenanceCategoryCountOut[];
+  maintenance_by_room: MaintenanceRoomCountOut[];
+}
+
+export interface RoomMoveReasonCountOut {
+  reason: string;
+  count: number;
+}
+
+export interface RoomMoveSourceRoomCountOut {
+  room_id: number;
+  room_number: string;
+  count: number;
+}
+
+export interface RoomMovesOut {
+  business_date: string;
+  period: AnalyticsPeriodOut;
+  room_move_count: number;
+  moved_stay_count: number;
+  room_move_rate: number | null;
+  room_moves_by_reason: RoomMoveReasonCountOut[];
+  room_moves_by_source_room: RoomMoveSourceRoomCountOut[];
+}
+
+export interface DailyContractedValueOut {
+  business_date: string;
+  contracted_room_value: string;
+  priced_occupied_room_nights: number;
+}
+
+export interface BusinessRoomsOut {
+  business_date: string;
+  period: AnalyticsPeriodOut;
+  contracted_room_value: string;
+  priced_occupied_room_nights: number;
+  unpriced_occupied_room_nights: number;
+  contracted_adr: string | null;
+  contracted_revpar: string | null;
+  physical_room_nights: number;
+  daily: DailyContractedValueOut[];
+}
+
+export interface InventoryItemAnalyticsOut {
+  item_id: number;
+  item_code: string;
+  name: string;
+  category: string;
+  base_unit: string;
+  stock_status: string;
+  total_stock: string;
+  is_active: boolean;
+  issue_quantity: string;
+  issue_quantity_per_occupied_room_night: number | null;
+}
+
+export interface BusinessInventoryOut {
+  business_date: string;
+  period: AnalyticsPeriodOut;
+  current_low_stock_items: number;
+  current_out_of_stock_items: number;
+  occupied_room_nights: number;
+  items: InventoryItemAnalyticsOut[];
+}
+
+export interface ReceivedValueBySupplierOut {
+  supplier_id: number;
+  supplier_code: string;
+  supplier_name: string;
+  received_value: string;
+}
+
+export interface ReceivedValueByItemOut {
+  item_id: number;
+  item_code: string;
+  item_name: string;
+  base_unit: string;
+  received_value: string;
+}
+
+export interface DailyReceivedValueOut {
+  business_date: string;
+  received_purchase_value: string;
+}
+
+export interface BusinessProcurementOut {
+  business_date: string;
+  period: AnalyticsPeriodOut;
+  purchase_requests_created: number;
+  pending_purchase_requests: number;
+  purchase_orders_created: number;
+  pending_receipt_orders: number;
+  partially_received_orders: number;
+  received_purchase_value: string;
+  unpriced_received_lines: number;
+  received_value_by_supplier: ReceivedValueBySupplierOut[];
+  received_value_by_item: ReceivedValueByItemOut[];
+  daily: DailyReceivedValueOut[];
+}
+
+export interface ForecastDailyOut {
+  business_date: string;
+  on_books_room_nights: number;
+  physical_room_nights: number;
+  occupancy_rate: number | null;
+}
+
+export interface ForecastOut {
+  business_date: string;
+  physical_room_count: number;
+  horizons: Record<"7d" | "14d" | "30d", OnBooksHorizonOut>;
+  daily: ForecastDailyOut[];
+}

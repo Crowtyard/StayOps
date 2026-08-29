@@ -30,6 +30,11 @@ S7_PERMISSION_CODES = {
     "procurement:supplier_manage",
 }
 
+S8_PERMISSION_CODES = {
+    "analytics:operations_read",
+    "analytics:business_read",
+}
+
 
 def _snapshot() -> dict:
     session = SessionLocal()
@@ -63,15 +68,24 @@ def _snapshot() -> dict:
 
 
 def test_seed_idempotent_and_s7_role_matrix(_database):
-    """连续执行两次 seed 收敛；48 权限码（37 + S7 的 11）；4 个地点；§36 矩阵。"""
+    """连续执行两次 seed 收敛；50 权限码（48 + S8 的 2）；4 个地点；§36 矩阵。"""
     seed()
     first = _snapshot()
     seed()
     second = _snapshot()
     assert first == second, "连续执行两次 seed 必须收敛到一致状态"
 
-    assert first["permissions"] == 48  # 37（S6）+ 11（S7）
+    assert first["permissions"] == 50  # 48（S7）+ Sprint 8 Analytics 的 2
     mapping = first["mapping"]
+
+    # Sprint 8 §34：Analytics 矩阵（与 S7 权限码共存）
+    assert {"analytics:operations_read", "analytics:business_read"} <= mapping["MANAGER"]
+    assert "analytics:operations_read" in mapping["FRONT_DESK"]
+    assert "analytics:business_read" not in mapping["FRONT_DESK"]
+    assert "analytics:business_read" in mapping["FINANCE"]
+    assert "analytics:operations_read" not in mapping["FINANCE"]
+    assert not (S8_PERMISSION_CODES & mapping["HOUSEKEEPING"])
+    assert not (S8_PERMISSION_CODES & mapping["MAINTENANCE"])
 
     # 权限码存在
     assert S7_PERMISSION_CODES <= mapping["SUPER_ADMIN"]

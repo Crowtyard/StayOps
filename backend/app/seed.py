@@ -98,6 +98,13 @@ PERMISSIONS: dict[str, tuple[str, str]] = {
     "procurement:order": ("创建采购订单", "创建采购订单、下达与取消"),
     "procurement:receive": ("办理收货", "创建收货单并入库"),
     "procurement:supplier_manage": ("管理供应商", "创建与编辑供应商档案"),
+    # Sprint 8：Analytics 域权限（§34 矩阵，用 permission 判断，禁止硬编码角色名）
+    #   operations_read：Occupancy / Bookings / Stay / Housekeeping / Maintenance /
+    #                    Room Move / Forecast（§35）
+    #   business_read：Contracted Room Value / Contracted ADR / Contracted RevPAR /
+    #                  Inventory Analytics / Procurement Analytics / Supplier value
+    "analytics:operations_read": ("查看运营分析", "查看经营分析中的运营指标（占用/预订/保洁/维修/换房/预测）"),
+    "analytics:business_read": ("查看经营分析", "查看经营分析中的经营指标（合同房费/库存/采购）"),
 }
 
 ROLES: dict[str, str] = {
@@ -180,6 +187,14 @@ INVENTORY_PRO: list[str] = [
     "procurement:supplier_manage",
 ]
 
+# Sprint 8 §34：Analytics 域角色矩阵（用 permission 判断，禁止硬编码角色名）
+#   SUPER_ADMIN / MANAGER          = operations ✓ + business ✓
+#   FRONT_DESK                     = operations ✓ + business ×
+#   HOUSEKEEPING / MAINTENANCE     = × + ×
+#   FINANCE                        = operations × + business ✓
+ANALYTICS_OPERATIONS: list[str] = ["analytics:operations_read"]
+ANALYTICS_BUSINESS: list[str] = ["analytics:business_read"]
+
 ROLE_PERMISSIONS: dict[str, list[str]] = {
     "SUPER_ADMIN": [],
     "MANAGER": [
@@ -197,6 +212,8 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
         *HK_TASK_ALL,
         *MWO_ALL,
         *INVENTORY_PRO,
+        *ANALYTICS_OPERATIONS,
+        *ANALYTICS_BUSINESS,
     ],
     "FRONT_DESK": [
         "room:read",
@@ -214,6 +231,7 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
         "procurement:read",
         "procurement:request",
         "procurement:receive",
+        *ANALYTICS_OPERATIONS,
     ],
     "HOUSEKEEPING": [
         "room:read",
@@ -241,6 +259,7 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
         "room:read",
         "inventory:read",
         "procurement:read",
+        *ANALYTICS_BUSINESS,
     ],
 }
 

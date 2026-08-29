@@ -350,5 +350,149 @@ venv 因启动器硬编码旧路径而重建；requirements.txt 统一为 UTF-8 
 
 18. **测试口径（Sprint 7）**。pytest 379（317 基线 + 62 新增：Item/地点/期初 11、Issue/Return/Transfer 10、Ledger/Stocktake/不可变 6、供应商/PR 状态机 8、PO/收货 11、RBAC 矩阵 6、审计 3、seed 幂等 1、迁移往返 1、P0 并发 7×10 轮 stress + 汇总报告）；既有 7 个断言 37 权限码的用例语义更新为 48。Vitest 379（324 基线 + 55 新增：lib 元数据与状态计算 5、导航矩阵 4、库存工作台 7、表单 9、物资详情 5、采购工作台 4、采购视图 11、Dashboard 门控 5、物资详情权限 5 等）。Playwright 64 + inventory-procurement 4 条（Golden A 建物资→期初→领用→流水、Golden B 调拨总库存不变、Golden C 申请→提交→批准→订单→下达→部分/最终收货、Golden D 低库存→工作台/Dashboard 预警）。日期全部动态（Asia/Shanghai 业务日期），禁止硬编码年月日。
 
+## 2026-08-29 — Sprint 8：Business Analytics（经营分析与管理驾驶舱）
+
+1. **Analytics = read-only derived layer（§2.1 LOCKED）**。正式业务表
+   （reservations / stays / housekeeping_tasks / maintenance_work_orders /
+   stock_movements / goods_receipts …）仍然是 Source of Truth；**不建立**
+   daily_statistics / monthly_statistics / analytics_fact / analytics_warehouse
+   等第二套业务事实，**无 ETL、无自动物化、无新表**（除 2 个权限 Seed 外无
+   Schema Migration）。当前 28 房规模使用 PostgreSQL 聚合查询（CTE /
+   GROUP BY / generate_series / LATERAL，全部参数化）。S9 AI General Manager
+   未来消费同一 Analytics API（指标语义唯一权威 = Backend）。
+
+2. **Actual vs Forecast 分离（§2.3）**。Actual 端点（operations/*、business/*）
+   校验 `to <= current_business_date`（§3，超限 422），绝不静默制造未来实际数据；
+   Forecast 只由 CONFIRMED Reservation + ACTIVE Stay remaining planned
+   occupancy 构成，CANCELLED / NO_SHOW / 历史 COMPLETED / CHECKED_IN
+   Reservation.room_id 一律不计。
+
+3. **酒店总体实际房晚 MUST derive from Stay（§5/§6）**。占用区间 =
+   `[bd(actual_check_in_at), check_out_bd)`；COMPLETED 用 `bd(actual_check_out_at)`，
+   **ACTIVE 用 current_business_date（exclusive）**——已发生的实际历史不被
+   planned_checkout 截断，也不提前把今晚当成已完成房晚。**禁止
+   SUM(StayRoomAssignment durations)** 作为酒店总体房晚（Room Move 防重复计数）；
+   StayRoomAssignment 只用于 room history / move event / move reason /
+   实际房间归属（归属之和恒等于 Stay 区间，有测试锁定）。
+
+4. **Physical Occupancy only（§7/§8）**。物理房晚 = `physical_room_count ×
+   report_days`，`physical_room_count` 查询当前正式 Room master（不硬编码 28）。
+   **Sellable Occupancy 不提供**（无可靠历史 room_sellability_intervals，
+   不能用当前 Room.status 倒推过去）；只可展示当前 OOS / blocking 事实。
+
+5. **Contracted Value 命名 LOCKED（§17）**。StayOps 无 Folio / Payment /
+   Settlement → 禁止 Revenue / 营业收入 / 实收；正式名称 = Contracted Room
+   Value / 合同房费金额（`agreed_total_amount / planned_nights` 每晚贡献，
+   Money 一律 Decimal）。**unpriced night 语义（§20）**：超出原 Reservation
+   planned interval 的实际房晚计入 occupied、不计 contract value（不猜价格），
+   由 `unpriced_occupied_room_nights` 显式暴露（正常期望 0）。合同 ADR /
+   合同 RevPAR（物理房间分母）UI 均注明非实际收款、非财务口径。
+
+6. **On-Books Forecast 去重（§10/§11）**。来源 = CONFIRMED Reservation
+   `[check_in, check_out) ∩ [D0, D0+horizon)` + ACTIVE Stay
+   `[D0, planned_check_out)`（超期 stay 贡献 0，由 overdue_active_stays 反映）；
+   最终按 **distinct (business_date, room_id)** 仲裁去重，防 ACTIVE Stay +
+   linked CHECKED_IN Reservation 双算（pytest 锁定）。
+
+7. **Cohort 规则（§12/§16/§25）**。Reservation 指标统一 Arrival Cohort
+   （`check_in_date ∈ [from,to)`）；cancellation_rate = cancelled / cohort 全量；
+   no_show_rate = NO_SHOW / 非 CANCELLED cohort；lead_days =
+   `max(0, check_in_date - bd(created_at))`（改期导致负值按 0），分桶
+   0-1/2-3/4-7/8-14/15-30/31+ 由 Backend 权威；ALOS 用实际
+   check-in → checkout（不用计划 nights）；room_move_rate 分母 = 实际入住日
+   落在区间的 Stay cohort。对比（§31/§32）：比率 → pp_delta，数量/金额/平均 →
+   percent_change（previous=0 → null，禁止 Infinity%）。
+
+8. **Inventory issue 单位隔离（§26-§28）**。`item_issue_quantity` 为每 Item
+   每 Base Unit 的领用毛量（SUM(abs) where ISSUE，不减 RETURN）；
+   **禁止跨不同 Base Unit 求和**；领用强度 = per item /
+   `actual_occupied_room_nights`（UI 注明：库存领用强度 ≠ 客人实际消费量，
+   无自动客耗扣账）。低/缺货快照沿用 Sprint 7 stock_status 语义（启用物资）。
+
+9. **Received Purchase Value 语义（§29/§30）**。到货金额按
+   `GoodsReceipt.received_at`（Business Date）归属（禁止 PO created_at）；
+   `unit_price IS NULL` 不猜价格 → `unpriced_received_lines`（Data Quality）；
+   UI 注明 ≠ 已付款金额、≠ 会计成本。
+
+10. **Analytics RBAC（§34/§35）**。新增 `analytics:operations_read` 与
+    `analytics:business_read`（seed 幂等收敛，48 → 50 权限码）。矩阵：
+    SUPER_ADMIN / MANAGER 两域全开；FRONT_DESK 仅 operations；HOUSEKEEPING /
+    MAINTENANCE 无；FINANCE 仅 business。**禁止硬编码角色名**；
+    `/analytics` 任一权限可进，Frontend 对无权 Domain DO NOT FETCH（不允许
+    fetch → 403 → 静默隐藏，E2E 以零请求断言）。PII：Analytics 不返回
+    Guest name / phone / notes / contact 与 Supplier phone / notes（payload
+    扫描测试）。
+
+11. **前端 /analytics（§43-§51）**。单页面四 Tab（总览 / 客房与预订 / 运营效率 /
+    库存与采购），顶部统一 Date Selector（7/30/90 天、本月、上月、自定义，
+    默认 30 天）+ 对比开关；KPI Cards + 极简 SVG 折线/柱状图（无 3D/大屏装饰）；
+    重要数值同时提供表格/文字。**图表依赖决策**：npm registry 在当前网络策略下
+    不可达（E403，registry.npmjs.org 与 npmmirror 均被策略代理拒绝），无法安装
+    成熟图表库；按 §50「不手写复杂 chart engine」约束，实现为两个 ~150 行、
+    仅覆盖折线/柱状两种固定形态的 SVG 组件（无第三方依赖、permissive、可访问），
+    不是通用图表引擎。
+
+12. **Golden Analytics Dataset（§52/§53）**。`tests/analytics_helpers.py::build_golden`
+    以真实 API 链路 + ORM 时间戳回填构造人工可计算数据集（Completed ≥2 /
+    ACTIVE 含超期 / CANCELLED / NO_SHOW / 同周期 Room Move / CHECKOUT 与
+    ROOM_MOVE 保洁任务 / 维修完成与阻断 / INITIAL·ISSUE·RETURN·TRANSFER·
+    ADJUSTMENT / PO 部分+最终收货），`test_analytics_golden.py` 对全部指标
+    exact assert（Money 用 Decimal）。P0 专项：Room Move 防重复计数（203→205、
+    203→205→208，§54）、Forecast 去重（§55）、日期边界与 ACTIVE/超期（§56）、
+    零数据 0/null/[]（§57）、对比 pp/percent（§58）、六角色 RBAC（§59）、
+    PII 扫描（§60）、参数校验（from<to、to<=D0、跨度<=366，§3/§38）。
+
+13. **测试口径（Sprint 8）**。pytest 416（379 基线 + 37 新增：golden 9、
+    防重复计数 3、forecast 4、日期边界 5、零数据 2、对比 2、RBAC 4、PII 1、
+    校验 5、权限 seed 1 + 既有 8 个权限计数用例语义更新为 50 并验证真实
+    code + role matrix）；Vitest 414（379 基线 + 35 新增：lib 格式化/预设/校验
+    21、AnalyticsView 权限门控与零数据 8、四 Tab 渲染 6）；Playwright 69
+    （64 基线 + analytics spec 5 条：Flow A Operations / Flow B Business /
+    Flow C FRONT_DESK·FINANCE 权限隔离（零请求断言）/ Flow D 零数据，
+    历史房晚与库存/收货时间经真实 UPDATE 脚本回填，不 mock）。
+
+## 2026-08-30 — Sprint 8 QA 缺陷修复（D1 Calendar Comparison / D2 Backdate Safety）
+
+Kun Independent Fast QA：绝大多数 S8 通过，2 个 RELEASE BLOCKER 修复如下。
+
+1. **D1 · Calendar Preset Comparison semantics（Comparison Modes LOCKED）**。
+   原实现对所有区间统一等长前移 `[from - days, from)`，对自然月预设语义错误
+   （This Month 错误对比到 7/13-8/1、Last Month 错误对比到 5/31-7/1）。决策：
+   正式三种 comparison mode（受限枚举，非法值 422）——`equal_length`（默认，
+   过去 7/30/90 天、自定义）、`previous_calendar_month`（Last Month：上一完整
+   自然月，两月天数无需相同）、`previous_month_elapsed`（This Month：
+   `[上月初, 上月初 + elapsed)`，elapsed = `to - from`，**clamp 于上一自然月
+   月末**——3 月 MTD 30 日 vs 2 月 28 天 → `[2/1, 3/1)`；闰年 2 月、30/31 天月、
+   1 月 vs 12 月跨年同由月末钳制，禁止跨出上一自然月凑等长）。API 新增
+   `comparison_mode` 参数（`/analytics/operations/overview`，仅 compare=true
+   时生效；compare=false 不影响结果）；前端按用户所选 preset 发送对应模式，
+   **上一周期区间与指标计算仍全部由 Backend 权威完成**（禁止前端自行计算）。
+
+2. **D2 · E2E Backdate 脚本安全（Release Blocker）**。原
+   `setup_backdate_procurement.py` 对全部 StockMovement / GoodsReceipt 回填时间，
+   且以 `os.environ.setdefault("DATABASE_URL", ...)` 提供默认值——外部若已设置
+   DATABASE_URL 指向开发库 stayops 可导致整表历史被修改（StockMovement 为
+   immutable ledger，属发布阻断）。决策：脚本必须解析实际连接目标，**只允许
+   database name == stayops_test**（缺失 DATABASE_URL 即拒绝，不再 setdefault）；
+   **禁止整表 UPDATE**——只修改调用方显式传入的 `--receipt-id` / `--movement-id`
+   （至少一个，否则拒绝）；每个 ID 必须存在且类型匹配，全部校验通过后在同一
+   事务内 validate → update → commit，任意失败 rollback 全部 + 非零退出；
+   无产品后门（无生产 API / 路由 / 开发库支持）。`setup_backdate_stay.py` 同步
+   增加 stayops_test 硬守卫（其行作用域本就是显式 stay_id）。E2E helper
+   （analytics-helpers.ts）捕获测试流程创建的行 ID 并显式传入，且显式注入
+   stayops_test 连接（脚本无默认连接目标）。既有 Pre-existing Schema Drift
+   （alpha.7 前 model-vs-DB constraint naming）按 Kun 指示**保留为技术债**，
+   不新建 migration、不修复。
+
+14. **测试口径（Sprint 8 QA 修复增量）**。pytest 440（416 + 24：comparison
+    modes 17（等长 7/30/自定义、This Month、Last Month、3 月 MTD clamp、
+    闰年 2 月、30/31 天月、1 月 vs 12 月跨年、本月首日空 elapsed、非法模式、
+    API 校验与模式接线）、backdate safety 7（stayops 拒绝零连接、未知库拒绝、
+    缺失 URL 拒绝、无目标 ID 拒绝、非法 ID 回滚零修改、显式 ID 只更新指定行 +
+    unrelated 行保持不变、URL 解析））；Vitest 419（414 + 5：preset →
+    comparison_mode 映射 3、视图按 preset 发送模式 2）；Playwright 74
+    （73 + Flow E Calendar Comparison：API 断言 This Month/Last Month 的
+    comparison.period 精确区间 + UI 抽查本月对比 chip 与上月范围标签）。
+
 
 

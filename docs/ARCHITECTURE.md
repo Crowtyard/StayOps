@@ -19,7 +19,7 @@
   `Ctrl+C` 同时关闭前后端进程树；`--check` 只检查不启动。
   生产部署方式（infra/docker）不受影响。
 
-## 后端结构（Sprint 7 · 更新）
+## 后端结构（Sprint 8 · 更新）
 
 ```text
 backend/app/
@@ -32,6 +32,9 @@ backend/app/
                      #   StockIssue+Lines）与 procurement.py（Supplier /
                      #   PurchaseRequest+Lines / PurchaseOrder+Lines /
                      #   GoodsReceipt+Lines）
+  core/              # Sprint 8 新增 analytics_metrics.py（Metric Dictionary
+                     #   集中定义：code/中文名/公式/来源表/状态/单位/零分母行为/权限，
+                     #   docs/ANALYTICS.md 的代码镜像）
   schemas/           # guest / reservation / stay（Sprint 6：assignments / RoomMoveCreate /
                      # RoomMoveOptionsOut）
                      # housekeeping（Create/Update strict、AssigneeOut）
@@ -166,6 +169,7 @@ frontend/src/
     (main)/procurement/orders             # S7：采购订单列表 + 新建（由申请转单 / 直接创建）
     (main)/procurement/orders/[id]        # S7：订单详情（ordered/received/remaining/单价/金额 +
                                           #   收货记录 + 下达/收货（部分收货）/取消剩余）
+    (main)/analytics                      # S8：经营分析管理驾驶舱（四 Tab + 统一 Date Selector）
     (main)/front-desk                     # S4：前台运营指挥台（Today Summary + Search + Room Diary + 右侧 Drawer）
     (main)/settings/{users,roles,room-types,audit-logs}/page.tsx   # 管理页（T3b）
   components/                             # AppShell(侧边导航+顶栏+手机Drawer)、状态徽标、
@@ -193,10 +197,16 @@ frontend/src/
                                           # requests-view（+ CreateRequestModal）、request-detail-view
                                           # （+ ConvertToOrderModal）、orders-view（+ CreateOrderModal）、
                                           # order-detail-view（+ ReceiveGoodsModal 部分收货）
+  components/analytics/                   # S8：analytics-view（四 Tab 编排 + 权限域门控 + 日期状态）、
+                                          # date-selector（预设/自定义/对比开关）、overview-tab /
+                                          # rooms-bookings-tab / operations-tab / inventory-procurement-tab、
+                                          # kpi-card（值 + pp/percent 变化）、charts（极简 SVG 折线/柱状，
+                                          #   npm registry 不可达未引入图表库）、shared（SectionCard/TextTable）
   components/settings/                    # 四个管理页视图 + 共享工具（分页加载/表单/表格）
   lib/api/                                # 统一 API Client（client.ts + guests/reservations/stays（Sprint 6：
                                           # roomMoveOptions / roomMove）/ availability + housekeeping（S3）+
-                                          # maintenance（S5）+ inventory / procurement（S7）等资源模块 + 错误归一化）
+                                          # maintenance（S5）+ inventory / procurement（S7）+ analytics（S8，
+                                          #   operations/business/forecast 端点）等资源模块 + 错误归一化）
   lib/booking.ts                          # S2-T2：业务日期（Asia/Shanghai）、日期校验、状态标签、金额展示
   lib/front-desk.ts                       # S4：时间线几何（[ci,co) 裁剪与像素定位）、Today Summary /
                                           # Attention 四规则纯函数（A/B/C/M）、预订条 PII 安全文案、quickCreateHref；
@@ -270,6 +280,10 @@ frontend/src/
    S7 新增 Inventory/Procurement 用例（379 = 324 + 55：lib 库存状态计算与元数据 5 /
    导航矩阵 4 / 库存工作台 7 / 领用·调拨·盘点表单 9 / 物资详情 5 / 采购工作台 4 /
    采购申请·订单视图（含部分收货）11 / Dashboard 权限门控 5），
+   S8 新增 Analytics 用例（414 = 379 + 35：lib 格式化/零值/pp/percent/日期预设/
+   自定义校验 21 / AnalyticsView 权限门控·零数据·日期交互 8 / 四 Tab 渲染 6），
+   S8 QA 修复新增 5（419 = 414 + 5：preset → comparison_mode 映射 3 /
+   视图按 preset 发送模式 2），
   测试日期一律基于 Asia/Shanghai 业务日期动态生成（`businessDate()` / `addDays`，禁止硬编码年月日）。
 - **Playwright E2E**（`frontend/playwright.config.ts`，`pnpm test:e2e`）：
   - 独立测试库 `stayops_test`：后端 webServer 直接运行单进程入口 `frontend/e2e/run_test_backend.py` ——
@@ -330,11 +344,32 @@ frontend/src/
      /inventory 低库存徽标 + 建议补货 → Dashboard 库存与采购预警可见）
   - 各 spec 使用专属房间号段保证用例间确定性；既有 auth/rbac/rooms/settings 4 个 spec 与
     `playwright.config.ts` 隔离机制保持不变
-- **后端 pytest**（`backend/`，379 用例 = 317 基线 + Sprint 7 Inventory/Procurement 62：
-  Item/地点/期初 11、Issue/Return/Transfer 10、Ledger/Stocktake/不可变 6、供应商/PR 状态机 8、
-  PO/收货 11、RBAC 矩阵 6、审计 3、seed 幂等 1、迁移往返 1、P0 并发 7×10 轮 stress + 汇总报告；
-  既有 7 个权限码计数用例（auth/permissions/roles/smoke/housekeeping-migration/
-  maintenance-migration/booking-seed）语义更新为 48）：独立测试库 `stayops_test`（与 E2E 同库策略），
+  - S8 新增 `z-analytics.spec.ts` 6 条（辅助集中在 `e2e/analytics-helpers.ts`，
+    房间 206 归一化后使用；历史房晚/保洁/工单/库存/收货时间经真实 UPDATE 脚本回填
+    `setup_backdate_stay.py` / `setup_backdate_procurement.py`，不 mock）：
+    Flow A（ADMIN：Physical Occupancy 0.1%、实际房晚、保洁完成、维修新建与
+    高频报修房间、On-books 可见）、Flow B（MANAGER：合同房费 ¥300.00、合同 ADR/
+    RevPAR、库存与采购、到货金额 ¥60.00、供应商）、Flow C（FRONT_DESK：
+    operations 可见 + business 缺席 + 零 business 请求；FINANCE：business 可见 +
+    operations 缺席 + 零 operations/forecast 请求）、Flow D（空数据区间正常渲染，
+    无 NaN / Infinity）、Flow E（QA D1 Calendar Comparison：API 断言 This Month /
+    Last Month 的 comparison.period 精确区间 + UI 抽查对比 chip 与上月范围标签）。
+    文件名带 `z-` 前缀使本 spec 最后执行（库存/采购为不可变账本无 DELETE，
+    避免污染其它 spec 的全量列表断言）。Backdate 脚本 Safety（QA D2）：
+    `setup_backdate_procurement.py` / `setup_backdate_stay.py` 硬性限定数据库名
+    == stayops_test（DATABASE_URL 缺失即拒绝、开发库写前拒绝）、只修改显式传入
+    的行 ID、单事务 validate→update→commit（安全测试见
+    `backend/tests/test_analytics_backdate_safety.py`）
+- **后端 pytest**（`backend/`，440 用例 = 379 基线 + Sprint 8 Analytics 37 +
+  QA 修复 24：黄金数据集 9（人工已知结果 exact assert）、Room Move 防重复计数
+  3（203→205、203→205→208）、Forecast 去重 4、日期边界 5（含月/年边界与午夜
+  时区转换）、零数据 2、周期对比 2、六角色 RBAC 4、PII 扫描 1、参数校验 5
+  （from<to、to<=业务日期、跨度<=366）、权限 seed 1（50 权限码 + code + role
+  matrix）、comparison modes 17（等长/上一自然月/本月 elapsed 与月末 clamp/
+  闰年/30·31 天月/跨年/非法值/API 接线）、backdate safety 7（stayops 拒绝零
+  连接、未知库拒绝、缺失 URL 拒绝、无目标 ID 拒绝、非法 ID 回滚零修改、
+  显式 ID 只更新指定行 + unrelated 行不变、URL 解析）；
+  既有 8 个权限码计数用例语义更新为 50）：独立测试库 `stayops_test`（与 E2E 同库策略），
   会话级 DROP/CREATE + 迁移 + seed，用例级事务回滚隔离；并发用例（Double Booking / Check-in / Check-out / 业务单号 / Duplicate Active Task / Concurrent Start / PASS vs REWORK / D1 25 轮双订 / S5 同房双阻断创建 / 并发 verify / cancel vs verify / S6 move-vs-move / move-vs-reservation / move-vs-checkout / reservation-update-vs-move / S7 issue-vs-issue / transfer-vs-issue / stocktake-vs-issue / receipt-vs-receipt / receipt-vs-issue / receipt-vs-transfer / request-to-po-vs-request-to-po 各 10 轮 stress）用两线程 + 独立 Session 真实提交验证。
   pytest 与 Playwright E2E 共享 `stayops_test` 且互斥（不得并行运行）。
 

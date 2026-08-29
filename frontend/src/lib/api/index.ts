@@ -5,6 +5,7 @@
  */
 
 import { browserTransport, type Transport } from "./client";
+import { createAnalyticsApi, type AnalyticsApi } from "./analytics";
 import { createAuditLogsApi, type AuditLogsApi } from "./audit-logs";
 import { createAvailabilityApi, type AvailabilityApi } from "./availability";
 import { createGuestsApi, type GuestsApi } from "./guests";
@@ -35,6 +36,7 @@ export interface ApiClient {
   maintenance: MaintenanceApi;
   inventory: InventoryApi;
   procurement: ProcurementApi;
+  analytics: AnalyticsApi;
 }
 
 export function createApiClient(transport: Transport): ApiClient {
@@ -53,6 +55,7 @@ export function createApiClient(transport: Transport): ApiClient {
     maintenance: createMaintenanceApi(transport),
     inventory: createInventoryApi(transport),
     procurement: createProcurementApi(transport),
+    analytics: createAnalyticsApi(transport),
   };
 }
 

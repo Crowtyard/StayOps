@@ -269,3 +269,44 @@ export function IconProcurement({ className }: IconProps) {
     </Svg>
   );
 }
+
+/** Sprint 8：经营分析（仪表盘） */
+export function IconAnalytics({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <path d="M4 19V9" />
+      <path d="M10 19V5" />
+      <path d="M16 19v-7" />
+      <path d="M22 19H2" />
+    </Svg>
+  );
+}
+
+/** Sprint 8：趋势上升 */
+export function IconTrendUp({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <path d="M3 17 9 11l4 4 7-8" />
+      <path d="M15 7h5v5" />
+    </Svg>
+  );
+}
+
+/** Sprint 8：趋势下降 */
+export function IconTrendDown({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <path d="M3 7l6 6 4-4 7 8" />
+      <path d="M15 17h5v-5" />
+    </Svg>
+  );
+}
+
+/** Sprint 8：趋势持平 */
+export function IconTrendFlat({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <path d="M3 12h18" />
+    </Svg>
+  );
+}

@@ -12,6 +12,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { logout } from "@/lib/api";
 import type { MeOut } from "@/lib/api/types";
 import {
+  IconAnalytics,
   IconAudit,
   IconBooking,
   IconBuilding,
@@ -50,6 +51,8 @@ interface NavItem {
   icon: React.ReactNode;
   /** 满足任一权限即显示。 */
   permission?: string;
+  /** 满足任一权限即显示（Sprint 8：经营分析 = operations_read 或 business_read）。 */
+  anyOf?: string[];
   /** 必须同时满足全部权限才显示（Sprint 4：前台工作台最低 room:read + reservation:read）。 */
   required?: string[];
 }
@@ -95,6 +98,12 @@ const NAV_ITEMS: NavItem[] = [
     permission: "procurement:read",
   },
   {
+    href: "/analytics",
+    label: "经营分析",
+    icon: <IconAnalytics />,
+    anyOf: ["analytics:operations_read", "analytics:business_read"],
+  },
+  {
     href: "/settings/room-types",
     label: "房型",
     icon: <IconTag />,
@@ -121,11 +130,12 @@ const NAV_ITEMS: NavItem[] = [
 ];
 
 function visibleItems(user: MeOut | null): NavItem[] {
-  if (!user) return NAV_ITEMS.filter((i) => !i.permission && !i.required);
+  if (!user) return NAV_ITEMS.filter((i) => !i.permission && !i.anyOf && !i.required);
   const perms = new Set(user.permissions);
   return NAV_ITEMS.filter((i) => {
     if (i.required && !i.required.every((p) => perms.has(p))) return false;
     if (i.permission && !perms.has(i.permission)) return false;
+    if (i.anyOf && !i.anyOf.some((p) => perms.has(p))) return false;
     return true;
   });
 }

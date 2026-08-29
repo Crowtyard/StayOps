@@ -6,6 +6,7 @@
 > Sprint 5 新增：`maintenance_work_orders` + `rooms.unavailability_source`（另含 PG 枚举 `mwo_status` / `mwo_category` / `mwo_severity` / `mwo_source` / `unavailability_source`、Sequence `maintenance_work_order_no_seq`、CHECK 约束 `ck_rooms_unavailability_source`、部分索引 `ix_mwo_active_blocking_room`）。
 > Sprint 6 新增：`stay_room_assignments`（另含 PG 枚举 `room_move_reason`、CHECK 约束 `ck_stay_room_assignments_interval`、部分唯一索引 `uq_stay_room_assignments_active_stay`、排他约束 `ex_stay_room_assignments_no_overlap`；`hk_task_source` 增加 ROOM_MOVE；Reservation 排他约束调整为 CONFIRMED-only；既有 Stay 历史回填）。
 > Sprint 7 新增：Inventory 域（`inventory_items` / `inventory_locations` / `inventory_balances` / `stock_movements` / `stock_issues` / `stock_issue_lines`）与 Procurement 域（`suppliers` / `purchase_requests` / `purchase_request_lines` / `purchase_orders` / `purchase_order_lines` / `goods_receipts` / `goods_receipt_lines`），另含 PG 枚举 `item_category` / `movement_type` / `issue_destination_type` / `purchase_request_status` / `purchase_order_status` 与 5 个业务单号 Sequence。
+> Sprint 8 为 Analytics 只读派生层（read-only derived layer）：**不新增任何业务表**（无 daily_statistics / analytics_fact / analytics_warehouse），正式业务表仍是 Source of Truth；除 2 个权限 Seed（`analytics:operations_read` / `analytics:business_read`，50 权限码）外无 Schema Migration（Alembic head 保持 `e3a91f5c8d24`）。指标定义见 [docs/ANALYTICS.md](ANALYTICS.md) 与 `backend/app/core/analytics_metrics.py`。
 
 ## 表结构（Sprint 1）
 
@@ -298,4 +299,4 @@ purchase_order_status:    DRAFT / ORDERED / PARTIALLY_RECEIVED /
 - PostgreSQL 16，通过 Docker Compose 提供开发实例（`stayops` 库；pytest 用独立 `stayops_test` 库）
 - Schema 修改必须使用 Alembic Migration（禁止直接改表）
 - 凭据不硬编码进 Git，通过 `.env` 加载
-- 种子数据（权限/角色/admin/28 房间/6 房型/4 库存地点）由 `python -m app.seed` 幂等写入；Sprint 2 新增 9 个 Booking 权限码（共 26 个），Sprint 3 新增 5 个 Housekeeping 权限码（共 31 个），Sprint 5 新增 5 个 Maintenance 权限码（共 36 个），Sprint 6 新增 1 个 Room Move 权限码（共 37 个），Sprint 7 新增 11 个 Inventory/Procurement 权限码（共 48 个），seed 幂等收敛不变
+- 种子数据（权限/角色/admin/28 房间/6 房型/4 库存地点）由 `python -m app.seed` 幂等写入；Sprint 2 新增 9 个 Booking 权限码（共 26 个），Sprint 3 新增 5 个 Housekeeping 权限码（共 31 个），Sprint 5 新增 5 个 Maintenance 权限码（共 36 个），Sprint 6 新增 1 个 Room Move 权限码（共 37 个），Sprint 7 新增 11 个 Inventory/Procurement 权限码（共 48 个），Sprint 8 新增 2 个 Analytics 权限码（共 50 个），seed 幂等收敛不变

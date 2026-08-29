@@ -144,3 +144,39 @@ Sprint 6 新增（4 条；辅助集中在 `room-move-helpers.ts`；复用种子�
    目标房最终只有一个 ACTIVE Stay
 4. HTTP 并发 Move→T vs Create Reservation→T：exactly one logical allocation wins
    （200/201 + 409），无 double allocation
+
+Sprint 8 新增（6 条；辅助集中在 `analytics-helpers.ts`；房间 206 测试开始前经
+admin API 归一化；历史房晚/保洁/工单时间回填 `setup_backdate_stay.py`、库存/
+收货时间回填 `setup_backdate_procurement.py`（真实 UPDATE，与
+setup_overdue_stay.py 同模式，不 mock））——`z-analytics.spec.ts`（`z-` 前缀
+保证最后执行：库存/采购为不可变账本无 DELETE，避免污染其它 spec 的全量列表断言）：
+
+1. Flow A · Operations Analytics（ADMIN）：完成 Stay（退房自动 CHECKOUT 保洁任务）
+   + 阻断维修工单 + 时间回填昨晚 → /analytics 总览：物理入住率 0.1%（1/840）、
+   实际占用房晚、当前快照（保洁积压/阻断性维修）、在册预测 7/14/30；
+   运营效率 Tab：完成保洁任务 1、120.0 分钟、新建工单 1、高频报修房间 206；
+   页面无 NaN / Infinity
+2. Flow B · Business Analytics（MANAGER）：合同房费 ¥300.00（600/2 晚 × 1 有价
+   房晚）、合同 ADR / 合同 RevPAR、待收货订单；库存与采购 Tab：物资行（每单位
+   独立）、到货采购金额 ¥60.00（40×1.50）、供应商
+3. Flow C · Permission Isolation（FRONT_DESK）：operations 可见、business 指标
+   与 Tab 缺席，且零 `/analytics/business/*` 网络请求（不允许 fetch→403→静默隐藏）
+4. Flow C · Permission Isolation（FINANCE）：business 可见、operations 指标与
+   Tab 缺席，且零 `/analytics/operations/*` 与 `/analytics/forecast` 网络请求
+5. Flow D · Zero Data：自定义空数据区间 → 页面正常渲染（0.0% / —），无
+   NaN / Infinity（Pre-opening 空数据安全）
+6. Flow E · Calendar Comparison（QA D1）：API 断言 This Month →
+   `comparison_mode=previous_month_elapsed`（comparison.period 精确等于
+   [上月初, 上月初+elapsed) 且月末 clamp）、Last Month →
+   `previous_calendar_month`（[上上月初, 上月初)）；UI 抽查本月对比 chip 与
+   上月范围标签（不只测标签）
+
+Backdate 脚本 Safety（QA D2，Release Blocker 修复）：
+- `setup_backdate_procurement.py` / `setup_backdate_stay.py` 均硬性解析实际
+  连接目标，**只允许数据库名 == stayops_test**（DATABASE_URL 缺失即拒绝，
+  不再 setdefault；开发库 stayops 在写前拒绝、零修改）；
+- 只修改调用方显式传入的行（`--receipt-id` / `--movement-id`；stay 脚本为
+  显式 `<stay_id>`），禁止整表 UPDATE；所有校验通过后单事务
+  validate → update → commit，任意失败 rollback 全部 + 非零退出；
+- 历史回填为 test-only 能力：无生产 API / 路由 / 开发库支持，StockMovement
+  正式产品不可变语义不变；backdate 安全测试见 `backend/tests/test_analytics_backdate_safety.py`。

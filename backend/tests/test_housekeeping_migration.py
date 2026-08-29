@@ -162,9 +162,14 @@ def test_housekeeping_seed_idempotent_and_role_mapping(_database):
     seed()
     second = snapshot()
     assert first == second, "连续执行两次 seed 必须收敛到一致状态"
-    assert first["permissions"] == 48  # Sprint 7：37（S6）+ Inventory/Procurement 的 11
-
+    assert first["permissions"] == 50  # Sprint 8：48（S7）+ Analytics 的 2
     mapping = first["mapping"]
+    # Sprint 8 §34：Analytics 矩阵
+    assert "analytics:operations_read" in mapping["FRONT_DESK"]
+    assert "analytics:business_read" not in mapping["FRONT_DESK"]
+    assert "analytics:business_read" in mapping["FINANCE"]
+    assert "analytics:operations_read" not in mapping["FINANCE"]
+
     assert HK_CODES <= mapping["SUPER_ADMIN"]
     assert HK_CODES <= mapping["MANAGER"]
     assert ({"housekeeping_task:read", "housekeeping_task:write"}) <= mapping[

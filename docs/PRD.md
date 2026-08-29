@@ -58,6 +58,34 @@ GoodsReceipt       = 收货单（收货才是库存增加权威）
 - 低库存：total==0 → OUT_OF_STOCK，total<=minimum → LOW_STOCK；
   建议补货 = max(target-total, 0)，仅建议不自动下单。
 
+## 经营分析（Sprint 8 起，Analytics = read-only derived layer）
+
+```text
+Metric Dictionary（docs/ANALYTICS.md）
+      ↓
+Analytics Service（SQL aggregation / CTE，无第二套业务事实表）
+      ↓
+Analytics API（operations / business 权限域分离）
+      ↓
+Management Cockpit（/analytics 四 Tab：总览 / 客房与预订 / 运营效率 / 库存与采购）
+      ↓
+Future S9 AI General Manager（消费同一 Analytics API）
+```
+
+- 正式业务表仍是 Source of Truth；不建立 daily_statistics / analytics_fact /
+  analytics_warehouse；无 ETL、无自动物化。
+- Backend 是指标计算唯一权威；Frontend 只 request → format / visualize。
+- Actual（已实际发生）与 On-Books / Forecast（已掌握的未来计划）严格分离；
+  全部区间 [from, to) + Business Date（Asia/Shanghai）；Actual 至多统计到
+  业务日期当天之前。
+- 酒店总体实际房晚 MUST derive from Stay（Room Move 防重复计数）；
+  Physical Occupancy ✅ / Sellable Occupancy ❌；合同房费金额 / 合同 ADR /
+  合同 RevPAR（非实际收款语义）。
+- 零数据原生支持（Count→0、Rate/Average 分母 0→null、Empty→[]），禁止
+  NaN / Infinity / fake business data。
+- RBAC：analytics:operations_read（SUPER_ADMIN/MANAGER/FRONT_DESK）与
+  analytics:business_read（SUPER_ADMIN/MANAGER/FINANCE），无权限域不请求。
+
 ## V1 核心模块
 
 1. 登录与 RBAC 权限

@@ -8,10 +8,12 @@ def test_list_permissions(client, admin_headers):
     )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["total"] == 48  # Sprint 7：37（S6）+ Inventory/Procurement 的 11
+    assert body["total"] == 50  # Sprint 8：48（S7）+ Analytics 的 2
     items = body["items"]
-    assert len(items) == 48
+    assert len(items) == 50
     codes = {p["code"] for p in items}
+    # Sprint 8 §34：Analytics 权限码存在
+    assert {"analytics:operations_read", "analytics:business_read"} <= codes
     # 任务书要求：user/role/room/room_type/audit × read/write/delete
     for module in ["user", "role", "room", "room_type", "audit"]:
         for op in ["read", "write", "delete"]:

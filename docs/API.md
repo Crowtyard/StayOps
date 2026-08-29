@@ -1,6 +1,6 @@
 # StayOps API
 
-> Sprint 1 第二阶段已实现，Sprint 2 S2-T1 扩展 Booking 域，Sprint 3 扩展 Housekeeping 域，Sprint 4 扩展日期窗口重叠查询，Sprint 5 扩展 Maintenance 域（维修运营与客房可用性闭环），Sprint 6 扩展 Room Move 域（住中换房与在住异常恢复），Sprint 7 扩展 Inventory 域（库存账本与业务动作）与 Procurement 域（采购申请/订单/收货闭环）。统一前缀 `/api/v1`，JSON 请求/响应，JWT（Bearer）认证。
+> Sprint 1 第二阶段已实现，Sprint 2 S2-T1 扩展 Booking 域，Sprint 3 扩展 Housekeeping 域，Sprint 4 扩展日期窗口重叠查询，Sprint 5 扩展 Maintenance 域（维修运营与客房可用性闭环），Sprint 6 扩展 Room Move 域（住中换房与在住异常恢复），Sprint 7 扩展 Inventory 域（库存账本与业务动作）与 Procurement 域（采购申请/订单/收货闭环），Sprint 8 扩展 Analytics 域（经营分析，read-only derived layer）。统一前缀 `/api/v1`，JSON 请求/响应，JWT（Bearer）认证。
 
 ## 约定
 
@@ -30,7 +30,7 @@
 | PUT | /roles/{id} | 更新角色 | role:write |
 | DELETE | /roles/{id} | 删除角色（级联清理关联） | role:delete |
 | POST | /roles/{id}/permissions | 设置角色权限（整体替换，空=清空） | role:write |
-| GET | /permissions | 权限列表（分页，48 个 = Sprint 1 的 17 + Booking 的 10 + Housekeeping 的 5 + Maintenance 的 5 + Room Move 的 1 + Sprint 7 Inventory/Procurement 的 11） | role:read |
+| GET | /permissions | 权限列表（分页，50 个 = Sprint 1 的 17 + Booking 的 10 + Housekeeping 的 5 + Maintenance 的 5 + Room Move 的 1 + Sprint 7 Inventory/Procurement 的 11 + Sprint 8 Analytics 的 2） | role:read |
 | GET | /room-types | 房型列表（分页，含 room_count） | room_type:read |
 | POST | /room-types | 创建房型 | room_type:write |
 | GET | /room-types/{id} | 房型详情 | room_type:read |
@@ -698,6 +698,137 @@ PARTIALLY_RECEIVED）→ 校验每行 received <= remaining
 ```
 
 （示例日期仅为文档说明；自动化测试一律动态日期。响应不含 Guest PII。）
+
+## Analytics 域（Sprint 8）
+
+### 领域原则（§2 LOCKED Architecture Decision）
+
+```text
+Analytics = read-only derived layer
+正式业务表（reservations / stays / housekeeping_tasks / maintenance_work_orders /
+stock_movements / goods_receipts …）仍然是 Source of Truth
+```
+
+- 不建立 daily_statistics / analytics_fact / analytics_warehouse 等第二套业务事实；
+  无 ETL、无自动物化；Backend 是指标计算唯一权威（Frontend 只 request →
+  format / visualize）。
+- 全部日期区间为半开区间 `[from, to)` + Business Date（Asia/Shanghai，§2.4）；
+  **Actual 至多统计到 current_business_date（exclusive）**：`to > 业务日期` → 422
+  （§3）。`from < to`（否则 422）、最大跨度 366 天（422）。
+- 零数据语义（§33）：Count -> 0；Rate/Average 分母 0 -> `null`；Empty series ->
+  `[]`；禁止 NaN / Infinity。Money 一律 Decimal（JSON 字符串）；Rate 为 ratio
+  0..1（如 `0.643`）。
+- 响应结构明确区分 `period`（周期指标）与 `snapshot`（当前快照，§9）。
+- PII（§36）：不返回 Guest name / phone / contact / notes；Supplier phone /
+  notes 不进入 Analytics。
+
+### 权限域（§35，用 permission 判断）
+
+- `analytics:operations_read`：operations 端点（Occupancy / Bookings / Stay /
+  Housekeeping / Maintenance / Room Move / Forecast）
+- `analytics:business_read`：business 端点（Contracted Room Value / Contracted
+  ADR / Contracted RevPAR / Inventory Analytics / Procurement Analytics /
+  Supplier value）
+
+矩阵：SUPER_ADMIN / MANAGER 两域全开；FRONT_DESK 仅 operations；HOUSEKEEPING /
+MAINTENANCE 无；FINANCE 仅 business。
+
+### 端点一览
+
+| 方法 | 路径 | 权限 | 说明 |
+|---|---|---|---|
+| GET | /analytics/operations/overview | operations | 周期指标（占用/预订/换房/保洁完成/ALOS）+ 当前快照 + On-books 7/14/30；`compare=true` 时按 `comparison_mode` 返回上一周期对比（equal_length / previous_calendar_month / previous_month_elapsed） |
+| GET | /analytics/operations/bookings | operations | Arrival Cohort（到店/取消/未到店/提前天数/ALOS/换房）+ 提前天数分布 + 每日占用趋势 |
+| GET | /analytics/operations/housekeeping | operations | 完成数/平均周期/退房翻房/换房保洁 + 积压快照 + 每日完成 |
+| GET | /analytics/operations/maintenance | operations | 新建/完成/进行中/阻断快照 + MTTR/验收 + 分类与房间分布 |
+| GET | /analytics/operations/room-moves | operations | 换房次数/涉及住宿/换房率 + 原因与换出房分布 |
+| GET | /analytics/business/rooms | business | 合同房费金额/有价与无价房晚/合同 ADR/合同 RevPAR + 每日趋势 |
+| GET | /analytics/business/inventory | business | 低/缺货快照 + 每物资领用量与领用强度（不跨单位求和） |
+| GET | /analytics/business/procurement | business | 申请/订单/待收货 + 到货采购金额（供应商/物资/每日）+ 无单价行 |
+| GET | /analytics/forecast | operations | On-books 7d/14d/30d + 30 日每日序列（无参数） |
+
+查询参数（Actual 端点）：`from=YYYY-MM-DD`、`to=YYYY-MM-DD`（必填）、
+`compare=true|false`（默认 false）。校验失败 422；无权限 403。
+
+### 对比语义（§31/§32 + QA D1 Comparison Modes）
+
+`compare=true` 时通过 `comparison_mode` 指定对比语义（受限枚举，非法值 422）：
+
+| comparison_mode | 适用预设 | 上一周期 |
+|---|---|---|
+| `equal_length`（默认） | 过去 7/30/90 天、自定义 | `[from - days, from)`（等长前移） |
+| `previous_calendar_month` | 上月（Last Month） | `[上月初, 本月初)`（上一完整自然月；两月天数无需相同） |
+| `previous_month_elapsed` | 本月（This Month） | `[上月初, 上月初 + elapsed)`，elapsed = `to - from`；**clamp 于上一自然月月末**（3 月 MTD 30 日 vs 2 月 28 天 → `[2/1, 3/1)`，禁止跨出上一自然月凑等长；闰年 2 月、30/31 天月、1 月 vs 12 月跨年同理） |
+
+`comparison_mode` 由前端按用户所选 preset 发送；上一周期区间计算与指标
+计算仍全部由 Backend 权威完成（前端禁止自行计算上一周期指标，D1.3）。
+`compare=false` 时 `comparison_mode` 不改变结果（响应无 `comparison`）。
+
+`comparison.period` 为上一周期；`changes` 中：比率指标（physical_occupancy_rate /
+cancellation_rate / no_show_rate / room_move_rate）→ `pp_delta`
+（percentage points）；数量/金额/平均 → `percent_change`
+（`previous = 0` → `null`，禁止 Infinity%）。
+
+### 响应示例（节选）
+
+`GET /api/v1/analytics/operations/overview?from=2026-08-01&to=2026-08-29`
+（日期为示例，实现一律动态）：
+
+```json
+{
+  "business_date": "2026-08-29",
+  "period": { "from": "2026-08-01", "to": "2026-08-29", "days": 28 },
+  "metrics": {
+    "actual_occupied_room_nights": 56,
+    "physical_room_nights": 784,
+    "physical_occupancy_rate": 0.0714,
+    "completed_stays": 30,
+    "average_length_of_stay": 1.87,
+    "scheduled_arrivals": 31,
+    "cancelled_arrivals": 2,
+    "cancellation_rate": 0.0645,
+    "no_show_count": 1,
+    "no_show_rate": 0.0345,
+    "average_booking_lead_days": 3.4,
+    "room_move_count": 2,
+    "moved_stay_count": 2,
+    "room_move_rate": 0.0667,
+    "housekeeping_completed_tasks": 34
+  },
+  "snapshot": {
+    "active_stays": 4,
+    "overdue_active_stays": 1,
+    "housekeeping_backlog": 2,
+    "active_maintenance": 3,
+    "active_blocking_maintenance": 1
+  },
+  "on_books": {
+    "7d": { "days": 7, "physical_room_nights": 196, "on_books_room_nights": 30, "occupancy_rate": 0.1531 },
+    "14d": { "days": 14, "physical_room_nights": 392, "on_books_room_nights": 45, "occupancy_rate": 0.1148 },
+    "30d": { "days": 30, "physical_room_nights": 840, "on_books_room_nights": 60, "occupancy_rate": 0.0714 }
+  },
+  "comparison": null
+}
+```
+
+`GET /api/v1/analytics/business/rooms`：
+
+```json
+{
+  "business_date": "2026-08-29",
+  "period": { "from": "2026-08-01", "to": "2026-08-29", "days": 28 },
+  "contracted_room_value": "16800.00",
+  "priced_occupied_room_nights": 54,
+  "unpriced_occupied_room_nights": 2,
+  "contracted_adr": "311.1111",
+  "contracted_revpar": "21.4286",
+  "physical_room_nights": 784,
+  "daily": []
+}
+```
+
+（合同房费金额 / ADR / RevPAR 均注明：非实际收款、非财务口径，见
+[docs/ANALYTICS.md](ANALYTICS.md)。）
 
 ## 示例
 

@@ -275,3 +275,94 @@ lint / typecheck / build PASS；开发库 stayops `alembic upgrade head`
 Sprint 1–6 回归全部保留（pytest 317 基线 / Vitest 324 基线 / Playwright 64 基线）。
 `v1.0.0-alpha.6`（2791c8b）冻结不动；待 Kun Fast QA PASS 后创建
 `v1.0.0-alpha.7` Release Commit。
+
+## Sprint 8（IMPLEMENTATION COMPLETE · 等待 Kun Fast QA）
+
+```text
+Sprint 8                = Business Analytics（经营分析与管理驾驶舱）
+Release                 = v1.0.0-alpha.8（计划，待 Kun QA PASS 后发布）
+开发模式                = FAST TRACK + REUSE FIRST + ONE SPRINT / ONE DSH SESSION
+Sprint 8 Coding         = IMPLEMENTATION COMPLETE（无 commit）
+Sprint 8 Fast QA        = 待 Kun 独立 QA
+DSH                     = STOPPED（完成后停止，不进入 Sprint 9）
+```
+
+Sprint 8 范围（任务书 §1–§69）：
+
+- **LOCKED 架构（§2）**：Analytics = read-only derived layer——正式业务表仍是
+  Source of Truth；不建立 daily_statistics / analytics_fact / analytics_warehouse
+  等第二套业务事实；无 ETL、无自动物化；除 2 个权限 Seed 外无 Schema Migration
+  （Alembic head 保持 e3a91f5c8d24）。Backend 是指标计算唯一权威；Frontend 只
+  request → format / visualize。Actual 与 On-Books / Forecast 严格分离；
+  全部区间 [from, to) + Business Date（Asia/Shanghai）；Actual 至多统计到
+  current_business_date（exclusive，§3）。
+- **占用与预测（§4-§11）**：酒店总体实际房晚 MUST derive from Stay（ACTIVE 的
+  历史区间 [bd(actual_check_in_at), D0) 不被 planned_checkout 截断）；
+  Room Move 绝不重复计房晚（StayRoomAssignment 只用于归属/事件）；
+  physical_room_count 查询 Room master（不硬编码 28）；只提供 Physical
+  Occupancy（Sellable Occupancy 不伪造）；On-Books 7/14/30 = CONFIRMED +
+  ACTIVE remaining，distinct (business_date, room_id) 去重，CANCELLED /
+  NO_SHOW / CHECKED_IN room_id 不计。
+- **预订与合同房费（§12-§22）**：Arrival Cohort（check_in_date ∈ 区间）驱动
+  scheduled/cancelled/no-show/lead time（Bucket 后端权威）/ALOS（实际
+  check-in→checkout）；Contracted Room Value（agreed_total_amount /
+  planned_nights 每晚贡献，Decimal）、priced/unpriced nights（超计划实际住宿
+  不猜价格）、Contracted ADR / Contracted RevPAR（非实际收款语义）。
+- **运营域（§23-§25）**：Housekeeping（完成/周期/退房翻房/换房保洁/积压快照）、
+  Maintenance（新建/完成/Active/阻断/MTTR/验收/分类/房间分布，无历史停机房晚）、
+  Room Move（次数/涉及住宿/换房率/原因/换出房）。
+- **库存与采购（§26-§30）**：低/缺货快照；item_issue_quantity 每 Item 每 Base
+  Unit 领用毛量（禁止跨单位求和）；领用强度（≠ 客人实际消费）；到货采购金额按
+  GoodsReceipt.received_at 归属（unit_price NULL 不猜价格 → unpriced_received_lines）。
+- **对比与零数据（§31-§33）**：compare=true 返回等长上一周期；比率 → pp_delta、
+  数量/金额/平均 → percent_change（previous=0 → null）；零数据 0 / null / []，
+  禁止 NaN / Infinity / fake business data。
+- **RBAC / PII（§34-§36）**：新增 analytics:operations_read（SUPER_ADMIN /
+  MANAGER / FRONT_DESK）与 analytics:business_read（SUPER_ADMIN / MANAGER /
+  FINANCE）（48 → 50 权限码，seed 幂等）；/analytics 任一权限可进，无权限域
+  DO NOT FETCH；Analytics 不返回 Guest / Supplier 联系信息。
+- **API 与 UI（§37-§51）**：/api/v1/analytics/operations/*（overview/bookings/
+  housekeeping/maintenance/room-moves）+ /analytics/business/*（rooms/inventory/
+  procurement）+ /analytics/forecast；/analytics 四 Tab（总览/客房与预订/运营效率/
+  库存与采购）+ 顶部 Date Selector（7/30/90 天、本月、上月、自定义，默认 30 天）；
+  KPI Cards + 极简 SVG 折线/柱状图（npm registry 网络不可达，按 §50 未引入图表库，
+  手写两个固定形态 SVG 组件，非通用 chart engine）。
+- **测试（§52-§64）**：Golden Analytics Dataset（人工可计算 + exact assert）；
+  Room Move 防重复计数（203→205、203→205→208）；Forecast 去重；日期边界（含
+  月/年边界、午夜时区转换、ACTIVE/超期）；零数据；对比；六角色 RBAC；PII 扫描；
+  参数校验（from<to、to<=D0、跨度<=366）；前端 Vitest（格式化/零值/pp/percent/
+  权限门控/日期预设/空图/单位隔离）；Playwright analytics spec 5 条（Flow A
+  运营 / Flow B 经营 / Flow C FRONT_DESK·FINANCE 权限隔离零请求 / Flow D 零数据）。
+
+Sprint 8 进展：DSH 完成全部实现（Implementation Complete，无 commit）：
+pytest 416（379 基线 + 37 新增）/ Vitest 414（379 基线 + 35 新增）/
+Playwright 64 基线 + analytics 5 条全绿；lint / typecheck / build PASS；
+开发库 stayops seed 幂等收敛（50 权限码）；Alembic head 不变（e3a91f5c8d24，
+无新 Migration）；Sprint 1–7 回归全部保留。`v1.0.0-alpha.7` 冻结不动；
+待 Kun Fast QA PASS 后创建 `v1.0.0-alpha.8` Release Commit。
+
+### Sprint 8 QA 缺陷修复（D1 / D2，等待 Kun Re-QA）
+
+Kun Independent Fast QA：绝大多数 S8 通过；2 个 RELEASE BLOCKER 已修复：
+
+- **D1 · Calendar Preset Comparison semantics**：新增 `comparison_mode` 受限
+  枚举（`/analytics/operations/overview`）——`equal_length`（默认，过去
+  7/30/90 天、自定义）、`previous_calendar_month`（上月：上一完整自然月）、
+  `previous_month_elapsed`（本月：上一自然月同 elapsed 跨度，**clamp 于上月
+  月末**——3 月 MTD 30 日 vs 2 月 28 天 → [2/1,3/1)，闰年/30·31 天月/跨年
+  同由月末钳制）；非法值 422；compare=false 不影响结果；上一周期计算仍由
+  Backend 权威完成，前端只按 preset 发送模式。
+- **D2 · E2E Backdate 脚本安全**：`setup_backdate_procurement.py` /
+  `setup_backdate_stay.py` 硬性解析连接目标、**只允许数据库名 stayops_test**
+  （DATABASE_URL 缺失即拒绝，不再 setdefault，开发库写前拒绝零修改）；
+  只修改显式传入的行 ID（`--receipt-id` / `--movement-id` / `<stay_id>`），
+  禁止整表 UPDATE；单事务 validate → update → commit，任意失败 rollback 全部；
+  无产品后门，StockMovement 正式不可变语义不变。E2E helper 捕获本次创建的行
+  ID 显式传入并注入测试库连接。
+- 既有 Pre-existing Schema Drift（alpha.7 前 constraint naming）保留为技术债，
+  不新建 migration。
+
+修复后测试口径：pytest 440（416 + comparison modes 17 + backdate safety 7）/
+Vitest 419（414 + preset→mode 映射 3 + 视图发送 2）/ Playwright 74
+（73 + Flow E Calendar Comparison：API 断言 This Month/Last Month 的
+comparison.period 精确区间 + UI 抽查对比 chip 与上月范围标签）。
