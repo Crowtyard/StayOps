@@ -117,6 +117,34 @@ def _route(messages: list[dict]) -> dict:
     return {"kind": "final", "content": "OK（FakeProvider 测试回答）"}
 
 
+def _validate_tool_protocol(messages: list[dict]) -> str | None:
+    """Strict Protocol Fake（Hotfix）：与真实 DeepSeek 同语义校验。
+
+    请求含 role=tool 消息时，必须满足：
+    - 前面存在带 tool_calls 的 assistant 回显
+    - 每个 tool 消息的 tool_call_id 与回显 ids 匹配
+    违反时返回错误描述（do_POST 转 DeepSeek 400 invalid_request_error），
+    锁定“Fake PASS / Real Provider FAIL”回归。
+    """
+    assistant_tool_indices = [
+        i
+        for i, m in enumerate(messages)
+        if m.get("role") == "assistant" and m.get("tool_calls")
+    ]
+    tool_indices = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
+    if tool_indices and not assistant_tool_indices:
+        return "Messages with role 'tool' must be a response to a preceding message with 'tool_calls'"
+    for ti in tool_indices:
+        prev = [i for i in assistant_tool_indices if i < ti]
+        if not prev:
+            return "role 'tool' message without preceding assistant(tool_calls)"
+        assistant = messages[prev[-1]]
+        ids = {tc.get("id") for tc in assistant.get("tool_calls", [])}
+        if messages[ti].get("tool_call_id") not in ids:
+            return "tool_call_id does not match assistant(tool_calls)"
+    return None
+
+
 class _Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):  # 静默访问日志
         pass
@@ -146,6 +174,21 @@ class _Handler(BaseHTTPRequestHandler):
             self._respond_json(400, {"error": "bad json"})
             return
         messages = payload.get("messages") or []
+        # Strict Protocol Fake（Hotfix）：协议违规 -> 复刻真实 DeepSeek 400
+        protocol_error = _validate_tool_protocol(messages)
+        if protocol_error is not None:
+            self._respond_json(
+                400,
+                {
+                    "error": {
+                        "message": protocol_error,
+                        "type": "invalid_request_error",
+                        "param": None,
+                        "code": "invalid_request_error",
+                    }
+                },
+            )
+            return
         step = _route(messages)
 
         if step["kind"] == "http_error":

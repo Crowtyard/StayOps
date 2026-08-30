@@ -1,19 +1,33 @@
 # -*- coding: utf-8 -*-
-"""AI Manager Chat API 测试（Sprint 9 §19/§20/§21/§25/§33）。
+"""AI Manager Chat API 测试（Sprint 9 §19/§20/§21/§25/§33 + Hotfix）。
 
-FakeDeepSeekClient（确定性）验证 Tool Layer / 错误映射 / 会话上下文 /
-持久化 / 归属；pytest 不依赖真实 DeepSeek API（§33）。
+FakeDeepSeekClient（确定性 + Strict Protocol）验证 Tool Layer / 错误映射 /
+会话上下文 / 持久化 / 归属 / 真实 Provider Tool Calling 协议；
+pytest 不依赖真实 DeepSeek API（§33）。
 """
+
+import json
 
 import pytest
 from fastapi import Depends
 from sqlalchemy import select
 
 from app.api.deps import get_ai_service
+from app.core.business_date import business_date
 from app.database import get_db
 from app.models import AIConversation, AIMessage, AuditLog
-from app.services.ai_manager import AIManagerService, SYSTEM_PROMPT
-from tests.fake_deepseek import FakeDeepSeekClient, error_step, final_step, tool_step
+from app.services.ai_manager import (
+    AIManagerService,
+    SYSTEM_PROMPT,
+    build_system_prompt,
+)
+from tests.fake_deepseek import (
+    FakeDeepSeekClient,
+    error_step,
+    final_step,
+    multi_tool_step,
+    tool_step,
+)
 
 FAKE_KEY = "sk-chat-test-key-1234"
 
@@ -361,14 +375,142 @@ def test_chat_context_window_last_10(client, admin_headers, ai_chat):
     assert [m["content"] for m in user_in_window] == [f"问{i}" for i in range(7, 12)]
     assert last_call["messages"][0]["role"] == "system"
     assert "You are StayOps AI Manager" in last_call["messages"][0]["content"]
-    assert SYSTEM_PROMPT == last_call["messages"][0]["content"]
+    # Hotfix：system prompt 注入当前业务日期
+    assert last_call["messages"][0]["content"] == build_system_prompt(business_date())
 
 
 def test_chat_system_prompt_core_rules():
-    """§18：System Prompt 核心规则存在。"""
+    """§18：System Prompt 核心规则存在（含 Hotfix 业务日期注入）。"""
     assert "get_analytics" in SYSTEM_PROMPT
     assert "query_stayops_database" in SYSTEM_PROMPT
     assert "read-only" in SYSTEM_PROMPT
     assert "Do not invent data" in SYSTEM_PROMPT
     assert "Never claim to have modified StayOps" in SYSTEM_PROMPT
     assert "中文" in SYSTEM_PROMPT
+    prompt = build_system_prompt(business_date())
+    today = business_date().isoformat()
+    assert f"当前 StayOps 业务日期为 {today}" in prompt
+    assert "相对日期必须以该业务日期计算" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Real Provider Tool Calling Protocol（Hotfix §1-§3/§5，Route-Level）
+# ---------------------------------------------------------------------------
+
+
+def _all_calls(ai_chat) -> list[dict]:
+    return [call for client in ai_chat.clients for call in client.calls]
+
+
+def test_chat_single_tool_call_protocol(client, admin_headers, ai_chat):
+    """Hotfix：单 tool call——第二轮 messages 必须为
+    user -> assistant(tool_calls) -> tool（回显只出现一次，id 完全匹配，
+    arguments 保持 JSON string 透传）。"""
+    _configure_key(client, admin_headers)
+    ai_chat.apply(
+        [
+            tool_step(
+                "query_stayops_database",
+                {"sql": "SELECT room_number FROM ai_rooms ORDER BY id LIMIT 2"},
+            ),
+            final_step("完成"),
+        ]
+    )
+    resp = _chat(client, admin_headers, "前两个房间是什么？")
+    assert resp.status_code == 200, resp.text
+
+    calls = _all_calls(ai_chat)
+    assert len(calls) == 2  # Round 1（tool）+ Round 2（final）
+    round2 = calls[1]["messages"]
+
+    assistants = [
+        m for m in round2 if m["role"] == "assistant" and m.get("tool_calls")
+    ]
+    tools = [m for m in round2 if m["role"] == "tool"]
+    assert len(assistants) == 1, "assistant(tool_calls) 必须只出现一次"
+    assert round2.index(assistants[0]) < round2.index(tools[0])
+
+    echo = assistants[0]
+    assert echo["content"] is None
+    assert len(echo["tool_calls"]) == 1
+    tc = echo["tool_calls"][0]
+    assert tc["type"] == "function"
+    assert tc["function"]["name"] == "query_stayops_database"
+    assert isinstance(tc["function"]["arguments"], str)
+    assert json.loads(tc["function"]["arguments"])["sql"].startswith("SELECT")
+
+    assert len(tools) == 1
+    assert tools[0]["tool_call_id"] == tc["id"]  # 与回显 id 完全一致
+    assert '"columns"' in tools[0]["content"]
+
+
+def test_chat_multi_tool_calls_protocol(client, admin_headers, ai_chat):
+    """Hotfix：第一轮同时 4 个 tool_calls——必须 1 条 assistant(tool_calls=[4])
+    + 4 条 role=tool（不能每个 tool call 分别生成 assistant），id 全部匹配。"""
+    _configure_key(client, admin_headers)
+    ai_chat.apply(
+        [
+            multi_tool_step(
+                [
+                    {
+                        "name": "query_stayops_database",
+                        "arguments": {"sql": "SELECT 1 AS a"},
+                    },
+                    {
+                        "name": "query_stayops_database",
+                        "arguments": {"sql": "SELECT 2 AS b"},
+                    },
+                    {
+                        "name": "query_stayops_database",
+                        "arguments": {"sql": "SELECT 3 AS c"},
+                    },
+                    {"name": "get_analytics", "arguments": {"endpoint": "forecast"}},
+                ]
+            ),
+            final_step("完成4个"),
+        ]
+    )
+    resp = _chat(client, admin_headers, "并行查询")
+    assert resp.status_code == 200, resp.text
+
+    calls = _all_calls(ai_chat)
+    round2 = calls[1]["messages"]
+    assistants = [
+        m for m in round2 if m["role"] == "assistant" and m.get("tool_calls")
+    ]
+    tools = [m for m in round2 if m["role"] == "tool"]
+    assert len(assistants) == 1, "多 tool call 只允许一条 assistant(tool_calls)"
+    assert round2.index(assistants[0]) < min(round2.index(m) for m in tools)
+
+    echo_ids = [tc["id"] for tc in assistants[0]["tool_calls"]]
+    assert len(echo_ids) == 4
+    tool_ids = [m["tool_call_id"] for m in tools]
+    assert tool_ids == echo_ids  # 顺序一致且完全匹配
+
+    for tc in assistants[0]["tool_calls"]:
+        assert tc["type"] == "function"
+        assert isinstance(tc["function"]["name"], str)
+        assert isinstance(tc["function"]["arguments"], str)
+
+    # 4 个工具都真实执行（SQL 返回 columns，analytics 返回 data）
+    for m in tools:
+        assert '"columns"' in m["content"] or '"data"' in m["content"]
+
+
+def test_chat_tool_loop_messages_not_persisted(client, admin_headers, ai_chat, db):
+    """Hotfix §3 Persistence Boundary：assistant(tool_calls) / role=tool /
+    原始工具结果只存在于本轮临时上下文，不写入 ai_messages。"""
+    _configure_key(client, admin_headers)
+    ai_chat.apply(
+        [
+            tool_step("query_stayops_database", {"sql": "SELECT 1 AS one"}),
+            final_step("结果完成"),
+        ]
+    )
+    conv_id = _chat(client, admin_headers, "查询一下").json()["conversation_id"]
+    msgs = db.scalars(
+        select(AIMessage).where(AIMessage.conversation_id == conv_id)
+    ).all()
+    assert [m.role for m in msgs] == ["user", "assistant"]
+    assert all("tool" not in m.role for m in msgs)
+    assert all("SELECT 1" not in (m.content or "") for m in msgs)

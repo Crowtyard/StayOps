@@ -258,24 +258,49 @@ TOOL_DEFINITIONS: list[dict] = [
                 "涉及正式指标（入住率、ADR、RevPAR、取消率、未到店率、ALOS、预测等）"
                 "必须使用本工具，不要自行计算。"
             ),
+            # Hotfix（Real-use Defect #8）：Tool Schema 必须与 Backend Tool
+            # Contract 一致——除 forecast 外所有端点都要求 from/to（否则
+            # AI_ANALYTICS_PARAMETER_ERROR）；forecast 不需要 period。
+            # 用 oneOf 表达条件 required，不粗暴全局 required，也不依赖
+            # “模型先调用错 -> 工具报错 -> 模型重试”作为正常路径。
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "endpoint": {
-                        "type": "string",
-                        "enum": [
-                            "overview", "bookings", "housekeeping", "maintenance",
-                            "room-moves", "forecast",
-                            "rooms", "inventory", "procurement",
-                        ],
-                        "description": "分析端点：overview/bookings/housekeeping/"
-                        "maintenance/room-moves/forecast 属运营域；"
-                        "rooms/inventory/procurement 属经营域",
+                "oneOf": [
+                    {
+                        "properties": {
+                            "endpoint": {
+                                "type": "string",
+                                "enum": [
+                                    "overview", "bookings", "housekeeping",
+                                    "maintenance", "room-moves",
+                                    "rooms", "inventory", "procurement",
+                                ],
+                                "description": "分析端点（需 period 的 Actual 端点）",
+                            },
+                            "from": {
+                                "type": "string",
+                                "description": "区间起点 YYYY-MM-DD（含）；"
+                                "与当前业务日期同口径，例如近7天 = 业务日期-7",
+                            },
+                            "to": {
+                                "type": "string",
+                                "description": "区间终点 YYYY-MM-DD（不含）；"
+                                "不能超过当前业务日期",
+                            },
+                        },
+                        "required": ["endpoint", "from", "to"],
                     },
-                    "from": {"type": "string", "description": "区间起点 YYYY-MM-DD（含，forecast 不需要）"},
-                    "to": {"type": "string", "description": "区间终点 YYYY-MM-DD（不含，forecast 不需要）"},
-                },
-                "required": ["endpoint"],
+                    {
+                        "properties": {
+                            "endpoint": {
+                                "type": "string",
+                                "enum": ["forecast"],
+                                "description": "在册预测端点（无 period 参数）",
+                            }
+                        },
+                        "required": ["endpoint"],
+                    },
+                ],
             },
         },
     },

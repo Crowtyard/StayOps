@@ -1,4 +1,4 @@
-"""AI Manager Service（Sprint 9 §19/§20/§21）。
+"""AI Manager Service（Sprint 9 §19/§20/§21 + Real Provider Hotfix）。
 
 一次用户问题：
     DeepSeek -> tool call -> tool result -> DeepSeek -> (maybe another tool) -> final answer
@@ -10,12 +10,26 @@
   完整 SQL 结果不持久化）；只保存 user_id / role / content / 时间戳 /
   provider·model / token usage（§21/§36）。
 - API Key 只存在 Server Side（ai_settings 密文）；不进入日志/响应/上下文。
+
+Hotfix（Real Provider Tool Calling Protocol，Kun 真实取证）：
+- 收到 resp.tool_calls 后，必须先回显一条完整 assistant(tool_calls) 消息
+  （包含本轮全部 tool calls：id / type / function.name / function.arguments），
+  然后再逐条追加 role=tool 消息；顺序固定为
+  user -> assistant(tool_calls=[ALL]) -> tool(1) -> tool(2) -> ...
+  否则 DeepSeek 第二轮返回 HTTP 400
+  （"Messages with role 'tool' must be a response to a preceding message
+   with 'tool_calls'"）。
+- 回显与 tool 消息的 tool_call_id 必须完全一致；arguments 以 Provider 原始
+  JSON string 透传（dict 时用稳定 JSON serialization 恢复 string）。
+- assistant(tool_calls) / role=tool / raw tool result 只存在于本轮临时
+  messages，不写入 AIConversation / AIMessage（§3 Persistence Boundary）。
 """
 
 from __future__ import annotations
 
 import json
 import logging
+from datetime import date
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -25,6 +39,7 @@ from app.config import settings
 from app.core import ai_crypto
 from app.core.ai_schema_context import SCHEMA_CONTEXT
 from app.core.audit import write_audit_log
+from app.core.business_date import add_days, business_date
 from app.models import AIConversation, AIMessage, AISetting, User
 from app.services.ai_tools import TOOL_DEFINITIONS
 from app.services.deepseek import (
@@ -54,6 +69,49 @@ Rules:
 
 {SCHEMA_CONTEXT}
 """
+
+
+def build_system_prompt(current_bd: date | None = None) -> str:
+    """按请求注入当前 StayOps 业务日期（Real-use Defect #7）。
+
+    相对日期（今天/昨天/近7天/本月）必须以业务日期计算，且与 S8 Analytics
+    口径一致：近7天 = [business_date - 7 天, business_date)（半开区间）。
+    禁止硬编码日期；一律使用 app.core.business_date。
+    """
+    bd = current_bd or business_date()
+    seven_ago = add_days(bd, -7)
+    return (
+        SYSTEM_PROMPT
+        + f"\nCurrent StayOps business date: {bd.isoformat()}\n"
+        + f"当前 StayOps 业务日期为 {bd.isoformat()}。"
+        + "所有“今天、昨天、近7天、本月”等相对日期必须以该业务日期计算。"
+        + f"近7天 = [{seven_ago.isoformat()}, {bd.isoformat()})（半开区间，"
+        + "与经营分析口径一致）。\n"
+    )
+
+
+def _tool_call_echo(tool_call: dict, index: int, tool_rounds: int) -> dict:
+    """构建发往 Provider 的 assistant(tool_calls) 回显（Tool Call Fidelity）。
+
+    - id：保持 Provider 原始 id；缺失时生成确定性回退 id（与 tool 消息一致）
+    - type：固定 "function"（wire contract）
+    - function.name：原样
+    - function.arguments：Provider 原始 JSON string 透传；内部为 dict 时用
+      稳定 JSON serialization 恢复合法 string
+    """
+    call_id = tool_call.get("id") or f"call_{tool_rounds}_{index}"
+    arguments = tool_call.get("arguments")
+    if not isinstance(arguments, str):
+        arguments = json.dumps(arguments or {}, ensure_ascii=False, sort_keys=True)
+    return {
+        "id": call_id,
+        "type": "function",
+        "function": {
+            "name": tool_call.get("name", ""),
+            "arguments": arguments,
+        },
+    }
+
 
 USER_MESSAGE_MAX_LEN = 4000
 
@@ -186,7 +244,9 @@ class AIManagerService:
         conversation_id = conv.id
 
         self._save_message(conversation_id, "user", message)
-        messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        messages: list[dict] = [
+            {"role": "system", "content": build_system_prompt()}
+        ]
         messages.extend(self._context_messages(conversation_id))
 
         usage_total: dict = {}
@@ -210,7 +270,21 @@ class AIManagerService:
                         f"工具调用超过上限（{settings.ai_max_tool_rounds} 轮），已安全终止",
                         http_status=409,
                     )
-                for tool_call in resp.tool_calls:
+                # Hotfix：先回显一条完整的 assistant(tool_calls)（包含本轮全部
+                # tool calls），再逐条追加 role=tool —— 否则 DeepSeek 第二轮
+                # 返回 400（role='tool' 必须响应前一条 assistant(tool_calls)）。
+                echoes = [
+                    _tool_call_echo(tc, idx, tool_rounds)
+                    for idx, tc in enumerate(resp.tool_calls)
+                ]
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": echoes,
+                    }
+                )
+                for idx, tool_call in enumerate(resp.tool_calls):
                     name = tool_call.get("name", "")
                     if name not in ("get_analytics", "query_stayops_database"):
                         result = {
@@ -224,7 +298,8 @@ class AIManagerService:
                     messages.append(
                         {
                             "role": "tool",
-                            "tool_call_id": tool_call.get("id") or f"call_{tool_rounds}",
+                            # tool_call_id 必须与 assistant.tool_calls[].id 完全一致
+                            "tool_call_id": echoes[idx]["id"],
                             "content": json.dumps(result, ensure_ascii=False),
                         }
                     )
