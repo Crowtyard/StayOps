@@ -277,7 +277,7 @@ def test_maintenance_seed_role_mapping(_database):
     seed()
     second = snapshot()
     assert first == second, "连续执行两次 seed 必须收敛到一致状态"
-    assert first["permissions"] == 50  # Sprint 8：48（S7）+ Analytics 的 2
+    assert first["permissions"] == 52  # Sprint 9：50（S8）+ AI Manager 的 2
     mapping = first["mapping"]
     # Sprint 8 §34：Analytics 矩阵
     assert "analytics:operations_read" in mapping["FRONT_DESK"]

@@ -69,7 +69,7 @@ Analytics API（operations / business 权限域分离）
       ↓
 Management Cockpit（/analytics 四 Tab：总览 / 客房与预订 / 运营效率 / 库存与采购）
       ↓
-Future S9 AI General Manager（消费同一 Analytics API）
+S9 AI General Manager（AI 店长：消费同一 Analytics API + 只读 SQL）
 ```
 
 - 正式业务表仍是 Source of Truth；不建立 daily_statistics / analytics_fact /
@@ -86,6 +86,19 @@ Future S9 AI General Manager（消费同一 Analytics API）
 - RBAC：analytics:operations_read（SUPER_ADMIN/MANAGER/FRONT_DESK）与
   analytics:business_read（SUPER_ADMIN/MANAGER/FINANCE），无权限域不请求。
 
+## AI 店长（Sprint 9 起，DeepSeek AI Manager）
+
+- 入口：/ai-manager（Chat）+ /settings/ai（DeepSeek 配置），
+  ai_manager:use / ai_manager:manage 权限（见 docs/AI_MANAGER.md）。
+- 架构：/ai-manager → Backend → DeepSeek API → S8 Analytics + 只读 SQL
+  （PostgreSQL）。不是复杂 Agent 平台，Alpha.9 只要一个真正可用、简单、
+  安全的 AI 数据分析入口。
+- 三条安全规则 LOCKED：AI 数据库访问 = 只读；API Key 只在 Backend；
+  AI 没有任何写工具（无自动改房态/建维修/采购/调库存/定价等能力）。
+- AI 可见数据 = 当前用户既有权限（operations/business 域继承），
+  Guest PII 与敏感字段在数据库视图层物理排除。
+- 详细文档：docs/AI_MANAGER.md
+
 ## V1 核心模块
 
 1. 登录与 RBAC 权限
@@ -97,6 +110,7 @@ Future S9 AI General Manager（消费同一 Analytics API）
 7. 维修工单
 8. 库存采购
 9. 经营分析
+10. AI 店长（DeepSeek AI Manager，Sprint 9）
 
 ## V1 暂不自行实现（未来通过 PMS 或第三方 API 集成）
 

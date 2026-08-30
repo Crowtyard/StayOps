@@ -24,6 +24,8 @@ process.env.E2E_MANAGER_USERNAME = creds.managerUsername;
 process.env.E2E_MANAGER_PASSWORD = creds.managerPassword;
 process.env.E2E_MAINTENANCE_USERNAME = creds.maintenanceUsername;
 process.env.E2E_MAINTENANCE_PASSWORD = creds.maintenancePassword;
+process.env.E2E_FINANCE_USERNAME = creds.financeUsername;
+process.env.E2E_FINANCE_PASSWORD = creds.financePassword;
 
 export default defineConfig({
   testDir: "./e2e",

@@ -1,6 +1,6 @@
 # StayOps API
 
-> Sprint 1 第二阶段已实现，Sprint 2 S2-T1 扩展 Booking 域，Sprint 3 扩展 Housekeeping 域，Sprint 4 扩展日期窗口重叠查询，Sprint 5 扩展 Maintenance 域（维修运营与客房可用性闭环），Sprint 6 扩展 Room Move 域（住中换房与在住异常恢复），Sprint 7 扩展 Inventory 域（库存账本与业务动作）与 Procurement 域（采购申请/订单/收货闭环），Sprint 8 扩展 Analytics 域（经营分析，read-only derived layer）。统一前缀 `/api/v1`，JSON 请求/响应，JWT（Bearer）认证。
+> Sprint 1 第二阶段已实现，Sprint 2 S2-T1 扩展 Booking 域，Sprint 3 扩展 Housekeeping 域，Sprint 4 扩展日期窗口重叠查询，Sprint 5 扩展 Maintenance 域（维修运营与客房可用性闭环），Sprint 6 扩展 Room Move 域（住中换房与在住异常恢复），Sprint 7 扩展 Inventory 域（库存账本与业务动作）与 Procurement 域（采购申请/订单/收货闭环），Sprint 8 扩展 Analytics 域（经营分析，read-only derived layer），Sprint 9 扩展 AI Manager 域（DeepSeek AI 店长：/ai-manager 对话 + /settings/ai 配置，只读工具 + 数据库只读 Role 双层保护）。统一前缀 `/api/v1`，JSON 请求/响应，JWT（Bearer）认证。
 
 ## 约定
 
@@ -30,7 +30,7 @@
 | PUT | /roles/{id} | 更新角色 | role:write |
 | DELETE | /roles/{id} | 删除角色（级联清理关联） | role:delete |
 | POST | /roles/{id}/permissions | 设置角色权限（整体替换，空=清空） | role:write |
-| GET | /permissions | 权限列表（分页，50 个 = Sprint 1 的 17 + Booking 的 10 + Housekeeping 的 5 + Maintenance 的 5 + Room Move 的 1 + Sprint 7 Inventory/Procurement 的 11 + Sprint 8 Analytics 的 2） | role:read |
+| GET | /permissions | 权限列表（分页，52 个 = Sprint 1 的 17 + Booking 的 10 + Housekeeping 的 5 + Maintenance 的 5 + Room Move 的 1 + Sprint 7 Inventory/Procurement 的 11 + Sprint 8 Analytics 的 2 + Sprint 9 AI Manager 的 2） | role:read |
 | GET | /room-types | 房型列表（分页，含 room_count） | room_type:read |
 | POST | /room-types | 创建房型 | room_type:write |
 | GET | /room-types/{id} | 房型详情 | room_type:read |
@@ -829,6 +829,82 @@ cancellation_rate / no_show_rate / room_move_rate）→ `pp_delta`
 
 （合同房费金额 / ADR / RevPAR 均注明：非实际收款、非财务口径，见
 [docs/ANALYTICS.md](ANALYTICS.md)。）
+
+## AI Manager 域（Sprint 9）
+
+### 领域原则（§2-§3 LOCKED）
+
+- AI 店长（/ai-manager Chat）→ Backend → DeepSeek API → S8 Analytics +
+  只读 SQL（PostgreSQL）。DeepSeek 只有两个只读工具
+  （get_analytics / query_stayops_database），**没有任何写工具**。
+- 三条安全规则：AI 数据库访问 = 只读；DeepSeek API Key = Backend only；
+  AI 无写能力（即使用户 Prompt 要求删除订单/修改房态/停售/审批采购/改库存）。
+- **AI 可见数据 = 当前用户既有权限**（analytics:operations_read /
+  analytics:business_read 域继承，§22-§24）；Guest PII 与敏感字段在
+  数据库视图层物理排除（§17）。
+- 错误码（§7，只影响 /ai-manager 与 /settings/ai/test，绝不 generic 500）：
+  `AI_NOT_CONFIGURED`（409）、`AI_AUTH_FAILED` / `AI_RATE_LIMITED` /
+  `AI_PROVIDER_UNAVAILABLE` / `AI_TIMEOUT` / `AI_RESPONSE_INVALID` /
+  `AI_TOOL_ROUNDS_EXCEEDED`（409）（502）。
+
+### 端点一览
+
+| 方法 | 路径 | 权限 | 说明 |
+|---|---|---|---|
+| GET | /settings/ai | ai_manager:manage | AI 设置状态：provider / configured / **key_masked（sk-****abcd）** / model；**绝不返回完整 Key** |
+| PUT | /settings/ai | ai_manager:manage | 保存/更新配置：`{api_key?, model?}`（strict，至少一个字段）；api_key 加密落库（Fernet） |
+| DELETE | /settings/ai/key | ai_manager:manage | 删除 API Key（configured → false） |
+| POST | /settings/ai/test | ai_manager:manage | 连接测试：`{api_key?}`（提供则只测不存，否则用已保存 Key）；成功返回 `{ok, model, latency_ms, usage?}`；Provider 错误按 §7 业务码返回 |
+| POST | /ai-manager/chat | ai_manager:use | 发送消息：`{conversation_id?, message}` → `{conversation_id, answer, model, usage?}`（普通 request/response，不做 Streaming） |
+| GET | /ai-manager/conversations/{id}/messages | ai_manager:use | 历史消息（仅本人对话，他人/不存在 404）：`{items: [{id, role, content, model, created_at}]}` |
+
+### Chat 行为（§19-§21）
+
+- 工具循环：DeepSeek → tool call → tool result → DeepSeek → … → 最终回答；
+  上限 5 轮（`AI_MAX_TOOL_ROUNDS`），超限返回安全错误
+  `AI_TOOL_ROUNDS_EXCEEDED`（409）。
+- 上下文：最近 10 条消息（user/assistant，`AI_CONTEXT_MESSAGES`）；
+  不做 long-term memory / vector DB / RAG。
+- 持久化：ai_conversations / ai_messages（只存 user/assistant 消息；
+  工具消息与完整原始 SQL 结果不落库）；只保存 user_id / role / content /
+  时间戳 / provider·model / token usage（§36）。
+- 工具失败（写 SQL / 越权域 / PII）返回给模型解释，但写操作在执行前被
+  硬拒绝（Validator + 数据库只读 Role 双层，§30）。
+
+### SQL 只读约束（§14/§15）
+
+- 只允许 `SELECT` / `WITH ... SELECT`（单条；允许单个结尾分号）；
+  拒绝 INSERT/UPDATE/DELETE/MERGE/TRUNCATE/CREATE/ALTER/DROP/GRANT/REVOKE/
+  COPY/CALL/DO/SET/INTO/EXECUTE/PREPARE/DEALLOCATE/VACUUM/REINDEX/CLUSTER/
+  REFRESH/COMMENT/SECURITY/LOCK/LISTEN/NOTIFY/UNLISTEN/DISCARD/RESET/SHOW/
+  DECLARE/MOVE/CLOSE/IMPORT/ANALYZE 与多语句。
+- 数据库层：`stayops_ai_reader` 只读 Role 仅可 SELECT 21 个 `ai_*` 视图
+  （无任何基表权限）；READ ONLY 事务 + statement_timeout + 行数上限
+  （默认 200 / 硬上限 500）。
+
+### 响应示例
+
+`POST /api/v1/ai-manager/chat`：
+
+```json
+{
+  "conversation_id": 3,
+  "answer": "最近30天入住率为 0.0%（基于 S8 Analytics 数据）……",
+  "model": "deepseek-chat",
+  "usage": { "prompt_tokens": 120, "completion_tokens": 80, "total_tokens": 200 }
+}
+```
+
+`GET /api/v1/settings/ai`（Key 只以掩码出现）：
+
+```json
+{
+  "provider": "deepseek",
+  "configured": true,
+  "key_masked": "sk-****abcd",
+  "model": "deepseek-chat"
+}
+```
 
 ## 示例
 

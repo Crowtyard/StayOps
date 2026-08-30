@@ -68,14 +68,14 @@ def _snapshot() -> dict:
 
 
 def test_seed_idempotent_and_s7_role_matrix(_database):
-    """连续执行两次 seed 收敛；50 权限码（48 + S8 的 2）；4 个地点；§36 矩阵。"""
+    """连续执行两次 seed 收敛；52 权限码（50 + S9 的 2）；4 个地点；§36 矩阵。"""
     seed()
     first = _snapshot()
     seed()
     second = _snapshot()
     assert first == second, "连续执行两次 seed 必须收敛到一致状态"
 
-    assert first["permissions"] == 50  # 48（S7）+ Sprint 8 Analytics 的 2
+    assert first["permissions"] == 52  # 50（S8）+ Sprint 9 AI Manager 的 2
     mapping = first["mapping"]
 
     # Sprint 8 §34：Analytics 矩阵（与 S7 权限码共存）

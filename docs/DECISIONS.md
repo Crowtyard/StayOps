@@ -494,5 +494,88 @@ Kun Independent Fast QA：绝大多数 S8 通过，2 个 RELEASE BLOCKER 修复�
     （73 + Flow E Calendar Comparison：API 断言 This Month/Last Month 的
     comparison.period 精确区间 + UI 抽查本月对比 chip 与上月范围标签）。
 
+## 2026-08-31 — Sprint 9：DeepSeek AI Manager（AI 店长）
+
+1. **简化架构 LOCKED（§2）**。Alpha.9 不做复杂 Agent 平台：前端 /ai-manager
+   Chat → Backend（/ai-manager、/settings/ai）→ DeepSeek API（集中
+   DeepSeekClient）→ S8 Analytics + 只读 SQL（PostgreSQL）。DeepSeek 只有
+   两个只读工具（get_analytics / query_stayops_database），没有任何写工具；
+   三条安全规则锁死：只读访问 / Key 只在后端 / 无写能力。
+
+2. **API Key 加密存储（§5）**。成熟加密库 cryptography（Fernet）加密后存
+   `ai_settings.api_key_encrypted`（随 python-jose[cryptography] 已安装，零新增
+   依赖，禁止自创算法）。加密密钥来自 Backend environment/config
+   （`AI_ENCRYPTION_KEY` → settings.ai_api_key_encryption_key，SHA-256 派生
+   Fernet key），与密文分开存储；生产必须显式配置。前端只能看到
+   configured / key_masked（sk-****abcd）；Backend 不提供读取完整 Key 的接口；
+   响应/审计/日志永不出现明文 Key。
+
+3. **数据库级只读 Role（§13/§30）**。迁移创建 `stayops_ai_reader`
+   （LOGIN、NOSUPERUSER/NOCREATEDB/NOCREATEROLE，密码来自后端配置），
+   仅 GRANT CONNECT + USAGE schema public + SELECT 21 个 `ai_*` 视图，
+   **不授任何基表权限**；AI SQL 执行器另加 `SET TRANSACTION READ ONLY` +
+   `statement_timeout` + 行数上限（默认 200 / 硬上限 500）。即使应用层
+   Validator 失效，INSERT/UPDATE/DELETE/TRUNCATE/CREATE/ALTER/DROP 仍被
+   PostgreSQL 拒绝（permission denied / must be owner）。角色为集群级对象：
+   downgrade 不 DROP ROLE，只撤销授权。
+
+4. **ai_* 视图 = 表/字段级白名单（§16/§17）**。21 个视图不含任何 Guest PII
+   （无 guests 视图；reservations 无 guest_id/金额/notes；suppliers 无
+   phone/wechat/notes；users 无 email/phone/password_hash）。视图层排除 +
+   应用层敏感标识符拒绝 + Validator 表白名单三层纵深。SQL Domain Access
+   （§24）：operations 域（ai_rooms/reservations(有限)/stays/assignments/
+   housekeeping/maintenance/users）与 business 域（ai_inventory_*/
+   ai_suppliers(有限)/ai_purchase_*/ai_goods_receipts*）按当前用户权限
+   继承（AI visible data = current user's permissions）。
+
+5. **SQL Validator 词法级（§14）**。完整 tokenizer（字符串 '' 转义、
+   双引号标识符、行/块注释、dollar-quote 全部正确跳过，非脆弱 substring），
+   只允许 SELECT / WITH...SELECT（含顶层 SELECT 主查询检查，拒绝数据修改型
+   CTE），38 个写/DDL/DCL/管理关键字 + INTO + 敏感标识符全局拒绝，
+   单语句约束（允许单个结尾分号）。表引用提取支持别名/逗号列表/子查询/
+   LATERAL/函数调用（generate_series 等 set-returning function 放行）。
+
+6. **get_analytics 优先（§10/§11/§32）**。正式 S8 Metric（Physical
+   Occupancy / ADR / RevPAR / Cancellation / No-show / ALOS / Forecast）一律
+   走 get_analytics 调用 S8 Analytics Service（Backend 唯一权威），禁止 AI
+   自行实现；operations/business 端点白名单 + 权限域继承（FRONT_DESK 拿不到
+   经营数据、FINANCE 拿不到运营数据，工具层 AI_PERMISSION_DENIED）。
+
+7. **Provider 失败隔离（§7/§42）**。DeepSeek timeout/401/402/429/5xx/网络
+   不可达/malformed 全部映射为 AIError 业务码（AI_NOT_CONFIGURED 409、
+   其它 502：AI_AUTH_FAILED/AI_RATE_LIMITED/AI_PROVIDER_UNAVAILABLE/
+   AI_TIMEOUT/AI_RESPONSE_INVALID/AI_TOOL_ROUNDS_EXCEEDED），只影响
+   /ai-manager 与 /settings/ai/test；日志只记录 provider/model/latency_ms/
+   HTTP status/tool/success（scrub secret，§35）。
+
+8. **工具循环与上下文（§19/§20）**。max tool rounds = 5（超限安全错误）；
+   上下文 = 最近 10 条消息（不建 vector DB / RAG / summarizer）；
+   持久化 ai_conversations/ai_messages（user/assistant；工具消息与完整 SQL
+   结果不落库）；只保存 user_id/role/content/时间戳/provider·model/usage。
+
+9. **迁移 `f5d3b9e7a2c4`（§41）**。ai_settings（单行 CHECK id=1）/
+   ai_conversations / ai_messages + 21 个 ai_* 视图 + stayops_ai_reader
+   角色与授权；不修改 S1-S8 业务事实（数据保留测试）；downgrade 一个
+   revision 可往返。权限 seed 52 码（50 + ai_manager:use/manage，§22 矩阵）。
+
+10. **前端（§8/§38/§39/§40）**。/ai-manager Chat（消息列表/输入/发送/
+    loading/error/retry/新对话 + 6 个快捷问题 + 未配置提示（有/无管理权限
+    两种）+ sessionStorage 恢复会话）；/settings/ai（状态卡 + type=password
+    输入 + 保存清空 + Test Connection + Remove Key 确认）；导航按
+    ai_manager:use（AI 店长）与 ai_manager:manage（AI 设置）显隐，直连页面
+    由后端 403 兜底。Markdown 用安全子集渲染器（纯 React 文本节点，禁止
+    dangerouslySetInnerHTML，§38）。
+
+11. **测试（§33/§42/§43）**。pytest 603（440 基线 + 163 新增：Validator 45、
+    Executor 13、Tools 14、DeepSeekClient HTTP 映射 16（MockTransport）、
+    Settings API 14、Chat 18（FakeDeepSeekClient）、Crypto 8、迁移 2、
+    Provider 隔离 3；既有权限计数用例更新为 52）；Vitest 458（419 + 39：
+    lib AI 12 / Markdown 安全渲染 9 / Chat 视图 8 / Settings 视图 8 /
+    导航矩阵 6 等）；Playwright 80（74 + z-ai-manager 6 条：Flow A Settings
+    掩码 / Flow B Chat / Flow C FRONT_DESK·FINANCE 权限隔离 / Flow D
+    Provider 失败隔离 / Flow E SQL 安全×2）；E2E 用本地 Fake DeepSeek
+    Provider（run_test_backend.py 同进程 127.0.0.1:8099，确定性路由，
+    绝不触碰真实 API，测试不向真实 DeepSeek 发送 fake key）。
+
 
 

@@ -16,10 +16,12 @@ def test_smoke_admin_full_flow(client):
     me = client.get("/api/v1/auth/me", headers=headers)
     assert me.status_code == 200
     assert me.json()["username"] == "admin"
-    assert len(me.json()["permissions"]) == 50  # Sprint 8：48（S7）+ Analytics 的 2
+    assert len(me.json()["permissions"]) == 52  # Sprint 9：50（S8）+ AI Manager 的 2
     assert {
         "analytics:operations_read",
         "analytics:business_read",
+        "ai_manager:use",
+        "ai_manager:manage",
     } <= set(me.json()["permissions"])
 
     # 3) 房间列表（种子 28 间）

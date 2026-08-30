@@ -7,6 +7,7 @@
 > Sprint 6 新增：`stay_room_assignments`（另含 PG 枚举 `room_move_reason`、CHECK 约束 `ck_stay_room_assignments_interval`、部分唯一索引 `uq_stay_room_assignments_active_stay`、排他约束 `ex_stay_room_assignments_no_overlap`；`hk_task_source` 增加 ROOM_MOVE；Reservation 排他约束调整为 CONFIRMED-only；既有 Stay 历史回填）。
 > Sprint 7 新增：Inventory 域（`inventory_items` / `inventory_locations` / `inventory_balances` / `stock_movements` / `stock_issues` / `stock_issue_lines`）与 Procurement 域（`suppliers` / `purchase_requests` / `purchase_request_lines` / `purchase_orders` / `purchase_order_lines` / `goods_receipts` / `goods_receipt_lines`），另含 PG 枚举 `item_category` / `movement_type` / `issue_destination_type` / `purchase_request_status` / `purchase_order_status` 与 5 个业务单号 Sequence。
 > Sprint 8 为 Analytics 只读派生层（read-only derived layer）：**不新增任何业务表**（无 daily_statistics / analytics_fact / analytics_warehouse），正式业务表仍是 Source of Truth；除 2 个权限 Seed（`analytics:operations_read` / `analytics:business_read`，50 权限码）外无 Schema Migration（Alembic head 保持 `e3a91f5c8d24`）。指标定义见 [docs/ANALYTICS.md](ANALYTICS.md) 与 `backend/app/core/analytics_metrics.py`。
+> Sprint 9 新增 AI Manager 域（Migration `f5d3b9e7a2c4`）：`ai_settings`（DeepSeek 配置单行表，API Key 只存 Fernet 密文）/ `ai_conversations` / `ai_messages` + **21 个 `ai_*` 只读视图**（Guest PII 与敏感字段物理排除）+ 数据库级只读 Role **`stayops_ai_reader`**（仅 SELECT 视图，无任何基表写权限）。另新增 2 个权限 Seed（`ai_manager:use` / `ai_manager:manage`，52 权限码）。
 
 ## 表结构（Sprint 1）
 
@@ -294,9 +295,50 @@ purchase_order_status:    DRAFT / ORDERED / PARTIALLY_RECEIVED /
   已收货库存与历史保持；RECEIVED 终态不可取消。
 - 金额使用 Numeric/Decimal（禁止 float 存金额）；S7 不做付款/应付/发票/税务。
 
+## AI Manager 域表结构（Sprint 9，Migration `f5d3b9e7a2c4`）
+
+| 表 | 关键字段 | 说明 |
+|---|---|---|
+| ai_settings | id(PK, CHECK id=1 单行), provider, api_key_encrypted(Text, nullable), model, updated_by_user_id(FK SET NULL), updated_at | DeepSeek 配置；**API Key 只存 Fernet 密文**（cryptography，密钥来自后端环境变量 `AI_ENCRYPTION_KEY`，与密文分离）；任何接口/日志/审计不返回完整 Key |
+| ai_conversations | id, user_id(FK CASCADE), title, created_at, updated_at | AI 对话（页面刷新恢复会话用） |
+| ai_messages | id, conversation_id(FK CASCADE), role(CHECK user/assistant/tool), content(Text), model, provider, usage_json(JSONB), created_at | 只存 user/assistant 消息与 usage；**工具消息与完整原始 SQL 结果不落库** |
+
+### AI 只读视图（21 个 `ai_*`，数据库级表/字段白名单）
+
+- **operations 域**：ai_room_types / ai_rooms / ai_reservations（无 guest_id、
+  无金额、无 notes）/ ai_stays / ai_stay_room_assignments /
+  ai_housekeeping_tasks / ai_maintenance_work_orders / ai_users（无
+  email/phone/password_hash）
+- **business 域**：ai_inventory_items / ai_inventory_locations /
+  ai_inventory_balances / ai_stock_movements / ai_stock_issues /
+  ai_stock_issue_lines / ai_suppliers（无 phone/wechat/notes）/
+  ai_purchase_requests / ai_purchase_request_lines / ai_purchase_orders /
+  ai_purchase_order_lines / ai_goods_receipts / ai_goods_receipt_lines
+- **不含 guests 表**：Guest PII（姓名/手机/邮箱/备注）完全不开放给 AI
+
+### stayops_ai_reader 只读 Role（§13/§30 数据库级写保护）
+
+```sql
+-- 由 Migration f5d3b9e7a2c4 创建（幂等；密码来自后端配置 settings.ai_reader_database_password）
+CREATE ROLE stayops_ai_reader LOGIN PASSWORD '<backend-config>'
+    NOSUPERUSER NOCREATEDB NOCREATEROLE;
+GRANT CONNECT ON DATABASE <db> TO stayops_ai_reader;
+REVOKE ALL ON SCHEMA public FROM stayops_ai_reader;
+GRANT USAGE ON SCHEMA public TO stayops_ai_reader;
+GRANT SELECT ON <每个 ai_* 视图> TO stayops_ai_reader;   -- 21 个视图
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO stayops_ai_reader;
+```
+
+- 无任何基表 INSERT/UPDATE/DELETE/TRUNCATE/CREATE/ALTER/DROP 权限：
+  即使应用层 SQL Validator 失效，PostgreSQL 自身仍拒绝写操作
+  （permission denied / must be owner）。
+- 角色为集群级对象：downgrade 不 DROP ROLE（避免影响其它数据库），只撤销授权。
+- AI SQL 执行器额外使用 `SET TRANSACTION READ ONLY` + `statement_timeout` +
+  行数上限（默认 200 / 硬上限 500），密码绝不进入 Prompt/日志。
+
 ## 约定
 
 - PostgreSQL 16，通过 Docker Compose 提供开发实例（`stayops` 库；pytest 用独立 `stayops_test` 库）
 - Schema 修改必须使用 Alembic Migration（禁止直接改表）
 - 凭据不硬编码进 Git，通过 `.env` 加载
-- 种子数据（权限/角色/admin/28 房间/6 房型/4 库存地点）由 `python -m app.seed` 幂等写入；Sprint 2 新增 9 个 Booking 权限码（共 26 个），Sprint 3 新增 5 个 Housekeeping 权限码（共 31 个），Sprint 5 新增 5 个 Maintenance 权限码（共 36 个），Sprint 6 新增 1 个 Room Move 权限码（共 37 个），Sprint 7 新增 11 个 Inventory/Procurement 权限码（共 48 个），Sprint 8 新增 2 个 Analytics 权限码（共 50 个），seed 幂等收敛不变
+- 种子数据（权限/角色/admin/28 房间/6 房型/4 库存地点）由 `python -m app.seed` 幂等写入；Sprint 2 新增 9 个 Booking 权限码（共 26 个），Sprint 3 新增 5 个 Housekeeping 权限码（共 31 个），Sprint 5 新增 5 个 Maintenance 权限码（共 36 个），Sprint 6 新增 1 个 Room Move 权限码（共 37 个），Sprint 7 新增 11 个 Inventory/Procurement 权限码（共 48 个），Sprint 8 新增 2 个 Analytics 权限码（共 50 个），Sprint 9 新增 2 个 AI Manager 权限码（共 52 个），seed 幂等收敛不变

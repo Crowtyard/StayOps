@@ -5,6 +5,7 @@
  */
 
 import { browserTransport, type Transport } from "./client";
+import { createAiApi, type AiApi } from "./ai";
 import { createAnalyticsApi, type AnalyticsApi } from "./analytics";
 import { createAuditLogsApi, type AuditLogsApi } from "./audit-logs";
 import { createAvailabilityApi, type AvailabilityApi } from "./availability";
@@ -22,6 +23,7 @@ import { createStaysApi, type StaysApi } from "./stays";
 import { createUsersApi, type UsersApi } from "./users";
 
 export interface ApiClient {
+  ai: AiApi;
   rooms: RoomsApi;
   roomTypes: RoomTypesApi;
   users: UsersApi;
@@ -41,6 +43,7 @@ export interface ApiClient {
 
 export function createApiClient(transport: Transport): ApiClient {
   return {
+    ai: createAiApi(transport),
     rooms: createRoomsApi(transport),
     roomTypes: createRoomTypesApi(transport),
     users: createUsersApi(transport),

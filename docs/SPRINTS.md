@@ -366,3 +366,65 @@ Kun Independent Fast QA：绝大多数 S8 通过；2 个 RELEASE BLOCKER 已修�
 Vitest 419（414 + preset→mode 映射 3 + 视图发送 2）/ Playwright 74
 （73 + Flow E Calendar Comparison：API 断言 This Month/Last Month 的
 comparison.period 精确区间 + UI 抽查对比 chip 与上月范围标签）。
+
+## Sprint 9（IMPLEMENTATION COMPLETE · 等待 Kun Fast QA）
+
+```text
+Sprint 9                = DeepSeek AI Manager（DeepSeek AI 店长）
+Release                 = v1.0.0-alpha.9（计划，待 Kun QA PASS 后发布）
+开发模式                = FAST TRACK + REUSE FIRST + ONE SPRINT / ONE DSH SESSION
+Sprint 9 Coding         = IMPLEMENTATION COMPLETE（无 commit）
+Sprint 9 Fast QA        = 待 Kun 独立 QA
+DSH                     = STOPPED（完成后停止，不进入 Sprint 10）
+```
+
+Sprint 9 范围（任务书 §1–§50；详细决策见 docs/DECISIONS.md「Sprint 9」，
+完整文档见 docs/AI_MANAGER.md）：
+
+- **简化架构 LOCKED（§2）**：/ai-manager Chat → Backend → DeepSeek API →
+  S8 Analytics + 只读 SQL（PostgreSQL）。不是复杂 Agent 平台；DeepSeek 只有
+  get_analytics / query_stayops_database 两个只读工具，无任何写能力。
+- **三条安全规则（§3）**：AI database access = READ ONLY；API Key = Backend
+  only；AI has NO write tools。
+- **DeepSeek 配置（§4/§26-§28）**：/settings/ai（ai_manager:manage：
+  SUPER_ADMIN/MANAGER）——保存/更新/删除 API Key、Test Connection、Model。
+- **API Key 安全（§5）**：Fernet（cryptography）加密落库；前端只能看到
+  configured / sk-****abcd；无读取完整 Key 的接口；密钥来自环境变量
+  AI_ENCRYPTION_KEY，与密文分离。
+- **DeepSeekClient（§6/§7）**：集中封装 chat/tool calling/timeout/HTTP
+  error mapping/malformed response/usage；错误码
+  AI_NOT_CONFIGURED/AI_AUTH_FAILED/AI_RATE_LIMITED/AI_PROVIDER_UNAVAILABLE/
+  AI_TIMEOUT/AI_RESPONSE_INVALID/AI_TOOL_ROUNDS_EXCEEDED；Provider 失败
+  只影响 /ai-manager，S1-S8 全部页面不受影响（隔离测试锁定）。
+- **只读 SQL（§12-§15）**：query_stayops_database 双层保护——应用层词法
+  Validator（只允许 SELECT/WITH...SELECT，38 个写/DDL/DCL 关键字 + 多语句
+  拒绝）+ 数据库层 stayops_ai_reader 只读 Role（仅 CONNECT+USAGE+SELECT
+  21 个 ai_* 视图，无任何基表权限）+ READ ONLY 事务 + statement_timeout +
+  行数上限（默认 200/硬上限 500）。
+- **Schema Context（§16）**：静态精简结构上下文（ai_* 视图描述，不含
+  credentials/PII）；Guest PII 与敏感字段在视图层物理排除（§17）。
+- **SQL Domain Access（§22-§24）**：AI visible data = current user's
+  permissions；operations 域与 business 域按 analytics:* 权限继承，
+  禁止经 SQL 绕开 S8 RBAC。
+- **Chat（§19-§21/§25）**：POST /ai-manager/chat（普通 request/response，
+  不做 Streaming）+ GET /ai-manager/conversations/{id}/messages；工具循环
+  上限 5 轮；上下文最近 10 条消息；ai_conversations/ai_messages 持久化
+  （user/assistant，不存工具消息与完整 SQL 结果）。
+- **迁移 `f5d3b9e7a2c4`（§41）**：ai_settings（单行）/ai_conversations/
+  ai_messages + 21 个 ai_* 视图 + stayops_ai_reader 角色；不修改 S1-S8
+  业务事实；downgrade 往返 + 数据保留测试。
+- **前端（§8/§38-§40）**：/ai-manager Chat（消息/输入/发送/loading/error/
+  retry/新对话 + 6 快捷问题 + 未配置提示 + 会话恢复）+ /settings/ai
+  （type=password 保存清空/Test Connection/Remove Key）+ 导航按
+  ai_manager:use / ai_manager:manage 显隐（后端 403 兜底）；Markdown 安全
+  子集渲染器（禁止 dangerouslySetInnerHTML）。
+- **RBAC（§22）**：ai_manager:use = SUPER_ADMIN/MANAGER/FRONT_DESK/FINANCE；
+  HOUSEKEEPING/MAINTENANCE ×；ai_manager:manage 仅 SUPER_ADMIN/MANAGER
+  （seed 幂等收敛，50 → 52 权限码）。
+- **测试口径**：pytest 603（440 基线 + 163 新增，含 FakeDeepSeekClient 与
+  httpx.MockTransport，pytest 不依赖真实 DeepSeek API）；Vitest 458
+  （419 + 39 新增）；Playwright 80（74 + z-ai-manager 6 条：Flow A Settings
+  掩码 / Flow B Chat / Flow C FRONT_DESK·FINANCE 权限隔离 / Flow D Provider
+  失败隔离 / Flow E SQL 安全×2；E2E 用本地 Fake DeepSeek Provider
+  127.0.0.1:8099，绝不触碰真实 API，不向真实 DeepSeek 发送 fake key）；
+  lint / typecheck / build PASS。

@@ -1,5 +1,6 @@
 """模型导出（alembic env.py 通过本模块导入全部模型以注册 metadata）。"""
 
+from app.models.ai import AIConversation, AIMessage, AISetting
 from app.models.audit import AuditLog
 from app.models.base import Base
 from app.models.guest import Guest
@@ -53,6 +54,9 @@ from app.models.stay_assignment import RoomMoveReason, StayRoomAssignment
 from app.models.user import Permission, Role, RolePermission, User, UserRole
 
 __all__ = [
+    "AIConversation",
+    "AIMessage",
+    "AISetting",
     "AuditLog",
     "Base",
     "Guest",

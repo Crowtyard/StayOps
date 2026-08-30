@@ -69,6 +69,13 @@ def get_permission_codes(db: Session, user: User) -> set[str]:
     return set(db.scalars(stmt).all())
 
 
+def get_ai_service(db: Session = Depends(get_db)) -> "AIManagerService":
+    """AI Manager 服务依赖（Sprint 9；测试可经 dependency_overrides 注入 Fake）。"""
+    from app.services.ai_manager import AIManagerService
+
+    return AIManagerService(db)
+
+
 def require_permissions(*codes: str) -> Callable[..., User]:
     """权限依赖工厂：要求当前用户持有全部指定权限 code，否则 403。"""
 

@@ -2,6 +2,61 @@
 
 All notable changes to StayOps will be documented in this file.
 
+## [v1.0.0-alpha.9] - 2026-08-31（待 Kun Fast QA）
+
+### Added
+
+- Sprint 9: DeepSeek AI Manager（AI 店长，Alpha.9 = 真正可用、简单、安全的 AI 数据分析入口）
+- `/ai-manager` Chat（消息列表 / 输入 / 发送 / loading / error / retry / 新对话 +
+  6 个快捷问题 + 未配置 DeepSeek 提示 + 会话恢复）；`/settings/ai`（保存 / 更新 /
+  删除 API Key + Test Connection + Model）
+- 架构：/ai-manager → Backend → DeepSeek API → S8 Analytics + 只读 SQL；
+  集中 `DeepSeekClient`（chat / tool calling / timeout / HTTP error mapping /
+  malformed / usage，日志 scrub secret）；非复杂 Agent 平台
+- 三条安全规则 LOCKED：AI 数据库访问只读；API Key 只在后端（Fernet 加密落库，
+  前端只能看到 sk-****abcd 掩码，无读取完整 Key 的接口，密钥来自环境变量
+  AI_ENCRYPTION_KEY 与密文分离）；AI 无任何写工具
+- 只读 SQL 双层保护：词法级 Validator（SELECT / WITH...SELECT 白名单 +
+  38 个写/DDL/DCL 关键字 + 多语句拒绝）+ 数据库级 `stayops_ai_reader` 只读
+  Role（仅 SELECT 21 个 `ai_*` 视图，无基表权限）+ READ ONLY 事务 +
+  statement_timeout + 行数上限（默认 200 / 硬上限 500）
+- `ai_*` 视图 = 表/字段白名单：Guest PII（guests 表/手机/邮箱/备注）物理排除；
+  reservations 无金额；suppliers 无联系方式；users 无 email/phone/password_hash
+- SQL Domain Access：AI 可见数据 = 当前用户既有权限（operations / business 域
+  继承，FRONT_DESK 拿不到经营数据、FINANCE 拿不到运营数据）
+- get_analytics 工具：正式 S8 Metric（Occupancy / ADR / RevPAR / Cancellation /
+  No-show / ALOS / Forecast）一律走 S8 Analytics Service，禁止 AI 自行实现
+- 工具循环上限 5 轮 + 最近 10 条消息上下文 + ai_conversations / ai_messages
+  持久化（user/assistant，工具消息与完整 SQL 结果不落库）
+- Provider 失败隔离（§7）：timeout / 401 / 402 / 429 / 5xx / 网络 / malformed
+  只影响 /ai-manager，返回 AI_NOT_CONFIGURED / AI_AUTH_FAILED /
+  AI_RATE_LIMITED / AI_PROVIDER_UNAVAILABLE / AI_TIMEOUT /
+  AI_RESPONSE_INVALID / AI_TOOL_ROUNDS_EXCEEDED 业务码
+- RBAC：ai_manager:use（SUPER_ADMIN/MANAGER/FRONT_DESK/FINANCE）与
+  ai_manager:manage（SUPER_ADMIN/MANAGER）——共 52 权限码（seed 幂等）
+- Migration `f5d3b9e7a2c4`：ai_settings（单行）/ ai_conversations /
+  ai_messages + 21 个 ai_* 视图 + stayops_ai_reader Role；不修改 S1-S8 业务事实
+- 前端安全 Markdown 子集渲染器（纯 React 文本节点，禁止 dangerouslySetInnerHTML）
+- 测试体系：pytest FakeDeepSeekClient / httpx.MockTransport（不依赖网络）；
+  Playwright 本地 Fake DeepSeek Provider（127.0.0.1:8099，确定性路由，
+  绝不向真实 DeepSeek 发送 fake key）
+
+### Verified
+
+- Backend pytest: 603 passed（440 Sprint 8 基线保留 + AI Manager 163）
+- Frontend Vitest: 458 passed（419 Sprint 8 基线保留 + AI Manager 39）
+- Playwright E2E: 80 passed（74 Sprint 8 基线保留 + z-ai-manager 6 条：
+  Flow A Settings 掩码 / Flow B Chat / Flow C 权限隔离 / Flow D Provider
+  失败隔离 / Flow E SQL 安全×2）
+- lint / typecheck / build PASS
+- Clean-environment bootstrap verified（空库 → alembic upgrade head → seed →
+  FastAPI :8001 + Fake Provider :8099 → Next.js :3001 → Full Playwright）
+
+### Status
+
+Sprint 9 implementation complete（无 commit）；等待 Kun Fast QA；
+`v1.0.0-alpha.9` 待 QA PASS 后发布。
+
 ## [v1.0.0-alpha.5] - 2026-08-28
 
 ### Added

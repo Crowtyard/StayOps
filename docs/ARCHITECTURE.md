@@ -32,9 +32,16 @@ backend/app/
                      #   StockIssue+Lines）与 procurement.py（Supplier /
                      #   PurchaseRequest+Lines / PurchaseOrder+Lines /
                      #   GoodsReceipt+Lines）
+                     # Sprint 9：ai.py（AISetting 单行配置 / AIConversation /
+                     #   AIMessage；API Key 只存 Fernet 密文）
   core/              # Sprint 8 新增 analytics_metrics.py（Metric Dictionary
                      #   集中定义：code/中文名/公式/来源表/状态/单位/零分母行为/权限，
                      #   docs/ANALYTICS.md 的代码镜像）
+                     # Sprint 9 新增 ai_crypto.py（Fernet 加密/解密/掩码，密钥来自
+                     #   后端环境变量）、ai_sql_validator.py（词法级只读 SQL
+                     #   Validator：SELECT/WITH...SELECT 白名单 + 38 个写/DDL/DCL
+                     #   关键字 + 多语句拒绝 + SQL Domain Access 映射）、
+                     #   ai_schema_context.py（静态精简 Schema Context）
   schemas/           # guest / reservation / stay（Sprint 6：assignments / RoomMoveCreate /
                      # RoomMoveOptionsOut）
                      # housekeeping（Create/Update strict、AssigneeOut）
@@ -80,6 +87,15 @@ backend/app/
                      # Sprint 7：inventory（/inventory/items|locations|balances|movements
                      #   + issues|returns|transfers|stocktakes 业务动作）与 procurement
                      #   （/procurement/suppliers|requests|orders + 状态机 action 端点）
+                     # Sprint 9：ai_manager（/ai-manager/chat + 历史消息）、
+                     #   settings_ai（/settings/ai GET/PUT + DELETE /key + POST /test）
+  services/          # Sprint 9 新增 deepseek.py（集中 DeepSeekClient：chat / tool
+                     #   calling / timeout / HTTP error mapping / malformed / usage，
+                     #   日志 scrub secret）、ai_sql.py（只读执行器：stayops_ai_reader
+                     #   引擎 + READ ONLY 事务 + statement_timeout + 行数上限）、
+                     #   ai_tools.py（get_analytics + query_stayops_database，
+                     #   SQL Domain Access 映射）、ai_manager.py（工具循环上限 5 轮 +
+                     #   最近 10 条上下文 + 会话持久化 + 审计）
   alembic/versions/c8e2b7a4d1f3_add_room_move_domain.py  # 新增：Room Move 域迁移
                      # （stay_room_assignments 表/枚举/CHECK/部分唯一索引/排他约束、
                      #   hk_task_source + ROOM_MOVE、Reservation 排他约束 CONFIRMED-only、
@@ -89,6 +105,10 @@ backend/app/
                      #   5 个业务单号 Sequence、UNIQUE(item,location)、
                      #   movement 符号 CHECK、received<=ordered CHECK、
                      #   PR→PO 一对一 UNIQUE）
+  alembic/versions/f5d3b9e7a2c4_add_ai_manager_domain.py  # Sprint 9 新增：
+                     # AI Manager 域迁移（ai_settings/ai_conversations/ai_messages +
+                     #   21 个 ai_* 只读视图 + stayops_ai_reader 只读 Role 与授权；
+                     #   Guest PII 与敏感字段视图层物理排除；不修改 S1-S8 业务事实）
 ```
 
 - 预订域业务集中在 `services/booking.py`（routes 保持薄），决策见 docs/DECISIONS.md（S2-T1 第 9 条）。
@@ -170,6 +190,8 @@ frontend/src/
     (main)/procurement/orders/[id]        # S7：订单详情（ordered/received/remaining/单价/金额 +
                                           #   收货记录 + 下达/收货（部分收货）/取消剩余）
     (main)/analytics                      # S8：经营分析管理驾驶舱（四 Tab + 统一 Date Selector）
+    (main)/ai-manager                     # S9：AI 店长 Chat（消息列表/输入/发送/loading/error/retry/新对话 + 快捷问题 + 未配置提示）
+    (main)/settings/ai                    # S9：DeepSeek 配置（保存/更新/删除 Key + Test Connection + 掩码状态）
     (main)/front-desk                     # S4：前台运营指挥台（Today Summary + Search + Room Diary + 右侧 Drawer）
     (main)/settings/{users,roles,room-types,audit-logs}/page.tsx   # 管理页（T3b）
   components/                             # AppShell(侧边导航+顶栏+手机Drawer)、状态徽标、
@@ -202,12 +224,17 @@ frontend/src/
                                           # rooms-bookings-tab / operations-tab / inventory-procurement-tab、
                                           # kpi-card（值 + pp/percent 变化）、charts（极简 SVG 折线/柱状，
                                           #   npm registry 不可达未引入图表库）、shared（SectionCard/TextTable）
+  components/ai/                          # S9：ai-manager-view（Chat 视图）、settings-ai-view（配置视图）、
+                                          # markdown（安全 Markdown 子集渲染器：纯 React 文本节点，
+                                          #   禁止 dangerouslySetInnerHTML）
   components/settings/                    # 四个管理页视图 + 共享工具（分页加载/表单/表格）
   lib/api/                                # 统一 API Client（client.ts + guests/reservations/stays（Sprint 6：
                                           # roomMoveOptions / roomMove）/ availability + housekeeping（S3）+
                                           # maintenance（S5）+ inventory / procurement（S7）+ analytics（S8，
-                                          #   operations/business/forecast 端点）等资源模块 + 错误归一化）
+                                          #   operations/business/forecast 端点）+ ai（S9：settings/ai 与
+                                          #   ai-manager/chat）等资源模块 + 错误归一化）
   lib/booking.ts                          # S2-T2：业务日期（Asia/Shanghai）、日期校验、状态标签、金额展示
+  lib/ai.ts                               # S9：AI_* 错误码中文文案、6 个快捷问题、conversation_id 会话恢复
   lib/front-desk.ts                       # S4：时间线几何（[ci,co) 裁剪与像素定位）、Today Summary /
                                           # Attention 四规则纯函数（A/B/C/M）、预订条 PII 安全文案、quickCreateHref；
                                           # Sprint 6：TIMELINE_STATUSES = CONFIRMED only + ACTIVE Stay 在住条
@@ -284,6 +311,10 @@ frontend/src/
    自定义校验 21 / AnalyticsView 权限门控·零数据·日期交互 8 / 四 Tab 渲染 6），
    S8 QA 修复新增 5（419 = 414 + 5：preset → comparison_mode 映射 3 /
    视图按 preset 发送模式 2），
+   S9 新增 AI Manager 用例（458 = 419 + 39：lib AI 错误文案与快捷问题与
+   会话恢复 12 / Markdown 安全渲染（XSS 免疫、无 dangerouslySetInnerHTML）9 /
+   AiManagerView Chat 流程与错误与未配置 8 / SettingsAiView 保存·测试·删除·403 8 /
+   AppShell AI 导航矩阵 6 等），
   测试日期一律基于 Asia/Shanghai 业务日期动态生成（`businessDate()` / `addDays`，禁止硬编码年月日）。
 - **Playwright E2E**（`frontend/playwright.config.ts`，`pnpm test:e2e`）：
   - 独立测试库 `stayops_test`：后端 webServer 直接运行单进程入口 `frontend/e2e/run_test_backend.py` ——
@@ -360,17 +391,23 @@ frontend/src/
     == stayops_test（DATABASE_URL 缺失即拒绝、开发库写前拒绝）、只修改显式传入
     的行 ID、单事务 validate→update→commit（安全测试见
     `backend/tests/test_analytics_backdate_safety.py`）
-- **后端 pytest**（`backend/`，440 用例 = 379 基线 + Sprint 8 Analytics 37 +
-  QA 修复 24：黄金数据集 9（人工已知结果 exact assert）、Room Move 防重复计数
-  3（203→205、203→205→208）、Forecast 去重 4、日期边界 5（含月/年边界与午夜
-  时区转换）、零数据 2、周期对比 2、六角色 RBAC 4、PII 扫描 1、参数校验 5
-  （from<to、to<=业务日期、跨度<=366）、权限 seed 1（50 权限码 + code + role
-  matrix）、comparison modes 17（等长/上一自然月/本月 elapsed 与月末 clamp/
-  闰年/30·31 天月/跨年/非法值/API 接线）、backdate safety 7（stayops 拒绝零
-  连接、未知库拒绝、缺失 URL 拒绝、无目标 ID 拒绝、非法 ID 回滚零修改、
-  显式 ID 只更新指定行 + unrelated 行不变、URL 解析）；
-  既有 8 个权限码计数用例语义更新为 50）：独立测试库 `stayops_test`（与 E2E 同库策略），
-  会话级 DROP/CREATE + 迁移 + seed，用例级事务回滚隔离；并发用例（Double Booking / Check-in / Check-out / 业务单号 / Duplicate Active Task / Concurrent Start / PASS vs REWORK / D1 25 轮双订 / S5 同房双阻断创建 / 并发 verify / cancel vs verify / S6 move-vs-move / move-vs-reservation / move-vs-checkout / reservation-update-vs-move / S7 issue-vs-issue / transfer-vs-issue / stocktake-vs-issue / receipt-vs-receipt / receipt-vs-issue / receipt-vs-transfer / request-to-po-vs-request-to-po 各 10 轮 stress）用两线程 + 独立 Session 真实提交验证。
+   - S9 新增 `z-ai-manager.spec.ts` 6 条（Fake DeepSeek Provider 确定性驱动，
+     run_test_backend.py 同进程 127.0.0.1:8099，绝不触碰真实 API）：
+     Flow A（SUPER_ADMIN /settings/ai 保存 fake key → 掩码状态 sk-****abcd →
+     页面与 API 响应均无明文 Key）、Flow B（ADMIN /ai-manager 经营问题 →
+     get_analytics 真实 S8 数据 → 回答渲染）、Flow C（FRONT_DESK 可用 AI 但
+     经营数据被拒；FINANCE 可用 AI 但运营数据被拒，business 数据正常）、
+     Flow D（provider 500 → AI 页可读错误 + /dashboard 保持健康）、
+     Flow E×2（恶意写 SQL / PII 手机号请求 → AI_SQL_REJECTED → 数据库不变）。
+     测试不向真实 DeepSeek 发送 fake key（base URL 指向本地 Fake Provider）。
+- **后端 pytest**（`backend/`，603 用例 = 440 基线 + Sprint 9 AI Manager 163）：
+  独立测试库 `stayops_test`（与 E2E 同库策略），
+  会话级 DROP/CREATE + 迁移 + seed，用例级事务回滚隔离；并发用例用两线程 +
+  独立 Session 真实提交验证。S9 新增：SQL Validator（写语句全拒/合法查询不误判）、
+  Executor（行数上限/超时/DB 只读 Role 拒绝写/PII 不可见）、Tools（Analytics
+  域继承/SQL Domain Access）、Chat（FakeDeepSeekClient 工具循环/错误映射/
+  上下文窗口/注入拒绝/归属）、Settings API（掩码/密文/RBAC/Test）、Crypto、
+  迁移往返与数据保留、Provider 隔离；既有权限计数用例语义更新为 52。
   pytest 与 Playwright E2E 共享 `stayops_test` 且互斥（不得并行运行）。
 
 ## 原则

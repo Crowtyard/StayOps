@@ -64,6 +64,18 @@ export function maintenancePassword(): string {
   return v;
 }
 
+export function financeUsername(): string {
+  const v = process.env.E2E_FINANCE_USERNAME;
+  if (!v) throw new Error("缺少 E2E_FINANCE_USERNAME 环境变量");
+  return v;
+}
+
+export function financePassword(): string {
+  const v = process.env.E2E_FINANCE_PASSWORD;
+  if (!v) throw new Error("缺少 E2E_FINANCE_PASSWORD 环境变量");
+  return v;
+}
+
 export async function login(
   page: Page,
   username: string,

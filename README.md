@@ -77,15 +77,15 @@ Copy-Item .env.example .env.local   # BACKEND_API_URL / NEXT_PUBLIC_APP_NAME
 ## 测试
 
 ```powershell
-# 后端 pytest（独立测试库 stayops_test，440 用例 = 379 基线 + S8 Analytics 37 + QA 修复 24，含 P0 并发 stress）
+# 后端 pytest（独立测试库 stayops_test，603 用例 = 440 基线 + S9 AI Manager 163，含 P0 并发 stress）
 cd backend
 .venv\Scripts\python.exe -m pytest -q
 
-# 前端单元/组件测试（Vitest，419 用例 = 379 基线 + S8 Analytics 35 + QA 修复 5）
+# 前端单元/组件测试（Vitest，458 用例 = 419 基线 + S9 AI Manager 39）
 cd frontend
 pnpm.cmd test
 
-# Playwright E2E（独立 stayops_test 库 + 专用端口 8001/3001，74 用例 = 68 基线 + S8 analytics 6 条；不触碰开发数据）
+# Playwright E2E（独立 stayops_test 库 + 专用端口 8001/3001，80 用例 = 74 基线 + S9 ai-manager 6 条；不触碰开发数据）
 cd frontend
 Copy-Item e2e\test-creds.example e2e\.env.test-creds   # 首次：填入测试库凭据（gitignored）
 pnpm.cmd test:e2e
@@ -241,6 +241,36 @@ pnpm.cmd test:e2e
   联系信息（PII）
 - 指标字典：见 [docs/ANALYTICS.md](docs/ANALYTICS.md)
 
+## AI 店长（Sprint 9 · DeepSeek AI Manager）
+
+- 页面：`/ai-manager`（AI 店长 Chat：消息列表/输入/发送/loading/error/retry/
+  新对话 + 6 个快捷问题 + 未配置 DeepSeek 提示（有/无管理权限两种）+ 会话恢复）、
+  `/settings/ai`（DeepSeek 配置：状态卡 + type=password API Key 输入（保存后
+  清空）+ Test Connection + Remove Key）
+- 架构：`/ai-manager → Backend → DeepSeek API → S8 Analytics + 只读 SQL`；
+  不是复杂 Agent 平台——DeepSeek 只有 `get_analytics` 与
+  `query_stayops_database` 两个只读工具，**没有任何写工具**
+- 三条安全规则 LOCKED：AI 数据库访问 = 只读；DeepSeek API Key = Backend only
+  （Fernet 加密落库，前端只能看到 `sk-****abcd` 掩码，无读取完整 Key 的接口）；
+  AI 无写能力（Prompt 要求删除订单/改房态/停售/审批采购/改库存也做不到）
+- 只读 SQL 双层保护：应用层词法 Validator（只允许 SELECT / WITH...SELECT，
+  写/DDL/DCL 关键字与多语句拒绝）+ 数据库层 `stayops_ai_reader` 只读 Role
+  （仅 SELECT 21 个 `ai_*` 视图，无任何基表权限）+ READ ONLY 事务 +
+  超时 + 行数上限（默认 200 / 硬上限 500）
+- **AI 可见数据 = 当前用户既有权限**：`analytics:operations_read`（运营域）与
+  `analytics:business_read`（经营域）继承；Guest PII 与敏感字段在视图层
+  物理排除；FRONT_DESK 拿不到经营数据、FINANCE 拿不到运营数据
+- RBAC：`ai_manager:use`（SUPER_ADMIN/MANAGER/FRONT_DESK/FINANCE）、
+  `ai_manager:manage`（SUPER_ADMIN/MANAGER）——共 52 权限码；导航按权限显隐，
+  后端 403 兜底
+- Provider 失败（timeout/401/429/5xx/网络/malformed）只影响 /ai-manager：
+  返回 AI_NOT_CONFIGURED / AI_AUTH_FAILED / AI_RATE_LIMITED /
+  AI_PROVIDER_UNAVAILABLE / AI_TIMEOUT / AI_RESPONSE_INVALID 业务码，
+  S1-S8 全部页面不受影响
+- 测试：pytest 用 FakeDeepSeekClient（确定性，不依赖网络）；Playwright 用本地
+  Fake DeepSeek Provider（127.0.0.1:8099，绝不向真实 DeepSeek 发送 fake key）
+- 详细文档：见 [docs/AI_MANAGER.md](docs/AI_MANAGER.md)
+
 ## 文档
 
 - [PRD](docs/PRD.md) — 产品需求
@@ -250,6 +280,7 @@ pnpm.cmd test:e2e
 - [API](docs/API.md) — API 约定
 - [DECISIONS](docs/DECISIONS.md) — 架构决策记录
 - [ANALYTICS](docs/ANALYTICS.md) — 经营分析指标字典（Sprint 8）
+- [AI_MANAGER](docs/AI_MANAGER.md) — DeepSeek AI 店长（Sprint 9）
 
 ## 开发规则
 
@@ -282,15 +313,23 @@ pnpm.cmd test:e2e
 > Backdate 脚本安全：stayops_test 硬守卫 + 显式行 ID + 单事务），
 > 自测全绿（pytest 440 / Vitest 419 / Playwright 74 / lint / typecheck / build），
 > 等待 Kun Re-QA；`v1.0.0-alpha.8` 待 Re-QA PASS 后发布。
+> Sprint 9 开发完成（DeepSeek AI Manager：/ai-manager Chat + /settings/ai 配置 +
+> DeepSeekClient（集中封装，Provider 失败隔离）+
+> get_analytics（S8 Analytics 权限域继承）+
+> query_stayops_database（词法 Validator + stayops_ai_reader 只读 Role +
+> READ ONLY 事务 + 行数上限双层保护）+ ai_* 视图（Guest PII 物理排除）+
+> API Key Fernet 加密 + 掩码 + Fake Provider 测试体系），
+> 自测全绿（pytest 603 / Vitest 458 / Playwright 80 / lint / typecheck / build），
+> 等待 Kun Fast QA；`v1.0.0-alpha.9` 待 QA PASS 后发布。
 
 ## Current Release
 
-Version: v1.0.0-alpha.7（当前正式基线，Sprint 7 Release）
+Version: v1.0.0-alpha.8（当前正式基线，Sprint 8 Release）
 
-Status: Sprint 8 IMPLEMENTATION COMPLETE（Business Analytics）— 等待 Kun Fast QA
+Status: Sprint 9 IMPLEMENTATION COMPLETE（DeepSeek AI Manager）— 等待 Kun Fast QA
 
-This is the seventh stable Alpha development baseline of StayOps（Inventory & Procurement）。
+This is the ninth Alpha development baseline of StayOps（DeepSeek AI Manager）。
 
-Sprint 8 implementation complete + QA defect fixes（无 commit）：pytest 440 / Vitest 419 / Playwright 68 + analytics 6 条全绿；lint / typecheck / build PASS；开发库 stayops seed 幂等收敛至 50 权限码；Alembic head 保持 `e3a91f5c8d24`（Sprint 8 无 Schema Migration，Analytics 为只读派生层）。QA 修复：D1 comparison_mode（equal_length / previous_calendar_month / previous_month_elapsed）、D2 backdate 脚本 stayops_test 硬守卫 + 显式行 ID。待 Kun Re-QA PASS 后创建 `v1.0.0-alpha.8` Release Commit。
+Sprint 9 implementation complete（无 commit）：pytest 603 / Vitest 458 / Playwright 74 + ai-manager 6 条全绿；lint / typecheck / build PASS；开发库 stayops seed 幂等收敛至 52 权限码；Alembic head = `f5d3b9e7a2c4`（AI Manager 域迁移：ai_settings/ai_conversations/ai_messages + 21 个 ai_* 只读视图 + stayops_ai_reader 只读 Role）。待 Kun Fast QA PASS 后创建 `v1.0.0-alpha.9` Release Commit。
 
 Not intended for production deployment.

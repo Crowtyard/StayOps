@@ -12,6 +12,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { logout } from "@/lib/api";
 import type { MeOut } from "@/lib/api/types";
 import {
+  IconAI,
   IconAnalytics,
   IconAudit,
   IconBooking,
@@ -104,10 +105,22 @@ const NAV_ITEMS: NavItem[] = [
     anyOf: ["analytics:operations_read", "analytics:business_read"],
   },
   {
+    href: "/ai-manager",
+    label: "AI 店长",
+    icon: <IconAI />,
+    permission: "ai_manager:use",
+  },
+  {
     href: "/settings/room-types",
     label: "房型",
     icon: <IconTag />,
     permission: "room_type:read",
+  },
+  {
+    href: "/settings/ai",
+    label: "AI 设置",
+    icon: <IconAI />,
+    permission: "ai_manager:manage",
   },
   {
     href: "/settings/users",

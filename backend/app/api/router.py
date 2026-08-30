@@ -3,6 +3,7 @@
 from fastapi import APIRouter
 
 from app.api.routes import (
+    ai_manager,
     analytics,
     audit_logs,
     auth,
@@ -17,6 +18,7 @@ from app.api.routes import (
     roles,
     room_types,
     rooms,
+    settings_ai,
     stays,
     users,
 )
@@ -40,3 +42,5 @@ api_router.include_router(maintenance.assignees_router)
 api_router.include_router(inventory.router)
 api_router.include_router(procurement.router)
 api_router.include_router(analytics.router)
+api_router.include_router(settings_ai.router)
+api_router.include_router(ai_manager.router)

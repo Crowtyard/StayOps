@@ -19,6 +19,8 @@ export interface TestCredentials {
   managerPassword: string;
   maintenanceUsername: string;
   maintenancePassword: string;
+  financeUsername: string;
+  financePassword: string;
 }
 
 const REQUIRED_KEYS = [
@@ -32,6 +34,8 @@ const REQUIRED_KEYS = [
   "E2E_MANAGER_PASSWORD",
   "E2E_MAINTENANCE_USERNAME",
   "E2E_MAINTENANCE_PASSWORD",
+  "E2E_FINANCE_USERNAME",
+  "E2E_FINANCE_PASSWORD",
 ] as const;
 
 type EnvMap = Record<(typeof REQUIRED_KEYS)[number], string>;
@@ -72,5 +76,7 @@ export function loadTestCredentials(): TestCredentials {
     managerPassword: env.E2E_MANAGER_PASSWORD,
     maintenanceUsername: env.E2E_MAINTENANCE_USERNAME,
     maintenancePassword: env.E2E_MAINTENANCE_PASSWORD,
+    financeUsername: env.E2E_FINANCE_USERNAME,
+    financePassword: env.E2E_FINANCE_PASSWORD,
   };
 }

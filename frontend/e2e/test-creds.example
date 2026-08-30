@@ -16,3 +16,8 @@ E2E_MANAGER_USERNAME=e2e_manager
 E2E_MANAGER_PASSWORD=change-me
 E2E_MAINTENANCE_USERNAME=e2e_maintenance
 E2E_MAINTENANCE_PASSWORD=change-me
+
+# Sprint 9：FINANCE 测试账号（AI Manager 权限隔离 E2E，Flow C；
+# 与 analytics-helpers.ts 的 e2e_finance 保持一致，避免密码冲突）
+E2E_FINANCE_USERNAME=e2e_finance
+E2E_FINANCE_PASSWORD=Finance@123456

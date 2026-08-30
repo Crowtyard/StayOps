@@ -105,6 +105,12 @@ PERMISSIONS: dict[str, tuple[str, str]] = {
     #                  Inventory Analytics / Procurement Analytics / Supplier value
     "analytics:operations_read": ("查看运营分析", "查看经营分析中的运营指标（占用/预订/保洁/维修/换房/预测）"),
     "analytics:business_read": ("查看经营分析", "查看经营分析中的经营指标（合同房费/库存/采购）"),
+    # Sprint 9：AI Manager 域权限（用 permission 判断，禁止硬编码角色名）
+    #   ai_manager:use    可以打开 AI Manager（可见数据仍受当前用户既有
+    #                     analytics:operations_read / business_read 域限制，§22/§23）
+    #   ai_manager:manage 管理 AI 设置（/settings/ai：保存/更新/删除 Key、测试连接）
+    "ai_manager:use": ("使用 AI 店长", "打开 AI Manager 并发送经营/运营问题"),
+    "ai_manager:manage": ("管理 AI 设置", "配置 DeepSeek API Key 与模型"),
 }
 
 ROLES: dict[str, str] = {
@@ -195,6 +201,13 @@ INVENTORY_PRO: list[str] = [
 ANALYTICS_OPERATIONS: list[str] = ["analytics:operations_read"]
 ANALYTICS_BUSINESS: list[str] = ["analytics:business_read"]
 
+# Sprint 9 §22：AI Manager 角色矩阵（用 permission 判断，禁止硬编码角色名）
+#   ai_manager:use     SUPER_ADMIN / MANAGER / FRONT_DESK / FINANCE ✓
+#                      HOUSEKEEPING / MAINTENANCE ×
+#   ai_manager:manage  SUPER_ADMIN / MANAGER ✓（其余 ×）
+AI_USE: list[str] = ["ai_manager:use"]
+AI_MANAGE: list[str] = ["ai_manager:manage"]
+
 ROLE_PERMISSIONS: dict[str, list[str]] = {
     "SUPER_ADMIN": [],
     "MANAGER": [
@@ -214,6 +227,8 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
         *INVENTORY_PRO,
         *ANALYTICS_OPERATIONS,
         *ANALYTICS_BUSINESS,
+        *AI_USE,
+        *AI_MANAGE,
     ],
     "FRONT_DESK": [
         "room:read",
@@ -232,6 +247,7 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
         "procurement:request",
         "procurement:receive",
         *ANALYTICS_OPERATIONS,
+        *AI_USE,
     ],
     "HOUSEKEEPING": [
         "room:read",
@@ -260,6 +276,7 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
         "inventory:read",
         "procurement:read",
         *ANALYTICS_BUSINESS,
+        *AI_USE,
     ],
 }
 

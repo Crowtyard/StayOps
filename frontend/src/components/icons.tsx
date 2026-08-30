@@ -310,3 +310,26 @@ export function IconTrendFlat({ className }: IconProps) {
     </Svg>
   );
 }
+
+/** Sprint 9：AI 店长（机器人） */
+export function IconAI({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <rect x="4" y="7" width="16" height="12" rx="3" />
+      <path d="M12 7V4" />
+      <path d="M9 4h6" />
+      <circle cx="9" cy="12.5" r="1" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="12.5" r="1" fill="currentColor" stroke="none" />
+      <circle cx="15" cy="12.5" r="1" fill="currentColor" stroke="none" />
+    </Svg>
+  );
+}
+
+/** Sprint 9：发送消息 */
+export function IconSend({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <path d="m3 11 18-8-8 18-2.5-7.5L3 11Z" />
+    </Svg>
+  );
+}

@@ -18,12 +18,14 @@ def test_list_seeded_roles(client, admin_headers):
     body = resp.json()
     assert body["total"] == 6
     assert {r["name"] for r in body["items"]} == SEEDED_ROLES
-    # SUPER_ADMIN 拥有全部 50 个权限（48 = Sprint 7 基线 + Sprint 8 Analytics 的 2）
+    # SUPER_ADMIN 拥有全部 52 个权限（50 = Sprint 8 基线 + Sprint 9 AI Manager 的 2）
     super_admin = next(r for r in body["items"] if r["name"] == "SUPER_ADMIN")
-    assert len(super_admin["permissions"]) == 50
+    assert len(super_admin["permissions"]) == 52
     # Sprint 8 §34：Analytics 权限码存在
     admin_codes = {p["code"] for p in super_admin["permissions"]}
     assert {"analytics:operations_read", "analytics:business_read"} <= admin_codes
+    # Sprint 9 §22：AI Manager 权限码存在
+    assert {"ai_manager:use", "ai_manager:manage"} <= admin_codes
 
 
 def test_create_and_get_role(client, admin_headers):

@@ -109,6 +109,8 @@ export async function ensureTestUsers(): Promise<void> {
       creds.maintenancePassword,
       "MAINTENANCE",
     );
+    // Sprint 9：AI Manager 权限隔离 E2E（Flow C：FINANCE 有 AI 但不能看运营数据）
+    await ensureUser(creds.financeUsername, creds.financePassword, "FINANCE");
     prepared = true;
   } finally {
     await ctx.dispose();
