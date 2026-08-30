@@ -1,0 +1,25 @@
+{
+  "name": "stayops-desktop",
+  "version": "1.0.0-alpha.9.2",
+  "private": true,
+  "description": "StayOps Windows Desktop Runtime (Electron) — Desktop D1",
+  "main": "dist/main.js",
+  "scripts": {
+    "build:main": "tsc -p tsconfig.json",
+    "build:frontend": "node scripts/build-frontend.mjs",
+    "build": "npm run build:main && npm run build:frontend",
+    "start": "npm run build:main && electron .",
+    "dist": "..\\backend\\.venv\\Scripts\\python.exe scripts\\make_icon.py && npm run build && electron-builder --win dir",
+    "dist:portable": "electron-builder --win portable",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.typecheck.json"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "electron": "44.0.0",
+    "electron-builder": "^26.15.3",
+    "typescript": "^5.9.0",
+    "vitest": "^4.1.11"
+  }
+}

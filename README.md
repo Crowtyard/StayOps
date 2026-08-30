@@ -74,6 +74,29 @@ Copy-Item .env.example .env.local   # BACKEND_API_URL / NEXT_PUBLIC_APP_NAME
 
 前端质量命令：`pnpm.cmd lint`、`pnpm.cmd typecheck`、`pnpm.cmd test`（Vitest）、`pnpm.cmd build`。
 
+## Desktop（Windows 桌面客户端）
+
+> 里程碑：Desktop D1（v1.0.0-alpha.9.2）——把 StayOps 封装为可双击使用的 Windows 客户端（Electron + Next.js Production standalone + FastAPI Production + 本机 PostgreSQL）。完整说明见 [docs/DESKTOP.md](docs/DESKTOP.md)。
+
+- 双击 `desktop/dist/win-unpacked/StayOps.exe`（或 `StayOps-Portable-*.exe`）→ 启动窗口 → 自动检查 Runtime/PostgreSQL/Alembic → 启动后端（127.0.0.1:8100）与前端（127.0.0.1:3100，Production standalone）→ 打开 StayOps 主窗口（1440×900）。
+- 普通使用**不需要**打开 PowerShell / CMD / VS Code / DSH；全程零控制台弹窗。
+- 独立端口：Backend `8100`、Frontend `3100`（仅 127.0.0.1），与开发模式（8000/3000）、E2E（8001/3001）互不冲突。
+- 数据库与迁移：启动时只读检查 `stayops` 库 `alembic current == heads`；落后时显示「数据库需要升级」并由用户确认后才 `upgrade head`（多 head Fail Safe，绝不自动降级）。
+- 日志：`%LOCALAPPDATA%\StayOps\logs\{desktop,backend,frontend}.log`（自动 scrub DATABASE_URL 密码 / DeepSeek Key / AI_ENCRYPTION_KEY / Authorization）。
+- 桌面构建：
+
+```powershell
+cd desktop
+pnpm.cmd install
+pnpm.cmd build:frontend   # Next standalone -> frontend/.next-desktop/standalone（桌面专用，不影响开发 .next）
+pnpm.cmd dist             # tsc 编译 + electron-builder -> desktop/dist/win-unpacked/StayOps.exe
+pnpm.cmd dist:portable    # 可选：StayOps-Portable-*.exe
+pnpm.cmd test             # 桌面自动化测试（Vitest）
+```
+
+- D1 依赖：当前机器已有 PostgreSQL 服务、StayOps 工作区（`backend/.venv`；打包后可经 `STAYOPS_ROOT` 指向工作区）。暂不提供安装器 / 自动更新 / 代码签名 / 内置 PostgreSQL（见 [docs/DESKTOP.md](docs/DESKTOP.md) 的 D1 Limitations）。
+- Desktop 与开发模式互不影响：Desktop 只运行 Production build/runtime（无 `next dev`、无 `--reload`、无 watcher）；`start-dev.cmd` 开发流程保持不变。
+
 ## 测试
 
 ```powershell

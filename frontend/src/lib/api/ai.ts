@@ -7,7 +7,11 @@
  * - Chat 为普通 request/response（Alpha.9 不做 Streaming，§25）
  */
 
-import { requestJson, type Transport } from "./client";
+import {
+  AI_CHAT_TIMEOUT_MS,
+  requestJson,
+  type Transport,
+} from "./client";
 
 export interface AISettings {
   provider: string;
@@ -79,6 +83,9 @@ export function createAiApi(transport: Transport): AiApi {
       requestJson<AIChatResult>(transport, "/ai-manager/chat", {
         method: "POST",
         body: payload,
+        // Desktop D1 compatibility fix：真实 DeepSeek 多轮工具调用 >15s，
+        // Chat 单独使用长超时（其余 BFF 请求保持 DEFAULT_TIMEOUT_MS）
+        timeoutMs: AI_CHAT_TIMEOUT_MS,
       }),
     messages: (conversationId) =>
       requestJson<AIMessagesResult>(

@@ -1,5 +1,5 @@
 import { cookies } from "next/headers";
-import { backendUrl, DEFAULT_TIMEOUT_MS } from "@/lib/api/client";
+import { backendUrl, bffTimeoutFor } from "@/lib/api/client";
 import { AUTH_COOKIE } from "@/lib/server/auth";
 
 interface BffContext {
@@ -52,12 +52,15 @@ async function handle(request: Request, ctx: BffContext): Promise<Response> {
 
   let upstream: Response;
   try {
+    // Desktop D1 compatibility fix：仅 POST /ai-manager/chat 使用 AI 长超时
+    // （真实 DeepSeek 工具调用实测 15.7s > 通用 15s）；其余请求保持 15s。
+    const timeoutMs = bffTimeoutFor(segments, method);
     upstream = await fetch(url.toString(), {
       method,
       headers,
       body: body ?? undefined,
       cache: "no-store",
-      signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch {
     return Response.json(

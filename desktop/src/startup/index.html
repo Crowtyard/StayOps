@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'"
+    />
+    <title>StayOps 正在启动</title>
+    <link rel="stylesheet" href="./startup.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="brand">
+        <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true">
+          <rect x="4" y="4" width="56" height="56" rx="14" fill="#0d5e5d" />
+          <path d="M32 16 L46 32 H40 V46 H24 V32 H18 Z" fill="#ffffff" />
+          <rect x="28" y="40" width="8" height="6" fill="#ffffff" />
+        </svg>
+        <div class="brand-text">
+          <h1>StayOps</h1>
+          <p id="subtitle">正在启动</p>
+        </div>
+      </header>
+
+      <!-- 启动步骤视图 -->
+      <section id="view-starting" class="view" hidden>
+        <ol class="steps" id="steps">
+          <li data-phase="env"><span class="step-icon"></span><span class="step-label">检查运行环境</span></li>
+          <li data-phase="ports"><span class="step-icon"></span><span class="step-label">检查端口</span></li>
+          <li data-phase="database"><span class="step-icon"></span><span class="step-label">连接数据库</span></li>
+          <li data-phase="migration"><span class="step-icon"></span><span class="step-label">检查数据库版本</span></li>
+          <li data-phase="backend"><span class="step-icon"></span><span class="step-label">启动后端</span></li>
+          <li data-phase="frontend"><span class="step-icon"></span><span class="step-label">启动前端</span></li>
+        </ol>
+        <p class="step-note" id="step-note">StayOps 正在检查运行环境…</p>
+      </section>
+
+      <!-- 迁移确认视图 -->
+      <section id="view-migration" class="view" hidden>
+        <div class="panel warn">
+          <h2>数据库需要升级</h2>
+          <p>
+            当前版本：<code id="mig-current">—</code><br />
+            目标版本：<code id="mig-head">—</code>
+          </p>
+          <p class="muted">升级由 Alembic 迁移脚本执行；不会删除已有数据，也不会自动降级。</p>
+        </div>
+        <div class="actions">
+          <button id="btn-upgrade" class="primary">升级数据库并继续</button>
+          <button id="btn-quit" class="ghost">退出</button>
+        </div>
+      </section>
+
+      <!-- 错误视图 -->
+      <section id="view-error" class="view" hidden>
+        <div class="panel error">
+          <h2>StayOps 无法启动</h2>
+          <p class="error-message" id="error-message">—</p>
+          <pre class="error-detail" id="error-detail" hidden></pre>
+        </div>
+        <div class="actions">
+          <button id="btn-retry" class="primary">重新检查</button>
+          <button id="btn-logs" class="secondary">打开日志目录</button>
+          <button id="btn-quit-2" class="ghost">退出 StayOps</button>
+        </div>
+      </section>
+
+      <!-- 就绪视图（短暂过渡） -->
+      <section id="view-ready" class="view" hidden>
+        <div class="panel ok">
+          <h2>Runtime Ready</h2>
+          <p>正在进入 StayOps…</p>
+        </div>
+      </section>
+
+      <footer class="foot">StayOps Desktop · Windows</footer>
+    </main>
+    <script src="./startup.js"></script>
+  </body>
+</html>

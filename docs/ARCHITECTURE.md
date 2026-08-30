@@ -4,9 +4,33 @@
 
 - `frontend/` — Next.js 16 + TypeScript（strict）+ Tailwind 前端
 - `backend/` — FastAPI + Python 后端
+- `desktop/` — Windows 桌面客户端（Electron，Desktop D1；详见 [DESKTOP.md](DESKTOP.md)）
 - `infra/docker/` — Docker 部署配置
 - `docs/` — 项目文档
 - `tests/` — 测试
+
+## Desktop Runtime（Desktop D1）
+
+- **架构不变**：Electron（壳）→ Next.js Production UI（standalone，127.0.0.1:3100）→
+  Next.js BFF → FastAPI Production（127.0.0.1:8100，NO `--reload`）→ PostgreSQL。
+  Electron 只做桌面窗口 / 启动 UX / Runtime lifecycle / 本地进程监督；
+  **不直接查询 PostgreSQL、不搬 FastAPI 逻辑、不改 SQLite、不重写前端**。
+- `desktop/src/main.ts` 编排启动状态机：环境检查 → 端口预检（占用即报错+PID，
+  不杀未知进程）→ DB 连接（`scripts/desktop_runtime.py` Python 探针）→
+  Alembic current==heads（落后需用户确认才 upgrade，多 head Fail Safe）→
+  后端就绪（/health + openapi 核心路由）→ 前端就绪（/login）→ 主窗口 1440×900。
+- 进程：`windowsHide + detached + stdio 管道` 启动（零控制台弹窗）；
+  记录自己启动的 PID；Backend 经 stdin EOF 优雅停机（uvicorn should_exit），
+  Frontend 先 `taskkill /T` 优雅尝试、超时才 `/T /F`；退出后校验端口释放。
+- 日志 `%LOCALAPPDATA%\StayOps\logs\{desktop,backend,frontend}.log`，写入前
+  scrub（DATABASE_URL 密码 / sk-* Key / AI_ENCRYPTION_KEY / Authorization）。
+- 安全：contextIsolation + sandbox + nodeIntegration:false；preload 只暴露
+  白名单 IPC（getState/onEvent/retry/migrationUpgrade/openLogs/quit）；
+  拒绝不可信导航。Secrets 不进 renderer / logs，AI Key 仍由后端加密存储。
+- 打包：electron-builder `win dir` → `desktop/dist/win-unpacked/StayOps.exe`
+  （portable 可选）；Next standalone 经 extraResources 随包携带（不打入 asar）。
+- 桌面与开发模式互不影响：开发仍用 `start-dev.cmd`（8000/3000 + --reload +
+  next dev）；桌面只用 Production build/runtime，无 watcher。
 
 ## Local Runtime（Alpha.5 加固）
 

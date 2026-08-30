@@ -1,0 +1,341 @@
+/* StayOps Startup Window — 启动 UX（Desktop D1 §15/§16） */
+
+:root {
+  --bg: #f4f5f7;
+  --card: #ffffff;
+  --border: #e4e7ec;
+  --ink: #1f2937;
+  --ink-2: #4b5563;
+  --muted: #6b7280;
+  --brand: #0d5e5d;
+  --brand-soft: #e3efee;
+  --ok: #15803d;
+  --ok-soft: #e7f4ec;
+  --warn: #b45309;
+  --warn-soft: #fdf3e3;
+  --error: #b91c1c;
+  --error-soft: #fdecec;
+  --radius: 14px;
+  --space-1: 8px;
+  --space-2: 16px;
+  --space-3: 24px;
+  --space-4: 32px;
+  --font:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei",
+    "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+.shell {
+  max-width: 460px;
+  margin: 0 auto;
+  padding: var(--space-4) 28px var(--space-3);
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+/* ---------- Brand ---------- */
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: var(--space-3);
+}
+
+.brand-mark {
+  width: 52px;
+  height: 52px;
+  flex: none;
+}
+
+.brand-text h1 {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  line-height: 1.2;
+}
+
+.brand-text p {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* ---------- Views ---------- */
+
+.view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.view[hidden] {
+  display: none;
+}
+
+/* ---------- Steps ---------- */
+
+.steps {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.steps li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  transition: background 160ms ease;
+}
+
+.steps li[data-status="loading"] {
+  background: var(--card);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+}
+
+.steps li[data-status="ok"] {
+  background: var(--ok-soft);
+}
+
+.steps li[data-status="error"] {
+  background: var(--error-soft);
+}
+
+.step-icon {
+  width: 24px;
+  height: 24px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+}
+
+/* 待执行 */
+.steps li[data-status="pending"] .step-icon {
+  border: 2px solid var(--border);
+}
+
+/* 执行中：细圆环 spinner */
+.steps li[data-status="loading"] .step-icon {
+  border: 2px solid var(--brand-soft);
+  border-top-color: var(--brand);
+  animation: spin 0.9s linear infinite;
+}
+
+.steps li[data-status="ok"] .step-icon {
+  background: var(--ok);
+  color: #fff;
+}
+
+.steps li[data-status="error"] .step-icon {
+  background: var(--error);
+  color: #fff;
+}
+
+.steps li[data-status="ok"] .step-icon::after,
+.steps li[data-status="error"] .step-icon::after {
+  content: "";
+  width: 9px;
+  height: 5px;
+  border-left: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg) translateY(-1px);
+}
+
+.steps li[data-status="error"] .step-icon::after {
+  width: 10px;
+  height: 10px;
+  border: none;
+  background:
+    linear-gradient(currentColor, currentColor) center/100% 2px no-repeat,
+    linear-gradient(currentColor, currentColor) center/2px 100% no-repeat;
+  transform: none;
+}
+
+.step-label {
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.steps li[data-status="pending"] .step-label {
+  color: var(--muted);
+}
+
+.step-note {
+  color: var(--muted);
+  font-size: 12.5px;
+  min-height: 20px;
+  padding: 0 4px;
+}
+
+/* ---------- Panels ---------- */
+
+.panel {
+  border-radius: var(--radius);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  background: var(--card);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.panel h2 {
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.panel code {
+  font-family: ui-monospace, Consolas, "Courier New", monospace;
+  font-size: 12.5px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1px 7px;
+  color: var(--ink-2);
+}
+
+.panel.warn {
+  border-color: #f2d9a7;
+  background: var(--warn-soft);
+}
+
+.panel.error {
+  border-color: #f3c1c1;
+  background: var(--error-soft);
+}
+
+.panel.ok {
+  border-color: #bfe3cc;
+  background: var(--ok-soft);
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.error-message {
+  font-weight: 550;
+  color: var(--error);
+  word-break: break-word;
+}
+
+.error-detail {
+  font-family: ui-monospace, Consolas, "Courier New", monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-2);
+  background: rgba(255, 255, 255, 0.65);
+  border: 1px solid #f0d2d2;
+  border-radius: 8px;
+  padding: 10px 12px;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
+/* ---------- Actions ---------- */
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+button {
+  font-family: inherit;
+  font-size: 13.5px;
+  font-weight: 550;
+  padding: 9px 18px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    transform 60ms ease;
+}
+
+button:active {
+  transform: translateY(1px);
+}
+
+button.primary {
+  background: var(--brand);
+  color: #fff;
+}
+
+button.primary:hover {
+  background: #0a4d4c;
+}
+
+button.secondary {
+  background: var(--card);
+  border-color: var(--border);
+  color: var(--ink);
+}
+
+button.secondary:hover {
+  border-color: #c8cdd6;
+}
+
+button.ghost {
+  background: transparent;
+  color: var(--muted);
+}
+
+button.ghost:hover {
+  color: var(--ink);
+}
+
+/* ---------- Footer ---------- */
+
+.foot {
+  margin-top: var(--space-3);
+  text-align: center;
+  color: #9ca3af;
+  font-size: 11.5px;
+}
+
+/* ---------- Motion ---------- */
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .steps li[data-status="loading"] .step-icon {
+    animation: none;
+    border-color: var(--brand);
+  }
+}

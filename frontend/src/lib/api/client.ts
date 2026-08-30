@@ -79,12 +79,40 @@ export type Transport = (path: string, init: RequestInit) => Promise<Response>;
 
 export const DEFAULT_TIMEOUT_MS = 15000;
 
+/**
+ * AI Manager Chat 独立超时（Desktop D1 compatibility fix）。
+ *
+ * 背景：真实 DeepSeek 多轮工具调用（如「近七天的运营情况怎么样」）实测
+ * 后端总耗时 15.7s，超过通用 BFF 的 DEFAULT_TIMEOUT_MS=15s，导致 BFF 在
+ * 后端即将完成时中止（502「服务暂时不可用」）。后端 S9 provider 超时为
+ * 60s（deepseek_request_timeout_seconds），本值 = 60s + 50% 余量（90s），
+ * 有界、不全局放宽、不改 DeepSeek/Analytics。
+ */
+export const AI_CHAT_TIMEOUT_MS = 90_000;
+
+/** BFF 层超时判定：仅 POST /ai-manager/chat 使用 AI 长请求超时。 */
+export function bffTimeoutFor(
+  pathSegments: readonly string[],
+  method: string,
+): number {
+  if (
+    method === "POST" &&
+    pathSegments[0] === "ai-manager" &&
+    pathSegments[1] === "chat"
+  ) {
+    return AI_CHAT_TIMEOUT_MS;
+  }
+  return DEFAULT_TIMEOUT_MS;
+}
+
 export interface RequestOptions {
   method?: string;
   query?: Record<string, string | number | boolean | null | undefined>;
   body?: unknown;
   signal?: AbortSignal;
   headers?: Record<string, string>;
+  /** 覆盖默认超时（毫秒）；仅对需要长请求的端点显式使用 */
+  timeoutMs?: number;
 }
 
 export function buildQueryString(
@@ -118,7 +146,8 @@ async function requestJson<T>(
   }
 
   const timeoutController = new AbortController();
-  const timeoutId = setTimeout(() => timeoutController.abort(), DEFAULT_TIMEOUT_MS);
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const timeoutId = setTimeout(() => timeoutController.abort(), timeoutMs);
   const externalSignal = options.signal;
   const onExternalAbort = () => timeoutController.abort();
   if (externalSignal) {

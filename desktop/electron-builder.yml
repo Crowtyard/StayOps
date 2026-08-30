@@ -1,0 +1,45 @@
+# StayOps Desktop (electron-builder 配置)
+# D1：win-unpacked（dir target）为正式输出；portable 为可选增量目标。
+
+appId: com.stayops.desktop
+productName: StayOps
+copyright: Copyright © 2026 StayOps
+
+directories:
+  output: dist
+  buildResources: build
+
+# 应用代码：编译产物 + 启动窗口静态资源 + 托盘图标。
+# 运行时零第三方依赖（main 进程只用 Node 内置模块 + electron）。
+# 注意：files 根目录 dist/ 同时也是 electron-builder 的输出目录
+# （directories.output: dist），必须排除 dist/win-unpacked，否则打包产物
+# 会被整体递归进 app.asar（366MB 自嵌套，含另一份 app.asar）。
+files:
+  - dist/**
+  - "!dist/win-unpacked/**"
+  - "!dist/win-unpacked"
+  - src/startup/**
+  - assets/**
+  - package.json
+
+# 前端生产构建（Next standalone）由 scripts/install-standalone.mjs 经
+# afterPack 钩子复制到 resources/frontend-server（不打进 asar：Node 子进程
+# 需要真实文件系统路径）。不用 extraResources：electron-builder 会静默排除
+# node_modules 且不跟随 pnpm junction；afterPack 在打包后、portable 压缩前
+# 执行，dir 与 portable 两个目标都自动携带资源。
+afterPack: scripts/after-pack.cjs
+
+asar: true
+compression: normal
+npmRebuild: false
+
+win:
+  target:
+    - target: dir
+      arch:
+        - x64
+  icon: build/icon.ico
+  artifactName: StayOps-${version}-${arch}.${ext}
+
+portable:
+  artifactName: StayOps-Portable-${version}-${arch}.${ext}

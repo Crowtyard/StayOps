@@ -577,5 +577,142 @@ Kun Independent Fast QA：绝大多数 S8 通过，2 个 RELEASE BLOCKER 修复�
     Provider（run_test_backend.py 同进程 127.0.0.1:8099，确定性路由，
     绝不触碰真实 API，测试不向真实 DeepSeek 发送 fake key）。
 
+## 2026-08-30 — Desktop D1：Windows Desktop Runtime & Packaging（Electron）
+
+范围：把 StayOps 封装为「双击 StayOps.exe 即可使用」的 Windows 桌面客户端；
+只做桌面运行时与打包，不做任何业务功能（Sprint 10 及以后另行规划）。
+实现与自测完成；NO COMMIT / NO PUSH / NO TAG，等待独立 QA。
+
+1. **技术选型（§6）**。Electron + electron-builder；不用 Tauri / Rust / C# /
+   自研 WebView 壳；不引入复杂 Desktop framework。允许引入成熟 Electron
+   依赖（electron / electron-builder / typescript / vitest 均为 devDependencies，
+   运行时零第三方依赖）。Electron 只负责：桌面窗口 / 启动 UX / Runtime
+   lifecycle / 本地进程监督；**不直接查询 PostgreSQL、不搬 FastAPI 逻辑、
+   不改 SQLite、不重写前端**。架构保持
+   Electron → Next.js Production UI → Next.js BFF → FastAPI → PostgreSQL。
+
+2. **Production Runtime（§8/§10/§11）**。Desktop 独立端口：Backend
+   `127.0.0.1:8100`、Frontend `127.0.0.1:3100`（仅 loopback，与开发
+   8000/3000、E2E 8001/3001/8099 互不冲突）。Frontend 用 Next.js
+   `output: standalone`（`NEXT_OUTPUT_STANDALONE=1` + `NEXT_DIST_DIR=.next-desktop`
+   门控，默认构建行为不变），装配 static/public 后由 `node server.js` 运行
+   （PORT/HOSTNAME/BACKEND_API_URL 运行时注入——Next 16 服务端 Route Handler
+   运行时读取 BACKEND_API_URL，非构建期内联）。Backend 用 `backend/.venv`
+   已验证 Python + uvicorn 进程内运行（NO `--reload`），经
+   `backend/scripts/desktop_backend_runner.py` stdin 桥实现优雅停机
+   （stdin EOF → should_exit → lifespan shutdown，与 dev_runtime 同模式）。
+
+3. **启动链路（§5/§12/§13/§15/§16）**。双击 exe → 启动窗口立即出现 →
+   检查运行环境（venv/node/standalone）→ 端口预检（占用即报错并显示 PID，
+   禁止 kill by port / kill unknown PID）→ 数据库连接（Python 探针
+   `scripts/desktop_runtime.py`，Electron 不直接查库）→ Alembic
+   `current == heads`（落后显示「数据库需要升级 当前/目标版本」，
+   **用户确认后才 upgrade**；多 head Fail Safe；禁止自动 downgrade）→
+   启动后端（/health + openapi 核心路由校验）→ 启动前端（/login 就绪）→
+   打开 1440×900 主窗口。任何失败 → 人类可读错误 UI（重新检查 /
+   打开日志目录 / 退出）。
+
+4. **进程所有权与停机（§17/§18/§19/§20/§29/§30）**。`requestSingleInstanceLock`
+   （重复双击只 restore/focus）；只管理自己启动的 Backend/Frontend 进程树
+   （记录 PID；children spawn 参数 `windowsHide: true + detached: true +
+   stdio 管道`，全程零控制台弹窗——不用 `powershell -WindowStyle Hidden`
+   之类命令字符串方案）；退出顺序：Backend stdin EOF 优雅停机（uvicorn
+   graceful），Frontend `taskkill /T`（无 /F）优雅尝试 → 超时后
+   `taskkill /T /F`；退出后校验端口已释放；不影响其它软件的 Node/Python。
+
+5. **日志与安全（§21/§22/§23）**。日志统一 `%LOCALAPPDATA%\StayOps\logs\
+   {desktop,backend,frontend}.log`（不污染 Git workspace），写入前 scrub：
+   DATABASE_URL 密码 / DeepSeek `sk-*` Key / AI_ENCRYPTION_KEY /
+   Authorization Bearer / api key 类键值。BrowserWindow
+   `contextIsolation: true + nodeIntegration: false + sandbox: true`；
+   preload 只暴露白名单 IPC（getState/onEvent/retry/migrationUpgrade/
+   openLogs/quit），无 execute/readFile/shell；拒绝不可信导航，外部 URL 按
+   scheme allowlist 走系统浏览器。Secrets 不进 renderer / bundle / logs；
+   不改变 S9.1 AI Secret 模型（Key 仍在 ai_settings 加密存储，桌面不经手）。
+
+6. **桌面自动测试（§32）**。desktop 包 Vitest 62 用例：端口预检（真实 socket
+   探测 + netstat 解析）、workspace/路径解析（STAYOPS_ROOT > devRoot > D1
+   已知路径）、Alembic 解析与多 head 分类、secret scrub（无 false positive）、
+   进程所有权与优雅/强制停机顺序（mock child_process）、启动状态机全路径
+   （OK / venv·standalone·node 缺失 / 端口占用 / DB down / migration
+   behind→确认升级 / multi-head / backend/frontend 失败）、IPC 白名单与
+   preload 暴露面。不引入 Spectron。
+
+7. **打包与 D1 边界（§25/§35/§36）**。electron-builder：`win dir` →
+   `desktop/dist/win-unpacked/StayOps.exe`（正式输出），portable 为可选增量；
+   extraResources 携带 Next standalone（不打入 asar，Node 子进程需要真实
+   文件路径）。D1 依赖当前机器已有 PostgreSQL 与 StayOps 工作区
+   （backend/.venv；打包后可用 `STAYOPS_ROOT` 指向）；暂不做 NSIS Setup /
+   auto update / code signing / bundled PostgreSQL / Sprint 10。
+
+8. **已知问题（如实记录）**。① 前端 BFF `DEFAULT_TIMEOUT_MS=15000`（S9.1
+   产品常量）：真实 DeepSeek 多轮工具调用（如「近七天运营情况」）在
+   15 秒内未返回时，BFF 返回 502「服务暂时不可用」——dev 模式同样存在，
+   非桌面回归；后续可评估按端点放宽超时。② 冒烟期间一次后端进程以
+   `0xC000013A`（控制台事件）终止、Electron 未感知（无自愈/降级提示）：
+   D1 待 QA 复现确认根因（怀疑环境控制台事件），后续版本考虑 Backend
+   watchdog + 降级 UI。③ 中文 Windows 控制台下 uvicorn access log 的
+   source port 显示为 0（仅日志显示问题，不影响功能）。
+
+## 2026-08-30 — Desktop D1 Compatibility Fix：AI Manager Chat 独立 BFF 超时
+
+背景（真实测量）：直连后端 `POST /api/v1/ai-manager/chat` 问「近七天的运营
+情况怎么样」→ **HTTP 200 / 15.71s**（真实 DeepSeek 多轮工具调用 + S8
+Analytics）；经 BFF（`DEFAULT_TIMEOUT_MS=15000`）→ 恰在 15.0s 中止 →
+502「服务暂时不可用」。**根因 = BFF 固定 15s 超时**（后端 15.71s 仅超出
+0.7s；DeepSeek 响应时间存在抖动，超时属必然）。该问题影响 D1 验收项
+「近七天运营情况正常可用」，故作为 D1 compatibility fix 处理。
+
+决策（最小化、有界）：
+1. **仅 POST /ai-manager/chat 独立超时**：新增 `AI_CHAT_TIMEOUT_MS = 90_000`
+   （依据：S9 后端 provider 超时 `deepseek_request_timeout_seconds=60` +
+   50% 余量；真实耗时 15.7s 远低于 90s）。**不全局延长**所有 BFF 请求、
+   不取消 timeout、不改 DeepSeek / Analytics。
+2. **两层同时生效**：浏览器端 `requestJson` 支持 `timeoutMs` 覆盖（chat
+   显式传 90s）；BFF 代理 `bffTimeoutFor(segments, method)` 判定
+   （仅 `POST ai-manager/chat` 用 90s，其余保持 15s）。`bffTimeoutFor`
+   为纯函数，路由与测试共用同一判定。
+3. **回归测试**：`client.test.ts` +5 用例（bffTimeoutFor 判定矩阵
+   POST chat→90s / 其余路径与方法→15s；requestJson timeoutMs 覆盖在
+   15s 不提前中止、90s 才中止；未传 timeoutMs 仍按 15s）。前端 Vitest
+   17/17 通过；typecheck/lint PASS。
+4. **验证**：重建 standalone 后经完整桌面链路（Electron→Next
+   standalone→BFF→FastAPI→DeepSeek）实测「近七天」→ **HTTP 200 /
+   14.8s 完整真实回答**（修复前 502@15.0s）。v3 验证脚本（
+   `D:\tmp\d1_verify3.ps1`，纯 ASCII + AST Parser 零错误）§4 复测并记录
+   直连后端计时（§5）。打包版（win-unpacked/StayOps.exe）实测同一查询
+   HTTP 200 / 17.3s（真实工具调用，超旧 15s 由 90s 窗口兜住）。
+
+## 2026-08-30 — Desktop D1 Packaging Fix：standalone node_modules 打包策略
+
+背景（实测）：electron-builder 的 extraResources **静默排除 node_modules**
+且不跟随 pnpm junction；而 Next 16 trace 生成的 standalone/node_modules 是
+pnpm 布局（顶层 next/react/react-dom 为指向仓库 `frontend/node_modules/
+.pnpm/<pkg>/node_modules` 的 junction，next 的运行时依赖如
+`@swc/helpers/_/_interop_require_default` 的完整版本只存在于该 .pnpm 兄弟
+目录中）。曾尝试「物化 junction 为真实目录」——直接破坏解析（打包版与
+dev standalone 均报 Cannot find module '@swc/helpers/_/_interop_require_default'）。
+
+决策：
+1. **保留 trace 的 junction 布局**（dev 模式与 source standalone 依赖它），
+   撤销物化步骤。
+2. **打包侧用 afterPack 钩子 + install-standalone.mjs**：electron-builder
+   打包完成（win-unpacked 生成）后、portable 压缩前，把 standalone 复制到
+   `resources/frontend-server/`，`node_modules` 以 **junction 指向工作区
+   `frontend/node_modules`**（D1 本就要求本机工作区存在——backend/.venv、
+   scripts/desktop_runtime.py 同理；junction 保留 pnpm 兄弟依赖解析语义）。
+3. **Portable 目标 D1 未交付**：portable 的 7z 压缩跟随 junction 把整个
+   依赖树压入（实测中间产物 >950MB 且超过 15 分钟），不满足「不要为了
+   portable 破坏稳定实现」。正式输出 = `dist/win-unpacked/StayOps.exe`；
+   若后续要 portable，需先实现 standalone 完全自包含的 node_modules
+   （完整 pnpm link farm 或扁平化真实目录 + 版本消歧），另行评估。
+4. **验证**：win-unpacked/StayOps.exe 冒烟全链通过——启动窗口 → ready →
+   login/me/rooms/analytics/AI「你是谁」200(3.8s)/AI「近七天」200(17.3s)
+   → WM_CLOSE 优雅关闭 → backend exit 0 → 端口 8100/3100 释放 → 无关
+   Node/Python 进程（17 个快照逐一比对）零变化；无可视控制台窗口。
+
+
+
+
 
 

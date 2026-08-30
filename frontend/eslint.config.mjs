@@ -11,6 +11,8 @@ const eslintConfig = defineConfig([
     ".next/**",
     // E2E 专用 dev server 构建目录（NEXT_DIST_DIR=.next-e2e）
     ".next-e2e/**",
+    // Desktop standalone 构建目录（NEXT_DIST_DIR=.next-desktop）
+    ".next-desktop/**",
     "out/**",
     "build/**",
     "next-env.d.ts",

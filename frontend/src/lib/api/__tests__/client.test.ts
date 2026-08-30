@@ -6,7 +6,10 @@
 
 import { describe, expect, it, vi } from "vitest";
 import {
+  AI_CHAT_TIMEOUT_MS,
   ApiError,
+  DEFAULT_TIMEOUT_MS,
+  bffTimeoutFor,
   buildQueryString,
   requestJson,
   type Transport,
@@ -177,5 +180,83 @@ describe("requestJson 错误归一化", () => {
     controller.abort();
     const err = await promise.catch((e: unknown) => e);
     expect((err as ApiError).kind).toBe("network");
+  });
+});
+
+describe("bffTimeoutFor（Desktop D1 AI 长请求超时兼容）", () => {
+  it("POST /ai-manager/chat → AI_CHAT_TIMEOUT_MS（90s）", () => {
+    expect(bffTimeoutFor(["ai-manager", "chat"], "POST")).toBe(
+      AI_CHAT_TIMEOUT_MS,
+    );
+  });
+
+  it("其余路径/方法保持 DEFAULT_TIMEOUT_MS（15s），不全局放宽", () => {
+    expect(bffTimeoutFor(["ai-manager", "chat"], "GET")).toBe(DEFAULT_TIMEOUT_MS);
+    expect(
+      bffTimeoutFor(["ai-manager", "conversations", "1", "messages"], "GET"),
+    ).toBe(DEFAULT_TIMEOUT_MS);
+    expect(bffTimeoutFor(["rooms"], "GET")).toBe(DEFAULT_TIMEOUT_MS);
+    expect(bffTimeoutFor(["reservations"], "POST")).toBe(DEFAULT_TIMEOUT_MS);
+    expect(bffTimeoutFor([], "POST")).toBe(DEFAULT_TIMEOUT_MS);
+    expect(bffTimeoutFor(["ai-manager", "chat"], "POST")).not.toBe(
+      DEFAULT_TIMEOUT_MS,
+    );
+  });
+});
+
+describe("requestJson 超时覆盖（Desktop D1）", () => {
+  it("timeoutMs 覆盖默认超时：AI 长请求按长超时中止", async () => {
+    vi.useFakeTimers();
+    try {
+      const transport = vi.fn(
+        (_p: string, init: RequestInit) =>
+          new Promise<Response>((_, reject) => {
+            // 模拟 fetch：AbortSignal 触发时 reject（真实 fetch 行为）
+            init.signal?.addEventListener("abort", () =>
+              reject(new DOMException("Aborted", "AbortError")),
+            );
+          }),
+      );
+      const promise = requestJson(transport, "/ai-manager/chat", {
+        method: "POST",
+        body: { message: "近七天的运营情况怎么样" },
+        timeoutMs: AI_CHAT_TIMEOUT_MS,
+      });
+      const assertion = expect(promise).rejects.toMatchObject({
+        kind: "network",
+        message: "请求超时，请稍后重试",
+      });
+      // 超过 15s（默认）但未到 90s：不应提前中止
+      await vi.advanceTimersByTimeAsync(DEFAULT_TIMEOUT_MS + 1000);
+      expect(transport).toHaveBeenCalledTimes(1);
+      // 到达 90s：中止并报超时
+      await vi.advanceTimersByTimeAsync(AI_CHAT_TIMEOUT_MS - DEFAULT_TIMEOUT_MS - 1000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("未传 timeoutMs 时仍按默认 15s 中止", async () => {
+    vi.useFakeTimers();
+    try {
+      const transport = vi.fn(
+        (_p: string, init: RequestInit) =>
+          new Promise<Response>((_, reject) => {
+            init.signal?.addEventListener("abort", () =>
+              reject(new DOMException("Aborted", "AbortError")),
+            );
+          }),
+      );
+      const promise = requestJson(transport, "/rooms");
+      const assertion = expect(promise).rejects.toMatchObject({
+        kind: "network",
+        message: "请求超时，请稍后重试",
+      });
+      await vi.advanceTimersByTimeAsync(DEFAULT_TIMEOUT_MS);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
