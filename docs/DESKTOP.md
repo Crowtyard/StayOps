@@ -336,3 +336,30 @@ packaged 模式下不可用即 **Fail Safe**（不启动），绝不静默使用
   ACE，配合 `/inheritance:r` 会把当前用户锁在 `%PROGRAMDATA%\StayOps\config`
   之外（alpha.9.3 遗留实测；已改为 **SID 授权 + 读/写回校验 + 自愈修复**）。
 - `seed()` 的 stdout 会污染探针 JSON（成功被误判为失败）→ 已截获丢弃。
+
+## 14. Clean-machine QA 清单（v1.0.0-alpha.9.4 发布前唯一剩余门禁）
+
+本机（Windows 10 Home）没有 Hyper-V / Windows Sandbox / VMware / VirtualBox，
+因此**尚未在真正干净的机器上验证**；在完成下列清单前不打 tag、不发 Release。
+
+准备一台干净 Windows 10/11 x64 机器或 VM，确认**未预装** Python / Node.js /
+pnpm / PostgreSQL / Docker / Git / StayOps 源码树。
+
+| # | 步骤 | 期望 |
+|---|---|---|
+| 1 | 校验安装包 | `SHA256SUMS.txt` 与 `StayOps-Setup-1.0.0-alpha.9.4.exe` 一致（250A1C0F…） |
+| 2 | 双击安装（可静默 `/S`） | 无报错；开始菜单 + 桌面出现 StayOps；**不需要**管理员日常运行 |
+| 3 | 首次启动 | 启动窗口依次经过 env/ports/database/migration/backend/frontend；首次出现「管理员初始密码」并提示只显示一次 |
+| 4 | 登录 | `admin` + 初始密码可登录；随即被引导到 `/change-password` |
+| 5 | 修改密码 | 改密成功；旧密码失效、新密码可登录；之后可正常访问其它页面 |
+| 6 | 核心页面 | Dashboard / Rooms / Front Desk / Reservations / Stays / Housekeeping / Maintenance / Inventory / Procurement / Analytics 正常渲染（28 间种子房） |
+| 7 | AI Manager | 未配置 DeepSeek 时显示「未配置」提示，其余功能不受影响；配置测试 Key 后可问答 |
+| 8 | 运行时 | `127.0.0.1:5433` 有 PostgreSQL；数据在 `%PROGRAMDATA%\StayOps\PostgreSQL\data`；配置在 `…\config`；日志在 `%LOCALAPPDATA%\StayOps\logs` |
+| 9 | 无外部依赖 | 全程未安装 Python / Node / PostgreSQL；`STAYOPS_ROOT` 未设置 |
+| 10 | 卸载 | 程序目录与快捷方式删除；**业务数据库与配置保留** |
+| 11 | 重装 | 复用既有数据库（不重新 initdb、不重新显示初始密码）；数据仍在 |
+| 12 | 安全 | 安装目录内无 `.env` / 密钥 / 数据库转储 / 开发机路径 |
+
+QA 结果（逐项 PASS/FAIL + 截图/日志）回传后，方可执行
+`git tag -a v1.0.0-alpha.9.4` 与 GitHub Release，并上传
+`StayOps-Setup-1.0.0-alpha.9.4.exe` + `SHA256SUMS.txt`。
