@@ -1,6 +1,6 @@
 {
   "name": "stayops-desktop",
-  "version": "1.0.0-alpha.9.2",
+  "version": "1.0.0-alpha.9.3",
   "private": true,
   "description": "StayOps Windows Desktop Runtime (Electron) — Desktop D1",
   "main": "dist/main.js",

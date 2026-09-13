@@ -2,6 +2,39 @@
 
 All notable changes to StayOps will be documented in this file.
 
+## [v1.0.0-alpha.9.3] - 2026-09-13
+
+### Added
+
+- StayOps Desktop 自管理 PostgreSQL Runtime：`db-ensure` 探针完成首次 `initdb`
+  （scram-sha-256 + 随机凭据 + icacls 收紧 ACL）、`pg_ctl` 启动、readiness 校验
+  与幂等 `CREATE DATABASE stayops`；数据目录与程序目录彻底分离
+  （`%PROGRAMDATA%\StayOps\PostgreSQL`），仅监听 `127.0.0.1:5433`
+- `DATABASE_URL` 仅由 Desktop 运行时注入 backend 子进程（优先级：环境变量 > `.env` > 默认）
+- 数据库备份/恢复工具 `scripts/desktop_db_backup.py`（`pg_dump -Fc` + SHA-256 侧车；
+  `--restore <dump> --yes` 显式确认）
+- 正式品牌资产：母版 `icon-master.png` + 确定性生成器 `make-brand-icons.cjs`
+  （应用图标 / 托盘图标 / 启动页 brand mark）+ 打包校验 `verify_icons.cjs`
+- Desktop 离线 Electron 打包（复用 `node_modules/electron/dist`，不联网下载）
+- Electron 任务栏/窗口品牌（AppUserModelId + 显式窗口图标）
+
+### Verified
+
+- Backend pytest: 646 passed
+- Frontend Vitest: 462 passed（59 文件）；lint / typecheck PASS
+- Desktop Vitest: 62 passed；typecheck PASS
+- Playwright E2E: 80 passed
+- Desktop Fresh Build（`pnpm dist`）+ `verify_icons.cjs`：PASS
+- 桌面运行实证：db-ensure first-run PASS → PostgreSQL `127.0.0.1:5433` 就绪 →
+  Desktop 进入 ready（backend 8100 / frontend 3100）→ 12 个页面真实数据渲染 →
+  真实 DeepSeek provider（AI 店长）问答 PASS
+
+### Limitations
+
+- 仍依赖 StayOps workspace runtime layout（`backend/.venv`、`frontend/node_modules`、
+  Node.js、`runtime/postgres` 二进制；后者 gitignored，不入库不入 asar）
+- 无安装器 / 代码签名 / 自动更新；Portable 目标未正式交付；非 Desktop D2
+
 ## [v1.0.0-alpha.9] - 2026-08-31（待 Kun Fast QA）
 
 ### Added

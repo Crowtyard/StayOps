@@ -76,9 +76,9 @@ Copy-Item .env.example .env.local   # BACKEND_API_URL / NEXT_PUBLIC_APP_NAME
 
 ## Desktop（Windows 桌面客户端）
 
-> 里程碑：Desktop D1（v1.0.0-alpha.9.2）——把 StayOps 封装为可双击使用的 Windows 客户端（Electron + Next.js Production standalone + FastAPI Production + 本机 PostgreSQL）。完整说明见 [docs/DESKTOP.md](docs/DESKTOP.md)。
+> 里程碑：Desktop D1（v1.0.0-alpha.9.3）——把 StayOps 封装为可双击使用的 Windows 客户端（Electron + Next.js Production standalone + FastAPI Production + StayOps 自管理 PostgreSQL）。完整说明见 [docs/DESKTOP.md](docs/DESKTOP.md)。
 
-- 双击 `desktop/dist/win-unpacked/StayOps.exe`（或 `StayOps-Portable-*.exe`）→ 启动窗口 → 自动检查 Runtime/PostgreSQL/Alembic → 启动后端（127.0.0.1:8100）与前端（127.0.0.1:3100，Production standalone）→ 打开 StayOps 主窗口（1440×900）。
+- 双击 `desktop/dist/win-unpacked/StayOps.exe` → 启动窗口 → 自动检查 Runtime → 自管理 PostgreSQL（init/start/ready/建库）→ Alembic 检查 → 启动后端（127.0.0.1:8100）与前端（127.0.0.1:3100，Production standalone）→ 打开 StayOps 主窗口（1440×900）。`StayOps-Portable-*.exe` **尚未正式交付**（见下方 D1 限制）。
 - 普通使用**不需要**打开 PowerShell / CMD / VS Code / DSH；全程零控制台弹窗。
 - 独立端口：Backend `8100`、Frontend `3100`（仅 127.0.0.1），与开发模式（8000/3000）、E2E（8001/3001）互不冲突。
 - 数据库与迁移：启动时只读检查 `stayops` 库 `alembic current == heads`；落后时显示「数据库需要升级」并由用户确认后才 `upgrade head`（多 head Fail Safe，绝不自动降级）。
@@ -90,25 +90,25 @@ cd desktop
 pnpm.cmd install
 pnpm.cmd build:frontend   # Next standalone -> frontend/.next-desktop/standalone（桌面专用，不影响开发 .next）
 pnpm.cmd dist             # tsc 编译 + electron-builder -> desktop/dist/win-unpacked/StayOps.exe
-pnpm.cmd dist:portable    # 可选：StayOps-Portable-*.exe
+pnpm.cmd dist:portable    # 实验性：Portable 目标尚未正式交付（standalone node_modules 未自包含）
 pnpm.cmd test             # 桌面自动化测试（Vitest）
 ```
 
-- D1 依赖：当前机器已有 PostgreSQL 服务、StayOps 工作区（`backend/.venv`；打包后可经 `STAYOPS_ROOT` 指向工作区）。暂不提供安装器 / 自动更新 / 代码签名 / 内置 PostgreSQL（见 [docs/DESKTOP.md](docs/DESKTOP.md) 的 D1 Limitations）。
+- D1 依赖：仍依赖 StayOps 工作区 runtime layout（`backend/.venv`、`frontend/node_modules`、Node.js、`runtime/postgres` 二进制；打包后可经 `STAYOPS_ROOT` 指向工作区）。PostgreSQL 已由 Desktop 自管理（`runtime/postgres` + `%PROGRAMDATA%\StayOps\PostgreSQL`，仅 `127.0.0.1:5433`），不再依赖 Docker / 系统 PostgreSQL；但仍**不是**完整独立安装版：无安装器 / 自动更新 / 代码签名，也未完成完整 runtime bundling（见 [docs/DESKTOP.md](docs/DESKTOP.md) §11/§12）。
 - Desktop 与开发模式互不影响：Desktop 只运行 Production build/runtime（无 `next dev`、无 `--reload`、无 watcher）；`start-dev.cmd` 开发流程保持不变。
 
 ## 测试
 
 ```powershell
-# 后端 pytest（独立测试库 stayops_test，603 用例 = 440 基线 + S9 AI Manager 163，含 P0 并发 stress）
+# 后端 pytest（独立测试库 stayops_test，646 用例；含 P0 并发 stress）
 cd backend
 .venv\Scripts\python.exe -m pytest -q
 
-# 前端单元/组件测试（Vitest，458 用例 = 419 基线 + S9 AI Manager 39）
+# 前端单元/组件测试（Vitest，462 用例 / 59 个测试文件）
 cd frontend
 pnpm.cmd test
 
-# Playwright E2E（独立 stayops_test 库 + 专用端口 8001/3001，80 用例 = 74 基线 + S9 ai-manager 6 条；不触碰开发数据）
+# Playwright E2E（独立 stayops_test 库 + 专用端口 8001/3001，80 用例；不触碰开发数据）
 cd frontend
 Copy-Item e2e\test-creds.example e2e\.env.test-creds   # 首次：填入测试库凭据（gitignored）
 pnpm.cmd test:e2e

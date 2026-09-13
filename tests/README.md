@@ -1,11 +1,12 @@
 # StayOps Tests
 
 > 测试按层组织：
-> - 后端 pytest：`backend/tests/`（440 用例，独立测试库 `stayops_test`）
-> - 前端单元/组件测试（Vitest）：`frontend/src/**/__tests__/`（419 用例）
-> - 端到端测试（Playwright）：`frontend/e2e/`（74 用例，独立 `stayops_test` 库 + 专用端口）
+> - 后端 pytest：`backend/tests/`（646 用例，独立测试库 `stayops_test`）
+> - 前端单元/组件测试（Vitest）：`frontend/src/**/__tests__/`（462 用例 / 59 文件）
+> - 端到端测试（Playwright）：`frontend/e2e/`（80 用例，独立 `stayops_test` 库 + 专用端口）
+> - 桌面测试（Vitest）：`desktop/src/**/__tests__/`（62 用例）
 >
-> （计数截至 Sprint 8 QA 缺陷修复完成；基线 379 / 379 / 64 全部保留）
+> （计数为 `v1.0.0-alpha.9.3` Release 实测值；Sprint 8 基线 379 / 379 / 64 全部保留）
 
 ## 后端 pytest
 

@@ -1,7 +1,7 @@
 # StayOps Desktop（Windows 桌面客户端）— Desktop D1
 
-> 版本：v1.0.0-alpha.9.2（Desktop D1 里程碑）
-> 状态：v1.0.0-alpha.9.2 已发布（独立 QA PASS）
+> 版本：v1.0.0-alpha.9.3（Desktop D1 里程碑）
+> 状态：v1.0.0-alpha.9.3 已发布（Formal Release Gate 全绿，验证结果见 §10）
 
 ## 1. 是什么
 
@@ -194,9 +194,13 @@ scripts/
 ## 10. 测试
 
 ```bash
-pnpm --dir desktop test        # Vitest（端口预检/路径解析/迁移解析/scrub/
-                               #   进程所有权/优雅停机/单实例相关/IPC 白名单）
+pnpm --dir desktop test        # Vitest 62 用例（v1.0.0-alpha.9.3 实测）：端口预检/路径解析/
+                               #   迁移解析/scrub/进程所有权/优雅停机/单实例/
+                               #   IPC 白名单/db-ensure 启动阶段与 PG 路径
 pnpm --dir desktop typecheck   # tsc --noEmit（含测试文件）
+pnpm --dir desktop dist        # Fresh Build -> dist/win-unpacked/StayOps.exe
+node desktop/scripts/verify_icons.cjs   # 打包产物品牌校验（asar 清单 / 字节一致 /
+                                        #   exe 内嵌图标探针），失败退出非 0
 ```
 
 ## 11. D1 已知限制
@@ -220,8 +224,15 @@ pnpm --dir desktop typecheck   # tsc --noEmit（含测试文件）
 
 ## 12. 自带 PostgreSQL Runtime（独立运行）
 
-StayOps Desktop 自带并自主管理 PostgreSQL 16 实例，开机双击 StayOps.exe
-即可独立运行，不依赖 Docker Desktop / 系统 PostgreSQL / 开发工具。
+StayOps Desktop 自带并自主管理 PostgreSQL 16 实例，双击 StayOps.exe
+即可运行，不依赖 Docker Desktop / 系统 PostgreSQL / 开发工具。
+
+> **范围说明（避免误读）**：本能力解除的是**数据库依赖**，不是 workspace 依赖。
+> Desktop 仍运行于 StayOps 工作区 runtime layout（`backend/.venv`、
+> `frontend/node_modules`、Node.js、`runtime/postgres` 二进制），尚未实现完整
+> runtime bundling 与安装器。因此它不是「完全独立安装版」，也不是 Desktop D2；
+> 当前准确表述是：**StayOps Desktop 在当前开发机 runtime layout 上自管理其
+> PostgreSQL 实例**。
 
 - 二进制：`runtime/postgres/pgsql/`（EDB Windows binaries 解压，gitignored，
   随 runtime 分发；缺失时启动窗口明确报错）。
