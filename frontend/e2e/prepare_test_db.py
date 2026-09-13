@@ -25,6 +25,26 @@ os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 from sqlalchemy import create_engine, text  # noqa: E402
 from sqlalchemy.engine.url import make_url  # noqa: E402
 
+CREDS_FILE = Path(__file__).resolve().parent / ".env.test-creds"
+
+
+def load_admin_password() -> str | None:
+    """bootstrap 管理员密码（D2 起 seed.py 不再内置默认值）。
+
+    与 backend/tests/conftest.py 同一契约：由调用方显式提供。
+    E2E 从 gitignored 的 e2e/.env.test-creds 读取 E2E_ADMIN_PASSWORD
+    （缺失即失败，绝不静默使用任何默认密码）。
+    """
+    password = os.environ.get("E2E_ADMIN_PASSWORD")
+    if password:
+        return password
+    if CREDS_FILE.exists():
+        for line in CREDS_FILE.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith("E2E_ADMIN_PASSWORD="):
+                return line.split("=", 1)[1].strip()
+    return None
+
 
 def main() -> None:
     url = make_url(TEST_DATABASE_URL)
@@ -42,6 +62,14 @@ def main() -> None:
     cfg = Config(str(BACKEND_DIR / "alembic.ini"))
     cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
     command.upgrade(cfg, "head")
+
+    admin_password = load_admin_password()
+    if not admin_password:
+        raise SystemExit(
+            "[prepare_test_db] 缺少 E2E_ADMIN_PASSWORD：seed 需要 bootstrap 管理员密码。"
+            "请复制 e2e/test-creds.example 为 e2e/.env.test-creds 并填写（该文件已被 gitignore）。"
+        )
+    os.environ["STAYOPS_ADMIN_PASSWORD"] = admin_password
 
     from app.seed import seed  # noqa: E402
 
