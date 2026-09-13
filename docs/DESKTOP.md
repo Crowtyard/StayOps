@@ -1,7 +1,7 @@
 # StayOps Desktop（Windows 桌面客户端）— Desktop D1
 
-> 版本：v1.0.0-alpha.9.3（Desktop D1 里程碑）
-> 状态：v1.0.0-alpha.9.3 已发布（Formal Release Gate 全绿，验证结果见 §10）
+> 版本：v1.0.0-alpha.9.4（Desktop D2 foundation：Fully Bundled Installer）
+> 状态：v1.0.0-alpha.9.4 已构建安装包（本机验证通过；clean-machine QA 待用户 VM/PC）
 
 ## 1. 是什么
 
@@ -194,7 +194,7 @@ scripts/
 ## 10. 测试
 
 ```bash
-pnpm --dir desktop test        # Vitest 62 用例（v1.0.0-alpha.9.3 实测）：端口预检/路径解析/
+pnpm --dir desktop test        # Vitest 68 用例（v1.0.0-alpha.9.4 实测）：端口预检/路径解析/
                                #   迁移解析/scrub/进程所有权/优雅停机/单实例/
                                #   IPC 白名单/db-ensure 启动阶段与 PG 路径
 pnpm --dir desktop typecheck   # tsc --noEmit（含测试文件）

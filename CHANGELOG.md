@@ -2,6 +2,63 @@
 
 All notable changes to StayOps will be documented in this file.
 
+## [v1.0.0-alpha.9.4] - 2026-09-13
+
+### Added
+
+- **Fully Bundled Windows Installer（Desktop D2 foundation）**：
+  `StayOps-Setup-1.0.0-alpha.9.4.exe`（NSIS，per-user）——安装包内含
+  Electron 客户端、Next.js production standalone、FastAPI 后端、Python
+  运行时与后端依赖、PostgreSQL 16 二进制、Alembic 迁移、桌面运行时脚本与
+  品牌资源；用户机器**无需预装** Python / Node.js / pnpm / PostgreSQL /
+  Docker / Git，也无需 `STAYOPS_ROOT` 或 `backend/.venv`
+- **Packaged Mode**：`buildPaths()` 按 `isPackaged` 分支，安装版全部从
+  `process.resourcesPath` 解析（`resources/{backend,python,postgres,node,
+  scripts,frontend-server}`）；packaged 布局按结构识别，不再需要
+  `AGENTS.md` / `.venv`；源码中不再包含硬编码开发机路径
+- **首次安装引导**：幂等 seed（权限/角色/房型/房间）+ 每台安装独立的随机
+  SUPER_ADMIN 初始密码（DPAPI 保护、只注入 seed 进程、只在首次启动 UI
+  显示一次、绝不写入任何日志）；`must_change_password` 由后端强制，前端
+  `/change-password` 引导改密，改密成功后自动销毁引导凭据
+- **每台安装独立的 AI_ENCRYPTION_KEY**：随机 32 字节 Fernet 密钥 + DPAPI，
+  仅注入后端进程；不再允许回退到公开的开发默认值（packaged 模式 Fail Safe）
+- **前端自包含**：standalone 的 pnpm junction 全部物化为真实文件、虚拟存储
+  提升到顶层（修复 `@swc/helpers` 解析）、排除 source map、清除 Next 内嵌的
+  构建机绝对路径
+- 桌面构建脚本：`bundle-runtimes.mjs`（装配运行时 + 违禁内容安全扫描）、
+  `dist:installer`（NSIS 安装包）
+
+### Fixed
+
+- `icacls` 账号名授权生成无效 ACE，配合 `/inheritance:r` 会把当前用户锁在
+  `%PROGRAMDATA%\StayOps\config` 之外（alpha.9.3 遗留的机器状态已实测复现）；
+  改为 SID 授权 + 读/写回校验 + 目录不可写时自愈修复
+- `seed()` 的 stdout 输出污染探针 JSON 契约（成功的 seed 被判为失败）
+- `dev_runtime._alembic` 硬编码工作区 `.venv` 解释器，安装版报
+  `FileNotFoundError`；改为使用当前解释器
+- 全新空数据库被判为迁移状态异常（应为 BEHIND，走用户确认升级流程）
+- `desktop_db_backup.py` 仅识别开发布局的 PostgreSQL bin 路径
+- `scripts/desktop_runtime.py` 重复的 `_pg_run` 定义、initdb 前 mkdir 顺序
+
+### Verified
+
+- Backend pytest: 649 passed
+- Frontend Vitest: 462 passed（59 文件）；lint / typecheck PASS
+- Desktop Vitest: 68 passed；typecheck PASS
+- 打包运行实证（本机模拟干净环境：独立 `PROGRAMDATA`/`LOCALAPPDATA`）：
+  自管理 PostgreSQL 首次 initdb → 迁移至 head → 基础数据 seed → 首次启动
+  显示管理员初始密码（日志中为 `***`）→ 登录 200 → 改密前业务接口 403 →
+  改密 200 → 业务接口 200 → 重启后引导凭据已销毁 → Runtime READY
+- 前端自包含实证：物化后的 `resources/frontend-server` 仅用 bundled Node
+  启动并对 `/login` 返回 200（不依赖开发机 `node_modules`）
+
+### Limitations
+
+- **尚未完成 clean-machine QA**：本机为 Windows 10 Home，无 Hyper-V /
+  Windows Sandbox / VMware / VirtualBox，需在干净 VM/PC 上验证后方可发布
+- 打包未签名（无 code signing），Windows SmartScreen 可能提示
+- Portable 目标仍未正式交付；本版不含自动更新
+
 ## [v1.0.0-alpha.9.3] - 2026-09-13
 
 ### Added

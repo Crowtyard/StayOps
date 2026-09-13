@@ -76,9 +76,11 @@ Copy-Item .env.example .env.local   # BACKEND_API_URL / NEXT_PUBLIC_APP_NAME
 
 ## Desktop（Windows 桌面客户端）
 
-> 里程碑：Desktop D1（v1.0.0-alpha.9.3）——把 StayOps 封装为可双击使用的 Windows 客户端（Electron + Next.js Production standalone + FastAPI Production + StayOps 自管理 PostgreSQL）。完整说明见 [docs/DESKTOP.md](docs/DESKTOP.md)。
+> 里程碑：Desktop D1 + D2 foundation（v1.0.0-alpha.9.4）——把 StayOps 封装为可安装的 Windows 客户端（Electron + Next.js Production standalone + FastAPI Production + 自管理 PostgreSQL + 全部运行时随包分发）。完整说明见 [docs/DESKTOP.md](docs/DESKTOP.md)。
 
-- 双击 `desktop/dist/win-unpacked/StayOps.exe` → 启动窗口 → 自动检查 Runtime → 自管理 PostgreSQL（init/start/ready/建库）→ Alembic 检查 → 启动后端（127.0.0.1:8100）与前端（127.0.0.1:3100，Production standalone）→ 打开 StayOps 主窗口（1440×900）。`StayOps-Portable-*.exe` **尚未正式交付**（见下方 D1 限制）。
+- **安装版（推荐）**：下载 `StayOps-Setup-1.0.0-alpha.9.4.exe` → 双击安装（per-user，无需管理员）→ 开始菜单/桌面快捷方式启动 → 自动初始化本机 PostgreSQL、执行迁移、启动前后端 → 打开主窗口。首次启动会在启动窗口**只显示一次**管理员初始密码（登录后必须立即修改）。
+- 下载包**已包含** Python / Node.js / PostgreSQL / 前端生产构建，用户机器**无需**预装任何组件（Python、Node、pnpm、PostgreSQL、Docker、Git 均不需要），也无需设置 `STAYOPS_ROOT`。
+- 开发者本机运行：双击 `desktop/dist/win-unpacked/StayOps.exe` → 启动窗口 → 自动检查 Runtime → 自管理 PostgreSQL（init/start/ready/建库）→ Alembic 检查 → 启动后端（127.0.0.1:8100）与前端（127.0.0.1:3100，Production standalone）→ 打开 StayOps 主窗口（1440×900）。`StayOps-Portable-*.exe` **尚未正式交付**（见下方 D1/D2 限制）。
 - 普通使用**不需要**打开 PowerShell / CMD / VS Code / DSH；全程零控制台弹窗。
 - 独立端口：Backend `8100`、Frontend `3100`（仅 127.0.0.1），与开发模式（8000/3000）、E2E（8001/3001）互不冲突。
 - 数据库与迁移：启动时只读检查 `stayops` 库 `alembic current == heads`；落后时显示「数据库需要升级」并由用户确认后才 `upgrade head`（多 head Fail Safe，绝不自动降级）。
@@ -89,7 +91,8 @@ Copy-Item .env.example .env.local   # BACKEND_API_URL / NEXT_PUBLIC_APP_NAME
 cd desktop
 pnpm.cmd install
 pnpm.cmd build:frontend   # Next standalone -> frontend/.next-desktop/standalone（桌面专用，不影响开发 .next）
-pnpm.cmd dist             # tsc 编译 + electron-builder -> desktop/dist/win-unpacked/StayOps.exe
+pnpm.cmd dist             # 开发机构建：tsc 编译 + electron-builder -> desktop/dist/win-unpacked/StayOps.exe
+pnpm.cmd dist:installer   # 安装包：装配 bundled runtime + NSIS -> desktop/dist/StayOps-Setup-<version>.exe
 pnpm.cmd dist:portable    # 实验性：Portable 目标尚未正式交付（standalone node_modules 未自包含）
 pnpm.cmd test             # 桌面自动化测试（Vitest）
 ```
@@ -100,7 +103,7 @@ pnpm.cmd test             # 桌面自动化测试（Vitest）
 ## 测试
 
 ```powershell
-# 后端 pytest（独立测试库 stayops_test，646 用例；含 P0 并发 stress）
+# 后端 pytest（独立测试库 stayops_test，649 用例；含 P0 并发 stress）
 cd backend
 .venv\Scripts\python.exe -m pytest -q
 
