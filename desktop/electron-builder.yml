@@ -20,6 +20,7 @@ files:
   - "!dist/win-unpacked"
   - src/startup/**
   - assets/**
+  - "!assets/icon-master.png"
   - package.json
 
 # 前端生产构建（Next standalone）由 scripts/install-standalone.mjs 经
@@ -28,6 +29,11 @@ files:
 # node_modules 且不跟随 pnpm junction；afterPack 在打包后、portable 压缩前
 # 执行，dir 与 portable 两个目标都自动携带资源。
 afterPack: scripts/after-pack.cjs
+
+# 离线构建：直接复用 node_modules/electron/dist（pnpm 安装的固定版本
+# electron@44.0.0），不再联网下载 electron zip（网络受限环境必需，
+# 且保证打包二进制与 devDependency 版本严格一致）。
+electronDist: node_modules/electron/dist
 
 asar: true
 compression: normal

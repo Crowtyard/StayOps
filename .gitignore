@@ -37,3 +37,7 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
+
+
+# StayOps embedded PostgreSQL runtime binaries (not committed)
+runtime/postgres/

@@ -26,6 +26,7 @@ export interface ProbeOptions {
   args: string[];
   cwd: string;
   timeoutMs?: number;
+  env?: NodeJS.ProcessEnv;
 }
 
 /** 运行一次性 Python 探针（windowsHide，无控制台弹窗；超时即终止自己的子进程）。 */
@@ -36,6 +37,7 @@ export function runProbe(opts: ProbeOptions): Promise<ProbeRun> {
       cwd: opts.cwd,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
+      env: opts.env,
     });
     let stdout = "";
     let stderr = "";
@@ -106,6 +108,21 @@ export interface DbCheckData {
   error: string | null;
 }
 
+export interface DbEnsureData {
+  ok: boolean;
+  initialized: boolean;
+  dbUrl: string | null;
+  error: string | null;
+}
+
+/** 自带 PostgreSQL Runtime 的路径参数（与 config.ts 的 DesktopPaths 对应）。 */
+export interface PgRuntimePaths {
+  bin: string;
+  data: string;
+  creds: string;
+  port: number;
+}
+
 export interface MigrationStatusData {
   state: "OK" | "BEHIND" | "MULTI_HEAD" | "ERROR";
   current: string | null;
@@ -147,6 +164,32 @@ export function dbCheck(ctx: ProbeContext): Promise<ProbeOutcome<DbCheckData>> {
     script: ctx.probeScript,
     args: ["db-check"],
     cwd: ctx.cwd,
+  });
+}
+
+/** 确保自带 PostgreSQL Runtime 运行（init / start / ready / 建库），成功返回 dbUrl。 */
+export function dbEnsure(
+  ctx: ProbeContext,
+  pg: PgRuntimePaths,
+): Promise<ProbeOutcome<DbEnsureData>> {
+  return probeJson<DbEnsureData>({
+    python: ctx.python,
+    script: ctx.probeScript,
+    args: [
+      "db-ensure",
+      "--pg-bin",
+      pg.bin,
+      "--data-dir",
+      pg.data,
+      "--creds-file",
+      pg.creds,
+      "--port",
+      String(pg.port),
+      "--timeout-ms",
+      "120000",
+    ],
+    cwd: ctx.cwd,
+    timeoutMs: 180_000,
   });
 }
 

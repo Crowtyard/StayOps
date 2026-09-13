@@ -711,6 +711,47 @@ dev standalone 均报 Cannot find module '@swc/helpers/_/_interop_require_defaul
    → WM_CLOSE 优雅关闭 → backend exit 0 → 端口 8100/3100 释放 → 无关
    Node/Python 进程（17 个快照逐一比对）零变化；无可视控制台窗口。
 
+## 2026-08-31 — StayOps Desktop：自带 PostgreSQL Runtime（独立运行，不依赖 Docker/开发环境）
+
+背景：StayOps Desktop 的 PostgreSQL 原由开发环境顺带维护（Docker Desktop
++ `docker compose up -d postgres` 的 stayops-postgres 容器，Docker Desktop
+`AutoStart=false`）。关闭全部开发工具后 5432 无监听 → 桌面版 database
+阶段（纯检测）报 DB_UNAVAILABLE，桌面软件无法独立运行。
+
+决策（方案①自带 Runtime，对比 Docker Desktop 自动启动 / Windows 服务 /
+现状后选定；详见 docs/DESKTOP.md §12）：
+
+1. **PostgreSQL 16 Windows binaries 随 runtime 分发**：`<workspace>/runtime/postgres/pgsql/`
+   （16.15 EDB binaries zip 解压、移除 pgAdmin/StackBuilder 后约 150MB；
+   gitignored，不入库不入 asar；下载一次离线可用）。
+2. **数据目录彻底分离**：`%PROGRAMDATA%\StayOps\PostgreSQL\data`（升级/替换
+   程序目录永不触碰业务数据）；仅监听 127.0.0.1:5433（与开发 Docker 5432 并存，
+   默认不暴露局域网）。
+3. **凭据自动生成并收紧**：`%PROGRAMDATA%\StayOps\PostgreSQL\conf\dbpass.conf`
+   （token_urlsafe(24)，icacls 仅当前用户+SYSTEM+Administrators 读；曾踩坑：
+   icacls `(R)` 括号语法非法且 os.environ USERNAME 不可靠——改为 getpass.getuser()
+   + `:R` 无括号 + 写后读回校验）。
+4. **db-ensure 探针**（scripts/desktop_runtime.py）：检测 → 首次 initdb
+   （-U stayops -A scram-sha-256 --pwfile -E UTF8 --locale=C）→ pg_ctl start -w
+   → pg_isready+psql -w（-w 禁密码提示 + stdin DEVNULL，杜绝交互挂起）→
+   幂等 CREATE DATABASE stayops；成功返回 dbUrl（仅经进程管道给 Electron）。
+   Electron 主进程注入 `process.env.DATABASE_URL`，backend/app/config.py
+   环境变量优先级 > .env > 默认值，探针与 backend 子进程自动继承；
+   启动窗口 database 阶段 = dbEnsure（180s 超时 + 分步 stderr 进度）。
+5. **退出策略（可靠性优先）**：PG 以独立进程运行（pg_ctl 启动，与 StayOps
+   解耦），StayOps 退出后**保持运行**——再次打开秒连、异常关机由 WAL 恢复；
+   暂不做「停止数据库」托盘入口。
+6. **备份/恢复**：`scripts/desktop_db_backup.py`（pg_dump -Fc →
+   `%PROGRAMDATA%\StayOps\backups\` + SHA-256 侧车；`--restore <dump> --yes`
+   显式恢复）。
+7. **数据迁移（已执行）**：Docker 源库只读盘点（PG 16.15 / 31 表 / rooms 28 /
+   reservations 3 / audit_logs 512 / alembic f5d3b9e7a2c4）→ 双格式备份
+   （-Fc 176,263B SHA256 DC871FC8…、SQL 261,370B SHA256 F1EE429B…；首次导出
+   被 PowerShell 5.1 二进制重定向损坏——改经 cmd.exe 原生重定向重导）→
+   新实例 restore → 对账（31/31 表名一致、行数一致、alembic head 一致、
+   stayops_ai_reader 角色密码与后端配置同步）。Docker 容器与
+   stayops_stayops_pgdata volume 原样保留作回退，用户确认前不删除。
+
 
 
 

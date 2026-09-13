@@ -18,6 +18,10 @@ const FAKE_PATHS: DesktopPaths = {
   nodeExe: "node",
   logsDir: "C:\\Users\\t\\AppData\\Local\\StayOps\\logs",
   trayIcon: "C:\\stayops\\desktop\\assets\\tray.png",
+  appIcon: "C:\\stayops\\desktop\\assets\\app-icon.png",
+  pgBinDir: "C:\\stayops\\runtime\\postgres\\pgsql\\bin",
+  pgDataDir: "C:\\ProgramData\\StayOps\\PostgreSQL\\data",
+  pgCredsFile: "C:\\ProgramData\\StayOps\\PostgreSQL\\conf\\dbpass.conf",
   startupHtml: "C:\\stayops\\desktop\\src\\startup\\index.html",
 };
 
@@ -29,11 +33,16 @@ function realPaths(): DesktopPaths {
   tmpRoots.push(root);
   const venv = path.join(root, "backend", ".venv", "Scripts", "python.exe");
   const serverJs = path.join(root, "frontend", ".next-desktop", "standalone", "server.js");
+  const pgBin = path.join(root, "runtime", "postgres", "pgsql", "bin");
   fs.mkdirSync(path.dirname(venv), { recursive: true });
   fs.mkdirSync(path.dirname(serverJs), { recursive: true });
+  fs.mkdirSync(pgBin, { recursive: true });
   fs.writeFileSync(venv, "");
   fs.writeFileSync(serverJs, "");
-  return { ...FAKE_PATHS, venvPython: venv, frontendServerJs: serverJs };
+  for (const exe of ["postgres.exe", "initdb.exe", "pg_ctl.exe", "psql.exe"]) {
+    fs.writeFileSync(path.join(pgBin, exe), "");
+  }
+  return { ...FAKE_PATHS, venvPython: venv, frontendServerJs: serverJs, pgBinDir: pgBin };
 }
 
 afterAll(() => {
@@ -51,6 +60,12 @@ function makeDeps(overrides: Partial<StartupDeps> = {}): {
     paths: realPaths(),
     supervisor: { stopAll: vi.fn().mockResolvedValue(undefined) } as never,
     findOccupants: vi.fn().mockResolvedValue([] as OccupiedPort[]),
+    dbEnsure: vi.fn().mockResolvedValue({
+      ok: true,
+      data: { ok: true, initialized: false, dbUrl: "postgresql://stayops:***@127.0.0.1:5433/stayops", error: null },
+      error: null,
+      exitCode: 0,
+    }),
     dbCheck: vi
       .fn()
       .mockResolvedValue({ ok: true, data: { ok: true, error: null }, error: null, exitCode: 0 }),
@@ -121,19 +136,28 @@ describe("startup: 状态机（D1 §15/§16）", () => {
     expect(deps.spawnFrontend).not.toHaveBeenCalled();
   });
 
-  it("数据库不可达 → DB_UNAVAILABLE", async () => {
+  it("数据库不可达 → DB_UNAVAILABLE（db-ensure 失败，含可读原因）", async () => {
     const { deps, events } = makeDeps({
-      dbCheck: vi.fn().mockResolvedValue({
+      dbEnsure: vi.fn().mockResolvedValue({
         ok: true,
-        data: { ok: false, error: "PostgreSQL 连接被拒绝（127.0.0.1:5432）" },
+        data: {
+          ok: false,
+          initialized: false,
+          dbUrl: null,
+          error: "PostgreSQL 启动失败（仅监听 127.0.0.1:5433）：端口被占用",
+        },
         error: null,
         exitCode: 0,
       }),
     });
     const runner = new StartupRunner(deps);
     await runner.run();
-    const err = events.find((e) => e.type === "error") as { type: string; code: string } | undefined;
+    const err = events.find((e) => e.type === "error") as
+      | { type: string; code: string; message: string; detail?: string }
+      | undefined;
     expect(err?.code).toBe("DB_UNAVAILABLE");
+    expect(err?.message).toContain("PostgreSQL");
+    expect(err?.detail).toContain("127.0.0.1:5433");
     expect(deps.spawnBackend).not.toHaveBeenCalled();
   });
 

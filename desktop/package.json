@@ -9,7 +9,7 @@
     "build:frontend": "node scripts/build-frontend.mjs",
     "build": "npm run build:main && npm run build:frontend",
     "start": "npm run build:main && electron .",
-    "dist": "..\\backend\\.venv\\Scripts\\python.exe scripts\\make_icon.py && npm run build && electron-builder --win dir",
+    "dist": "set \"CSC_IDENTITY_AUTO_DISCOVERY=false\"&& node_modules\\electron\\dist\\electron.exe scripts\\make-brand-icons.cjs assets\\icon-master.png && npm run build && electron-builder --win dir",
     "dist:portable": "electron-builder --win portable",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.typecheck.json"

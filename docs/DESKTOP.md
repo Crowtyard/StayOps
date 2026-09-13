@@ -166,7 +166,7 @@ desktop/
   package.json / tsconfig.json / vitest.config.mts / electron-builder.yml
   scripts/
     build-frontend.mjs      # Next standalone 构建 + 装配（static/public）
-    make_icon.py            # 图标生成（纯 stdlib）
+    make-brand-icons.cjs   # 品牌图标生成（Electron nativeImage 缩放，母版 assets/icon-master.png）
   src/
     main.ts                 # Electron 主进程编排（单实例/窗口/托盘/IPC/停机）
     preload.ts              # 白名单 Bridge 接线
@@ -185,8 +185,10 @@ desktop/
 backend/scripts/
   desktop_backend_runner.py # uvicorn in-process + stdin 优雅停机桥
 scripts/
-  desktop_runtime.py        # 桌面探针 CLI（db-check / migration-status /
-                            #   migration-upgrade / ports-check，JSON 输出）
+  desktop_runtime.py        # 桌面探针 CLI（db-ensure / db-check /
+                            #   migration-status / migration-upgrade /
+                            #   ports-check，JSON 输出）
+  desktop_db_backup.py      # 自带 PostgreSQL 备份/恢复（pg_dump -Fc + SHA-256）
 ```
 
 ## 10. 测试
@@ -199,11 +201,11 @@ pnpm --dir desktop typecheck   # tsc --noEmit（含测试文件）
 
 ## 11. D1 已知限制
 
-- 依赖本机 PostgreSQL / StayOps venv / Node.js（无新电脑一键安装）。
+- 依赖 StayOps 工作区（backend/.venv + frontend/node_modules + Node.js）；
+  PostgreSQL 由 StayOps 自带 Runtime 提供（见 §12），不再依赖 Docker/系统安装。
 - 前端生产构建需在打包前执行 `build:frontend`（未自动触发）。
 - 打包未签名（无 code signing），Windows SmartScreen 可能提示。
-- D1 不做：NSIS Setup.exe、自动更新、bundled PostgreSQL、托盘常驻后台
-  （主窗口关闭即退出）。
+- D1 不做：NSIS Setup.exe、自动更新、托盘常驻后台（主窗口关闭即退出）。
 - 工作区路径默认 `D:\MY SELF\StayOps V1.0`，可用 `STAYOPS_ROOT` 覆盖。
 - **Portable 目标 D1 未交付**：Next standalone 的 node_modules 为指向工作区
   `frontend/node_modules` 的 junction（pnpm 兄弟依赖解析所必需），
@@ -215,3 +217,24 @@ pnpm --dir desktop typecheck   # tsc --noEmit（含测试文件）
   POST /ai-manager/chat 设置独立 BFF 超时 90s（`AI_CHAT_TIMEOUT_MS`，
   依据 S9 provider 超时 60s + 余量；实测真实响应 15.7s 正常通过），
   其余 BFF 请求保持 15s 不变；详见 docs/DECISIONS.md。
+
+## 12. 自带 PostgreSQL Runtime（独立运行）
+
+StayOps Desktop 自带并自主管理 PostgreSQL 16 实例，开机双击 StayOps.exe
+即可独立运行，不依赖 Docker Desktop / 系统 PostgreSQL / 开发工具。
+
+- 二进制：`runtime/postgres/pgsql/`（EDB Windows binaries 解压，gitignored，
+  随 runtime 分发；缺失时启动窗口明确报错）。
+- 数据目录：`%PROGRAMDATA%\StayOps\PostgreSQL\data`（与程序目录彻底分离，
+  升级永不触碰业务数据）。
+- 凭据：`%PROGRAMDATA%\StayOps\PostgreSQL\conf\dbpass.conf`（首次 initdb
+  自动生成 scram 密码，icacls 收紧 ACL）。
+- 网络：仅监听 `127.0.0.1:5433`（与开发 Docker 5432 并存，不暴露局域网）。
+- 启动链：`StayOps.exe → db-ensure 探针（init/start/ready/建库）→
+  alembic 检查 → backend(注入 DATABASE_URL) → frontend → 主窗口`。
+- 生命周期：pg_ctl 独立进程，StayOps 退出后 PostgreSQL 保持运行
+  （可靠性优先：秒级重开 + WAL 崩溃恢复）。
+- 备份/恢复：`python scripts/desktop_db_backup.py`（备份到
+  `%PROGRAMDATA%\StayOps\backups\`；`--restore <dump> --yes` 恢复）。
+- 首次全新安装流程：initdb 自动完成 → 启动窗口提示数据库升级 → 用户确认
+  alembic upgrade head → 进入应用（与既有迁移 UX 一致）。

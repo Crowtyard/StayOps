@@ -16,6 +16,8 @@ export const DESKTOP_BACKEND_HOST = "127.0.0.1";
 export const DESKTOP_FRONTEND_HOST = "127.0.0.1";
 export const DESKTOP_BACKEND_PORT = 8100;
 export const DESKTOP_FRONTEND_PORT = 3100;
+/** StayOps 自带 PostgreSQL Runtime 端口（仅监听 127.0.0.1，与开发 Docker 5432 并存）。 */
+export const DESKTOP_PG_PORT = 5433;
 export const BACKEND_API_URL = `http://${DESKTOP_BACKEND_HOST}:${DESKTOP_BACKEND_PORT}`;
 export const FRONTEND_URL = `http://${DESKTOP_FRONTEND_HOST}:${DESKTOP_FRONTEND_PORT}`;
 
@@ -36,6 +38,11 @@ export interface DesktopPaths {
   nodeExe: string;
   logsDir: string;
   trayIcon: string;
+  appIcon: string;
+  /** StayOps 自带 PostgreSQL Runtime（详见 docs/DECISIONS.md） */
+  pgBinDir: string;
+  pgDataDir: string;
+  pgCredsFile: string;
   startupHtml: string;
 }
 
@@ -105,6 +112,9 @@ export function buildPaths(
     ? path.join(resources, "frontend-server")
     : path.join(workspaceRoot, "frontend", ".next-desktop", "standalone");
   const desktopDir = path.join(workspaceRoot, "desktop");
+  // 数据库数据目录与程序目录彻底分离（升级不触碰；%PROGRAMDATA%\StayOps）
+  const programData = process.env.PROGRAMDATA ?? "C:\\ProgramData";
+  const pgHome = path.join(programData, "StayOps", "PostgreSQL");
   return {
     workspaceRoot,
     backendDir: path.join(workspaceRoot, "backend"),
@@ -122,6 +132,12 @@ export function buildPaths(
     nodeExe: opts.nodeExe ?? process.env.STAYOPS_NODE ?? "node",
     logsDir: path.join(localAppData, "StayOps", "logs"),
     trayIcon: path.join(desktopDir, "assets", "tray.png"),
+    appIcon: packaged
+      ? path.join(opts.appPath ?? desktopDir, "assets", "app-icon.png")
+      : path.join(desktopDir, "assets", "app-icon.png"),
+    pgBinDir: path.join(workspaceRoot, "runtime", "postgres", "pgsql", "bin"),
+    pgDataDir: path.join(pgHome, "data"),
+    pgCredsFile: path.join(pgHome, "conf", "dbpass.conf"),
     startupHtml: packaged
       ? path.join(opts.appPath ?? desktopDir, "src", "startup", "index.html")
       : path.join(desktopDir, "src", "startup", "index.html"),

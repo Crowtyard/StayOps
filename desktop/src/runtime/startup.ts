@@ -11,6 +11,7 @@
  */
 
 import fs from "node:fs";
+import path from "node:path";
 import type { DesktopPaths } from "./config";
 import {
   DESKTOP_BACKEND_HOST,
@@ -21,6 +22,7 @@ import {
 import type { OccupiedPort } from "./preflight";
 import type {
   DbCheckData,
+  DbEnsureData,
   MigrationStatusData,
   MigrationUpgradeData,
   ProbeOutcome,
@@ -59,6 +61,8 @@ export interface StartupDeps {
   paths: DesktopPaths;
   supervisor: ProcessSupervisor;
   findOccupants: () => Promise<OccupiedPort[]>;
+  /** 确保自带 PostgreSQL Runtime 运行（init/start/ready/建库）；成功后主进程注入 DATABASE_URL。 */
+  dbEnsure: () => Promise<ProbeOutcome<DbEnsureData>>;
   dbCheck: () => Promise<ProbeOutcome<DbCheckData>>;
   migrationStatus: () => Promise<ProbeOutcome<MigrationStatusData>>;
   migrationUpgrade: () => Promise<ProbeOutcome<MigrationUpgradeData>>;
@@ -234,6 +238,12 @@ export class StartupRunner {
     const missing: string[] = [];
     if (!fs.existsSync(p.venvPython)) missing.push("backend/.venv/Scripts/python.exe");
     if (!fs.existsSync(p.frontendServerJs)) missing.push("frontend standalone server.js");
+    const pgBinMissing = ["postgres.exe", "initdb.exe", "pg_ctl.exe", "psql.exe"].filter(
+      (name) => !fs.existsSync(path.join(p.pgBinDir, name)),
+    );
+    if (pgBinMissing.length > 0) {
+      missing.push(`runtime/postgres/pgsql/bin（缺少 ${pgBinMissing.join("、")}）`);
+    }
     if (missing.length > 0) {
       this.emitPhase("env", "error");
       this.emitError(
@@ -280,17 +290,22 @@ export class StartupRunner {
   }
 
   private async phaseDatabase(): Promise<boolean> {
-    const result = await this.deps.dbCheck();
+    // 自带 PostgreSQL Runtime：检测 → 启动/初始化 → 等待就绪 → 建库（docs/DECISIONS.md）
+    const result = await this.deps.dbEnsure();
     if (!result.ok || !result.data?.ok) {
       this.emitPhase("database", "error");
       this.emitError(
         "DB_UNAVAILABLE",
-        "无法连接 PostgreSQL",
+        "无法启动本地数据库（PostgreSQL）",
         result.data?.error ?? result.error ?? undefined,
       );
       return false;
     }
-    this.emitPhase("database", "ok");
+    this.emitPhase(
+      "database",
+      "ok",
+      result.data.initialized ? "本地数据库已初始化（127.0.0.1:5433）" : "本地数据库已就绪（127.0.0.1:5433）",
+    );
     return true;
   }
 

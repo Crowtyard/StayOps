@@ -14,6 +14,7 @@ import path from "node:path";
 import {
   DESKTOP_BACKEND_PORT,
   DESKTOP_FRONTEND_PORT,
+  DESKTOP_PG_PORT,
   FRONTEND_URL,
   KNOWN_WORKSPACE_CANDIDATES,
   buildPaths,
@@ -25,6 +26,7 @@ import { ScrubFileLogger } from "./runtime/logger";
 import { findOccupants, portInUse, resolveNodePath } from "./runtime/preflight";
 import {
   dbCheck,
+  dbEnsure,
   migrationStatus,
   migrationUpgrade,
   type ProbeContext,
@@ -39,6 +41,12 @@ import { StartupRunner, type StartupEvent } from "./runtime/startup";
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
+}
+
+// Windows 任务栏身份（与 electron-builder appId 一致）：
+// 保证任务栏按钮/跳转列表与 exe 图标正确关联，避免回退到外壳图标缓存。
+if (process.platform === "win32") {
+  app.setAppUserModelId("com.stayops.desktop");
 }
 
 // ---------------------------------------------------------------------------
@@ -78,6 +86,7 @@ function createStartupWindow(): void {
     maximizable: false,
     fullscreenable: false,
     title: "StayOps 正在启动",
+    icon: nativeImage.createFromPath(paths.appIcon),
     backgroundColor: "#f4f5f7",
     show: false,
     webPreferences: {
@@ -93,6 +102,8 @@ function createStartupWindow(): void {
   startupWindow.on("closed", () => {
     startupWindow = null;
   });
+  // 显式设置窗口图标（标题栏 + 任务栏大图标），与 exe 内嵌图标一致
+  startupWindow.setIcon(nativeImage.createFromPath(paths.appIcon));
   void startupWindow.loadFile(paths.startupHtml);
 }
 
@@ -126,6 +137,7 @@ function createMainWindow(): void {
     minWidth: 1024,
     minHeight: 700,
     title: "StayOps",
+    icon: nativeImage.createFromPath(paths.appIcon),
     backgroundColor: "#f8fafc",
     show: false,
     webPreferences: {
@@ -141,6 +153,8 @@ function createMainWindow(): void {
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
+  // 显式设置窗口图标（任务栏/Alt-Tab 大图标来源）
+  mainWindow.setIcon(nativeImage.createFromPath(paths.appIcon));
 
   // 导航防护（D1 §22）：只允许应用自身 origin；外部 URL 走系统浏览器
   mainWindow.webContents.on("will-navigate", (event, url) => {
@@ -292,6 +306,24 @@ async function bootstrap(workspaceRoot: string | null): Promise<void> {
         { label: "backend", port: DESKTOP_BACKEND_PORT },
         { label: "frontend", port: DESKTOP_FRONTEND_PORT },
       ]),
+    dbEnsure: async () => {
+      const result = await dbEnsure(ctx, {
+        bin: paths.pgBinDir,
+        data: paths.pgDataDir,
+        creds: paths.pgCredsFile,
+        port: DESKTOP_PG_PORT,
+      });
+      if (result.ok && result.data?.ok && result.data.dbUrl) {
+        // 后续探针与 backend/frontend 子进程继承本进程环境变量
+        // （backend/app/config.py 优先级：环境变量 > .env > 默认值）
+        process.env.DATABASE_URL = result.data.dbUrl;
+        logger.write(
+          "DB",
+          `embedded PostgreSQL ready (127.0.0.1:${DESKTOP_PG_PORT}, initialized=${result.data.initialized})`,
+        );
+      }
+      return result;
+    },
     dbCheck: () => dbCheck(ctx),
     migrationStatus: () => migrationStatus(ctx),
     migrationUpgrade: () => migrationUpgrade(ctx),
