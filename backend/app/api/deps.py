@@ -11,7 +11,7 @@
 
 from collections.abc import Callable
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -40,9 +40,14 @@ def _unauthorized(detail: str) -> HTTPException:
 
 def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    request: Request = None,  # type: ignore[assignment]
     db: Session = Depends(get_db),
 ) -> User:
-    """当前登录用户；缺 Token/无效 Token 401，账号禁用 403。"""
+    """当前登录用户；缺 Token/无效 Token 401，账号禁用 403。
+
+    D2：首次安装（bootstrap 管理员）在修改初始密码之前，除白名单路径外一律 403 ——
+    强制改密由后端保证，不能只靠前端跳转。
+    """
     if credentials is None or not credentials.credentials:
         raise _unauthorized("未认证：缺少 Bearer Token")
     user_id = decode_access_token(credentials.credentials)
@@ -55,7 +60,29 @@ def get_current_user(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="账号已禁用"
         )
+    if user.must_change_password and not _password_change_allowed(request):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="首次登录必须先修改初始密码",
+        )
     return user
+
+
+# 强制改密期间仍可访问的路径（读取自身信息 / 改密 / 退出）
+PASSWORD_CHANGE_ALLOWED_PATHS = frozenset(
+    {
+        "/api/v1/auth/me",
+        "/api/v1/auth/change-password",
+        "/api/v1/auth/logout",
+    }
+)
+
+
+def _password_change_allowed(request: "Request | None") -> bool:
+    if request is None:
+        return True  # 直接调用依赖（测试/内部）时不拦截
+    path = getattr(getattr(request, "url", None), "path", "") or ""
+    return path in PASSWORD_CHANGE_ALLOWED_PATHS
 
 
 def get_permission_codes(db: Session, user: User) -> set[str]:

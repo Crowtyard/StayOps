@@ -20,6 +20,11 @@ export default async function MainLayout({
     redirect("/login");
   }
 
+  // D2 首次安装：bootstrap 管理员必须先修改初始密码（后端同样强制，前端只做引导）
+  if (user?.must_change_password) {
+    redirect("/change-password");
+  }
+
   return (
     <AppShell user={user} offline={error !== null}>
       {children}

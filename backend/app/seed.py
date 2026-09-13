@@ -1,7 +1,13 @@
-"""幂等种子脚本（开发环境）。
+"""幂等种子脚本（开发环境 / 安装版首次初始化）。
 
 用法（backend/ 目录下）：
     .venv\\Scripts\\python.exe -m app.seed
+
+管理员 bootstrap 密码（D2 起）：
+- 不再内置固定开发密码；必须由环境变量 `STAYOPS_ADMIN_PASSWORD` 提供。
+- 开发/测试：conftest 与开发环境显式注入（安装版由 Desktop 首次启动生成随机
+  高强度密码，仅注入 seed 进程，绝不出现在源码/日志/安装包中）。
+- 缺失时直接报错（Fail Safe），不会静默使用任何默认值。
 
 幂等策略（可重复执行，重复执行结果收敛且不报错）：
 - permissions：按 code upsert（更新 name/description）
@@ -14,6 +20,7 @@
 安全：不输出任何密码、哈希、Token。
 """
 
+import os
 from decimal import Decimal
 
 from passlib.context import CryptContext
@@ -36,9 +43,20 @@ from app.models import (
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# 仅开发环境种子凭据（见 docs/SPRINT1-TASK.md）
+# 管理员 bootstrap 账号（密码由 STAYOPS_ADMIN_PASSWORD 提供，见模块 docstring）
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "Admin@123456"
+
+
+def admin_password() -> str:
+    """bootstrap 管理员密码：仅来自环境变量（开发/测试/安装版各自注入）。"""
+    password = os.environ.get("STAYOPS_ADMIN_PASSWORD")
+    if not password:
+        raise RuntimeError(
+            "STAYOPS_ADMIN_PASSWORD 未设置：seed 需要 bootstrap 管理员密码（"
+            "测试由 conftest 注入；开发环境请在 backend/.env 或 shell 中设置；"
+            "安装版由 Desktop 首次启动生成）。"
+        )
+    return password
 
 # 权限集：模块 × 操作（task 要求至少覆盖 user/role/room/room_type/audit 的 read/write/delete；
 # 额外增加 room:status_cleaning / room:status_maintenance 两个细粒度权限，
@@ -382,16 +400,20 @@ def seed_roles(db: Session, perms: dict[str, Permission]) -> dict[str, Role]:
 def seed_admin(db: Session, super_admin: Role) -> None:
     user = db.scalar(select(User).where(User.username == ADMIN_USERNAME))
     if user is None:
+        password = admin_password()
+        # 安装版首次 seed（bootstrap 凭据）→ 强制首次登录改密；开发/测试不变
+        bootstrap = os.environ.get("STAYOPS_ADMIN_BOOTSTRAP") == "1"
         user = User(
             username=ADMIN_USERNAME,
-            password_hash=pwd_context.hash(ADMIN_PASSWORD),
+            password_hash=pwd_context.hash(password),
             display_name="系统管理员",
             is_active=True,
+            must_change_password=bootstrap,
         )
         db.add(user)
         db.flush()
         # 创建时自检：哈希必须为 bcrypt 且可验证
-        if not pwd_context.verify(ADMIN_PASSWORD, user.password_hash):
+        if not pwd_context.verify(password, user.password_hash):
             raise RuntimeError("admin 密码哈希自检失败")
     elif not user.is_active:
         user.is_active = True

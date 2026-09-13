@@ -8,6 +8,7 @@ import type { OccupiedPort } from "../preflight";
 
 const FAKE_PATHS: DesktopPaths = {
   workspaceRoot: "C:\\stayops",
+  mode: "development",
   backendDir: "C:\\stayops\\backend",
   venvPython: "C:\\stayops\\backend\\.venv\\Scripts\\python.exe",
   scriptsDir: "C:\\stayops\\scripts",
@@ -22,6 +23,9 @@ const FAKE_PATHS: DesktopPaths = {
   pgBinDir: "C:\\stayops\\runtime\\postgres\\pgsql\\bin",
   pgDataDir: "C:\\ProgramData\\StayOps\\PostgreSQL\\data",
   pgCredsFile: "C:\\ProgramData\\StayOps\\PostgreSQL\\conf\\dbpass.conf",
+  configDir: "C:\\ProgramData\\StayOps\\config",
+  aiKeyFile: "C:\\ProgramData\\StayOps\\config\\ai_encryption.key",
+  adminBootstrapFile: "C:\\ProgramData\\StayOps\\config\\admin-bootstrap.dat",
   startupHtml: "C:\\stayops\\desktop\\src\\startup\\index.html",
 };
 
@@ -51,6 +55,39 @@ afterAll(() => {
   }
 });
 
+/** packed runtime layout（resources/{backend,python,postgres,frontend-server}）临时目录。 */
+function packagedPaths(overrides: Partial<DesktopPaths> = {}): DesktopPaths {
+  const res = fs.mkdtempSync(path.join(os.tmpdir(), "stayops-packaged-"));
+  tmpRoots.push(res);
+  const py = path.join(res, "python", "python.exe");
+  const serverJs = path.join(res, "frontend-server", "server.js");
+  const pgBin = path.join(res, "postgres", "pgsql", "bin");
+  fs.mkdirSync(path.join(res, "backend", "app"), { recursive: true });
+  fs.mkdirSync(path.dirname(py), { recursive: true });
+  fs.mkdirSync(path.dirname(serverJs), { recursive: true });
+  fs.mkdirSync(pgBin, { recursive: true });
+  fs.writeFileSync(path.join(res, "backend", "app", "main.py"), "");
+  fs.writeFileSync(py, "");
+  fs.writeFileSync(serverJs, "");
+  for (const exe of ["postgres.exe", "initdb.exe", "pg_ctl.exe", "psql.exe"]) {
+    fs.writeFileSync(path.join(pgBin, exe), "");
+  }
+  return {
+    ...FAKE_PATHS,
+    mode: "packaged",
+    workspaceRoot: res,
+    backendDir: path.join(res, "backend"),
+    venvPython: py,
+    backendRunner: path.join(res, "backend", "scripts", "desktop_backend_runner.py"),
+    desktopProbe: path.join(res, "scripts", "desktop_runtime.py"),
+    frontendStandaloneDir: path.join(res, "frontend-server"),
+    frontendServerJs: serverJs,
+    nodeExe: path.join(res, "node", "node.exe"),
+    pgBinDir: pgBin,
+    ...overrides,
+  };
+}
+
 function makeDeps(overrides: Partial<StartupDeps> = {}): {
   deps: StartupDeps;
   events: StartupEvent[];
@@ -69,6 +106,25 @@ function makeDeps(overrides: Partial<StartupDeps> = {}): {
     dbCheck: vi
       .fn()
       .mockResolvedValue({ ok: true, data: { ok: true, error: null }, error: null, exitCode: 0 }),
+    aiKeyEnsure: vi.fn().mockResolvedValue({
+      ok: true,
+      data: { ok: true, created: false, key: "test-key", error: null },
+      error: null,
+      exitCode: 0,
+    }),
+    seedEnsure: vi.fn().mockResolvedValue({
+      ok: true,
+      data: {
+        ok: true,
+        seeded: true,
+        createdBootstrap: false,
+        bootstrapCleared: false,
+        password: null,
+        error: null,
+      },
+      error: null,
+      exitCode: 0,
+    }),
     migrationStatus: vi.fn().mockResolvedValue({
       ok: true,
       data: { state: "OK", current: "f5d3b9e7a2c4", heads: ["f5d3b9e7a2c4"], detail: null },
@@ -159,6 +215,56 @@ describe("startup: 状态机（D1 §15/§16）", () => {
     expect(err?.message).toContain("PostgreSQL");
     expect(err?.detail).toContain("127.0.0.1:5433");
     expect(deps.spawnBackend).not.toHaveBeenCalled();
+  });
+
+  it("packaged 模式：AI 密钥不可用 → ENV_MISSING（Fail Safe，不启动服务）", async () => {
+    const { deps, events } = makeDeps({
+      paths: packagedPaths(),
+      aiKeyEnsure: vi.fn().mockResolvedValue({
+        ok: true,
+        data: { ok: false, created: false, key: null, error: "DPAPI 解密失败" },
+        error: null,
+        exitCode: 0,
+      }),
+    });
+    const runner = new StartupRunner(deps);
+    await runner.run();
+    const err = events.find((e) => e.type === "error") as
+      | { type: string; code: string; message: string; detail?: string }
+      | undefined;
+    expect(err?.code).toBe("ENV_MISSING");
+    expect(err?.detail).toContain("DPAPI");
+    expect(deps.spawnBackend).not.toHaveBeenCalled();
+    expect(deps.spawnFrontend).not.toHaveBeenCalled();
+  });
+
+  it("development 模式：AI 密钥不可用 → 不阻断启动（保留 dev fallback）", async () => {
+    const { deps, events } = makeDeps({
+      aiKeyEnsure: vi.fn().mockResolvedValue({
+        ok: true,
+        data: { ok: false, created: false, key: null, error: "no dpapi" },
+        error: null,
+        exitCode: 0,
+      }),
+    });
+    const runner = new StartupRunner(deps);
+    await runner.run();
+    expect(events.find((e) => e.type === "error")).toBeUndefined();
+    expect(deps.spawnBackend).toHaveBeenCalledTimes(1);
+  });
+
+  it("packaged 模式：缺少 bundled Python → ENV_MISSING 指向 resources", async () => {
+    const paths = packagedPaths({ venvPython: "C:\\nope\\python\\python.exe" });
+    const { deps, events } = makeDeps({ paths });
+    const runner = new StartupRunner(deps);
+    await runner.run();
+    const err = events.find((e) => e.type === "error") as
+      | { type: string; code: string; message: string; detail?: string }
+      | undefined;
+    expect(err?.code).toBe("ENV_MISSING");
+    expect(err?.detail).toContain("resources/python/python.exe");
+    expect(err?.detail).toContain("重新安装 StayOps");
+    expect(deps.aiKeyEnsure).not.toHaveBeenCalled();
   });
 
   it("多 head → MIGRATION_ERROR（Fail Safe，绝不 upgrade）", async () => {

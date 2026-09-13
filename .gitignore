@@ -41,3 +41,9 @@ Thumbs.db
 
 # StayOps embedded PostgreSQL runtime binaries (not committed)
 runtime/postgres/
+
+# Desktop D2 bundled runtime staging（由 desktop/scripts/bundle-runtimes.mjs 生成）
+desktop/.bundle/
+
+# 外部工具（Kun/DSH canvas）scratch 目录（QA 脚本，不入库）
+.kun-canvas/

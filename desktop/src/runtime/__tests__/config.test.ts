@@ -3,19 +3,33 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  BUNDLED_PYTHON_REL,
   DESKTOP_BACKEND_PORT,
   DESKTOP_FRONTEND_PORT,
   KNOWN_WORKSPACE_CANDIDATES,
   buildPaths,
+  isPackagedRuntimeRoot,
   isValidWorkspaceRoot,
   resolveWorkspaceRoot,
 } from "../config";
+
+const PROGRAM_DATA = process.env.PROGRAMDATA ?? "C:\\ProgramData";
 
 function makeFakeWorkspace(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "stayops-test-"));
   fs.mkdirSync(path.join(root, "backend", ".venv", "Scripts"), { recursive: true });
   fs.writeFileSync(path.join(root, "backend", ".venv", "Scripts", "python.exe"), "");
   fs.writeFileSync(path.join(root, "AGENTS.md"), "# test");
+  return root;
+}
+
+/** 构造 packed runtime layout（resources/backend + resources/python）。 */
+function makeFakePackagedRuntime(): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "stayops-packaged-"));
+  fs.mkdirSync(path.join(root, "backend", "app"), { recursive: true });
+  fs.writeFileSync(path.join(root, "backend", "app", "main.py"), "");
+  fs.mkdirSync(path.dirname(path.join(root, BUNDLED_PYTHON_REL)), { recursive: true });
+  fs.writeFileSync(path.join(root, BUNDLED_PYTHON_REL), "");
   return root;
 }
 
@@ -70,9 +84,22 @@ describe("config: workspace 解析", () => {
     expect(resolveWorkspaceRoot({ known: ["C:\\nonexistent-stayops"] })).toBeNull();
   });
 
-  it("KNOWN_WORKSPACE_CANDIDATES 为非空且仅含当前机器路径（D1）", () => {
-    expect(KNOWN_WORKSPACE_CANDIDATES.length).toBeGreaterThan(0);
-    expect(KNOWN_WORKSPACE_CANDIDATES[0]).toContain("StayOps");
+  it("KNOWN_WORKSPACE_CANDIDATES 无硬编码开发机路径（D2 security）", () => {
+    // Electron packaged 进程提供 process.resourcesPath；纯 Node（vitest）下为空。
+    // 关键断言：不再包含任何硬编码开发机绝对路径。
+    for (const candidate of KNOWN_WORKSPACE_CANDIDATES) {
+      expect(candidate).not.toContain("MY SELF");
+      expect(candidate.toUpperCase()).not.toContain("CROWTYARD");
+    }
+    expect(KNOWN_WORKSPACE_CANDIDATES.every((c) => c === process.resourcesPath)).toBe(true);
+  });
+
+  it("packaged runtime layout 可被识别为合法 runtime 根（无需 AGENTS.md / .venv）", () => {
+    const root = makeFakePackagedRuntime();
+    expect(isPackagedRuntimeRoot(root)).toBe(true);
+    expect(isValidWorkspaceRoot(root)).toBe(true);
+    expect(resolveWorkspaceRoot({ known: [root], devRoot: undefined })).toBe(path.resolve(root));
+    fs.rmSync(root, { recursive: true, force: true });
   });
 });
 
@@ -109,10 +136,65 @@ describe("config: buildPaths", () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it("打包模式无 appPath 时回退工作区 desktop 目录", () => {
+  it("打包模式无 appPath 时回退 resources 根（不依赖工作区）", () => {
     const root = makeFakeWorkspace();
     const p = buildPaths(root, { isPackaged: true, resourcesPath: "C:\\app\\resources" });
-    expect(p.startupHtml).toBe(path.join(root, "desktop", "src", "startup", "index.html"));
+    expect(p.startupHtml).toBe(
+      path.join("C:\\app\\resources", "src", "startup", "index.html"),
+    );
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("打包模式：runtime 全部来自 resources（不依赖工作区/.venv/STAYOPS_ROOT）", () => {
+    const root = makeFakeWorkspace();
+    const resources = "C:\\app\\resources";
+    const app = "C:\\app\\resources\\app.asar";
+    const p = buildPaths(root, {
+      isPackaged: true,
+      resourcesPath: resources,
+      appPath: app,
+      localAppData: "C:\\Users\\t\\AppData\\Local",
+    });
+    expect(p.mode).toBe("packaged");
+    expect(p.workspaceRoot).toBe(resources);
+    expect(p.backendDir).toBe(path.join(resources, "backend"));
+    expect(p.venvPython).toBe(path.join(resources, "python", "python.exe"));
+    expect(p.backendRunner).toBe(
+      path.join(resources, "backend", "scripts", "desktop_backend_runner.py"),
+    );
+    expect(p.desktopProbe).toBe(path.join(resources, "scripts", "desktop_runtime.py"));
+    expect(p.nodeExe).toBe(path.join(resources, "node", "node.exe"));
+    expect(p.pgBinDir).toBe(path.join(resources, "postgres", "pgsql", "bin"));
+    expect(p.frontendStandaloneDir).toBe(path.join(resources, "frontend-server"));
+    expect(p.trayIcon).toBe(path.join(app, "assets", "tray.png"));
+    expect(p.appIcon).toBe(path.join(app, "assets", "app-icon.png"));
+    expect(p.startupHtml).toBe(path.join(app, "src", "startup", "index.html"));
+    // 数据/配置/日志与程序目录彻底分离
+    expect(p.pgDataDir).toBe(path.join(PROGRAM_DATA, "StayOps", "PostgreSQL", "data"));
+    expect(p.pgCredsFile).toBe(
+      path.join(PROGRAM_DATA, "StayOps", "PostgreSQL", "conf", "dbpass.conf"),
+    );
+    expect(p.configDir).toBe(path.join(PROGRAM_DATA, "StayOps", "config"));
+    expect(p.aiKeyFile).toBe(
+      path.join(PROGRAM_DATA, "StayOps", "config", "ai_encryption.key"),
+    );
+    expect(p.logsDir).toBe("C:\\Users\\t\\AppData\\Local\\StayOps\\logs");
+    // 不含任何工作区路径
+    expect(JSON.stringify(p)).not.toContain(root);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("开发模式：mode=development 且不触碰 packaged runtime 路径", () => {
+    const root = makeFakeWorkspace();
+    const p = buildPaths(root, {
+      isPackaged: false,
+      localAppData: "C:\\Users\\t\\AppData\\Local",
+      nodeExe: "node",
+    });
+    expect(p.mode).toBe("development");
+    expect(p.workspaceRoot).toBe(root);
+    expect(p.trayIcon).toBe(path.join(root, "desktop", "assets", "tray.png"));
+    expect(p.pgBinDir).toBe(path.join(root, "runtime", "postgres", "pgsql", "bin"));
     fs.rmSync(root, { recursive: true, force: true });
   });
 });

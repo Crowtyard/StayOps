@@ -81,3 +81,25 @@ export async function me(): Promise<MeOut> {
   }
   throw await parseError(res, "登录已失效，请重新登录");
 }
+
+/**
+ * 自助修改密码（D2 首次安装强制改密）。
+ * 成功后返回最新用户信息（must_change_password 已为 false）。
+ */
+export async function changePassword(
+  currentPassword: string,
+  newPassword: string,
+): Promise<MeOut> {
+  const res = await authFetch("/change-password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      current_password: currentPassword,
+      new_password: newPassword,
+    }),
+  });
+  if (res.ok) {
+    return (await res.json()) as MeOut;
+  }
+  throw await parseError(res, "修改密码失败，请稍后重试");
+}

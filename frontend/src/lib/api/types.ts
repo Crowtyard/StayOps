@@ -50,6 +50,12 @@ export interface MeOut {
   email: string | null;
   phone: string | null;
   is_active: boolean;
+  /**
+   * D2 首次安装：为 true 时必须先修改初始密码才能使用其它功能。
+   * 后端 `MeOut` 始终返回该字段；此处可选是为了兼容既有测试夹具
+   * （缺失按 false 处理 = 不强制改密，与后端默认值一致）。
+   */
+  must_change_password?: boolean;
   created_at: string;
   updated_at: string;
   roles: RoleBrief[];

@@ -1,12 +1,18 @@
 /**
  * Desktop 运行时配置：端口、路径解析（纯函数，便于单元测试）。
  *
- * 约束（Desktop D1）：
+ * 两种运行模式（D2 foundation）：
+ * - Development Mode（未打包）：从 StayOps 工作区解析（backend/.venv、
+ *   workspace/runtime/postgres、workspace/frontend/.next-desktop/standalone），
+ *   保持 D1 开发流程不变。
+ * - Packaged Mode（安装版）：全部从 process.resourcesPath 解析
+ *   （resources/{backend,python,postgres,node,scripts,frontend-server}），
+ *   不要求工作区、AGENTS.md、backend/.venv 或 STAYOPS_ROOT。
+ *
+ * 约束：
  * - 桌面端口 8100/3100 仅绑定 127.0.0.1（与开发 8000/3000、E2E 8001/3001 互不冲突）。
- * - 前端 standalone 启动时由主进程注入 BACKEND_API_URL=http://127.0.0.1:8100
- *   （Next 16 服务端 Route Handler 运行时读取；DESKTOP_BACKEND_PORT 改动需同步
- *   main.ts 注入值）。
  * - Electron 不读取任何 .env 秘密；DB/迁移检查全部经 Python 侧脚本完成。
+ * - 程序文件与业务数据严格分离：程序在安装目录，数据在 %PROGRAMDATA%\StayOps。
  */
 
 import fs from "node:fs";
@@ -21,14 +27,49 @@ export const DESKTOP_PG_PORT = 5433;
 export const BACKEND_API_URL = `http://${DESKTOP_BACKEND_HOST}:${DESKTOP_BACKEND_PORT}`;
 export const FRONTEND_URL = `http://${DESKTOP_FRONTEND_HOST}:${DESKTOP_FRONTEND_PORT}`;
 
-/** D1 已知工作区位置（当前机器）。可用环境变量 STAYOPS_ROOT 显式覆盖。 */
-export const KNOWN_WORKSPACE_CANDIDATES: readonly string[] = [
-  "D:\\MY SELF\\StayOps V1.0",
-];
+export type RuntimeMode = "development" | "packaged";
+
+/** bundled Python 可执行文件相对 resources/ 的位置。 */
+export const BUNDLED_PYTHON_REL = path.join("python", "python.exe");
+/** bundled Node 可执行文件相对 resources/ 的位置。 */
+export const BUNDLED_NODE_REL = path.join("node", "node.exe");
+/** bundled PostgreSQL bin 相对 resources/ 的位置。 */
+export const BUNDLED_PG_BIN_REL = path.join("postgres", "pgsql", "bin");
+
+/**
+ * Packaged runtime layout 的结构校验（不依赖任何硬编码安装路径）：
+ * resources/backend/app/main.py + resources/python/python.exe 必须存在。
+ */
+export function isPackagedRuntimeRoot(
+  candidate: string,
+  fsExists: (p: string) => boolean = fs.existsSync,
+): boolean {
+  try {
+    return (
+      fsExists(path.join(candidate, "backend", "app", "main.py")) &&
+      fsExists(path.join(candidate, BUNDLED_PYTHON_REL))
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 已安装 runtime 的候选根目录：Electron packaged 进程的 process.resourcesPath。
+ * 开发模式下该目录不含 packed runtime layout，校验自然失败；
+ * 由此**不需要**任何硬编码开发机路径（D2 security audit 要求）。
+ */
+export const KNOWN_WORKSPACE_CANDIDATES: readonly string[] = (() => {
+  const resources: unknown = (process as { resourcesPath?: unknown }).resourcesPath;
+  return typeof resources === "string" && resources.length > 0 ? [resources] : [];
+})();
 
 export interface DesktopPaths {
+  /** development: 工作区根；packaged: resources/ 目录 */
   workspaceRoot: string;
+  mode: RuntimeMode;
   backendDir: string;
+  /** Python 可执行文件（development: backend/.venv；packaged: resources/python）。 */
   venvPython: string;
   scriptsDir: string;
   backendRunner: string;
@@ -43,6 +84,12 @@ export interface DesktopPaths {
   pgBinDir: string;
   pgDataDir: string;
   pgCredsFile: string;
+  /** 安装级配置目录（%PROGRAMDATA%\StayOps\config；不随程序升级/卸载删除） */
+  configDir: string;
+  /** 每台安装独立的 AI_ENCRYPTION_KEY 派生/存储位置（见 §8 security） */
+  aiKeyFile: string;
+  /** 首次安装 bootstrap 管理员凭据（DPAPI 保护；首次改密后销毁） */
+  adminBootstrapFile: string;
   startupHtml: string;
 }
 
@@ -57,7 +104,7 @@ export interface PathBuildOptions {
 }
 
 export interface WorkspaceCandidates {
-  /** STAYOPS_ROOT 环境变量（最高优先级） */
+  /** STAYOPS_ROOT 环境变量（最高优先级，可选调试通道） */
   envRoot?: string;
   /** 打包/开发环境已知候选路径 */
   known: readonly string[];
@@ -65,24 +112,26 @@ export interface WorkspaceCandidates {
   devRoot?: string;
 }
 
-/** 校验候选是否为合法 StayOps 工作区（存在 venv 与 AGENTS.md 标记）。 */
+/**
+ * 校验候选是否为可用 runtime 根：
+ * - Development workspace：AGENTS.md + backend/.venv/Scripts/python.exe
+ * - Packaged runtime：backend/app/main.py + python/python.exe
+ */
 export function isValidWorkspaceRoot(
   candidate: string,
   fsExists: (p: string) => boolean = fs.existsSync,
 ): boolean {
   try {
-    return (
+    const devWorkspace =
       fsExists(path.join(candidate, "AGENTS.md")) &&
-      fsExists(
-        path.join(candidate, "backend", ".venv", "Scripts", "python.exe"),
-      )
-    );
+      fsExists(path.join(candidate, "backend", ".venv", "Scripts", "python.exe"));
+    return devWorkspace || isPackagedRuntimeRoot(candidate, fsExists);
   } catch {
     return false;
   }
 }
 
-/** 解析工作区根目录：STAYOPS_ROOT > 开发仓库根 > D1 已知路径。 */
+/** 解析 runtime 根目录：STAYOPS_ROOT > 开发仓库根 > packaged resources。 */
 export function resolveWorkspaceRoot(
   candidates: WorkspaceCandidates,
   fsExists: (p: string) => boolean = fs.existsSync,
@@ -107,16 +156,62 @@ export function buildPaths(
   const localAppData =
     opts.localAppData ?? process.env.LOCALAPPDATA ?? path.join(os_homedir(), "AppData", "Local");
   const packaged = opts.isPackaged;
-  const resources = opts.resourcesPath ?? "";
-  const frontendStandaloneDir = packaged
-    ? path.join(resources, "frontend-server")
-    : path.join(workspaceRoot, "frontend", ".next-desktop", "standalone");
-  const desktopDir = path.join(workspaceRoot, "desktop");
   // 数据库数据目录与程序目录彻底分离（升级不触碰；%PROGRAMDATA%\StayOps）
   const programData = process.env.PROGRAMDATA ?? "C:\\ProgramData";
-  const pgHome = path.join(programData, "StayOps", "PostgreSQL");
+  const stayOpsData = path.join(programData, "StayOps");
+  const pgHome = path.join(stayOpsData, "PostgreSQL");
+  const configDir = path.join(stayOpsData, "config");
+  const logsDir = path.join(localAppData, "StayOps", "logs");
+  const pgDataDir = path.join(pgHome, "data");
+  const pgCredsFile = path.join(pgHome, "conf", "dbpass.conf");
+  const aiKeyFile = path.join(configDir, "ai_encryption.key");
+  const adminBootstrapFile = path.join(configDir, "admin-bootstrap.dat");
+
+  if (packaged) {
+    // Packaged Mode：全部来自 process.resourcesPath（安装目录内，真实文件系统）
+    const resources = opts.resourcesPath ?? workspaceRoot;
+    const app = opts.appPath ?? resources;
+    const frontendStandaloneDir = path.join(resources, "frontend-server");
+    return {
+      workspaceRoot: resources,
+      mode: "packaged",
+      backendDir: path.join(resources, "backend"),
+      venvPython: path.join(resources, BUNDLED_PYTHON_REL),
+      scriptsDir: path.join(resources, "scripts"),
+      backendRunner: path.join(
+        resources,
+        "backend",
+        "scripts",
+        "desktop_backend_runner.py",
+      ),
+      desktopProbe: path.join(resources, "scripts", "desktop_runtime.py"),
+      frontendStandaloneDir,
+      frontendServerJs: path.join(frontendStandaloneDir, "server.js"),
+      nodeExe: opts.nodeExe ?? path.join(resources, BUNDLED_NODE_REL),
+      logsDir,
+      trayIcon: path.join(app, "assets", "tray.png"),
+      appIcon: path.join(app, "assets", "app-icon.png"),
+      pgBinDir: path.join(resources, BUNDLED_PG_BIN_REL),
+      pgDataDir,
+      pgCredsFile,
+      configDir,
+      aiKeyFile,
+      adminBootstrapFile,
+      startupHtml: path.join(app, "src", "startup", "index.html"),
+    };
+  }
+
+  // Development Mode：保持 D1 工作区布局不变
+  const frontendStandaloneDir = path.join(
+    workspaceRoot,
+    "frontend",
+    ".next-desktop",
+    "standalone",
+  );
+  const desktopDir = path.join(workspaceRoot, "desktop");
   return {
     workspaceRoot,
+    mode: "development",
     backendDir: path.join(workspaceRoot, "backend"),
     venvPython: path.join(workspaceRoot, "backend", ".venv", "Scripts", "python.exe"),
     scriptsDir: path.join(workspaceRoot, "scripts"),
@@ -130,17 +225,16 @@ export function buildPaths(
     frontendStandaloneDir,
     frontendServerJs: path.join(frontendStandaloneDir, "server.js"),
     nodeExe: opts.nodeExe ?? process.env.STAYOPS_NODE ?? "node",
-    logsDir: path.join(localAppData, "StayOps", "logs"),
+    logsDir,
     trayIcon: path.join(desktopDir, "assets", "tray.png"),
-    appIcon: packaged
-      ? path.join(opts.appPath ?? desktopDir, "assets", "app-icon.png")
-      : path.join(desktopDir, "assets", "app-icon.png"),
+    appIcon: path.join(desktopDir, "assets", "app-icon.png"),
     pgBinDir: path.join(workspaceRoot, "runtime", "postgres", "pgsql", "bin"),
-    pgDataDir: path.join(pgHome, "data"),
-    pgCredsFile: path.join(pgHome, "conf", "dbpass.conf"),
-    startupHtml: packaged
-      ? path.join(opts.appPath ?? desktopDir, "src", "startup", "index.html")
-      : path.join(desktopDir, "src", "startup", "index.html"),
+    pgDataDir,
+    pgCredsFile,
+    configDir,
+    aiKeyFile,
+    adminBootstrapFile,
+    startupHtml: path.join(desktopDir, "src", "startup", "index.html"),
   };
 }
 

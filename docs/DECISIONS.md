@@ -752,6 +752,61 @@ dev standalone 均报 Cannot find module '@swc/helpers/_/_interop_require_defaul
    stayops_ai_reader 角色密码与后端配置同步）。Docker 容器与
    stayops_stayops_pgdata volume 原样保留作回退，用户确认前不删除。
 
+## 2026-09-13 — StayOps Desktop D2 foundation：Fully Bundled Installer（alpha.9.4）
+
+背景：alpha.9.3 的 Desktop 仍要求本机存在 StayOps 工作区（`backend/.venv`、
+`runtime/postgres`、指向工作区的 `frontend/node_modules` junction），换一台
+干净 Windows 机器无法运行。目标：把**全部运行时**装进安装包，用户机器零预装。
+
+决策（每项均以本机实测为准）：
+
+1. **Packaged Mode 与 Development Mode 显式分离**。`config.buildPaths()`
+   按 `isPackaged` 分支：安装版全部从 `process.resourcesPath` 解析
+   （`resources/{backend,python,postgres,node,scripts,frontend-server}`），
+   开发模式保持工作区布局不变。`isValidWorkspaceRoot()` 结构识别 packaged
+   布局（`backend/app/main.py` + `python/python.exe`），因此**不再需要**
+   `AGENTS.md` / `.venv` / `STAYOPS_ROOT`；`KNOWN_WORKSPACE_CANDIDATES` 中
+   硬编码的开发机路径被移除（安全审计要求）。
+2. **Python Runtime 装配策略**：本环境 PyPI 被网络策略阻断（403），无法
+   `pip install`；因此从**已验证的开发运行时**装配——基础解释器取自
+   `backend/.venv/pyvenv.cfg` 的 `home`，依赖取自该 venv 的 site-packages，
+   以真实文件复制进 `resources/python`，排除 `test/idlelib/tkinter/
+   ensurepip/lib2to3/tcl/Doc/Tools/include` 等非运行必需内容。装配后由
+   bundled `python.exe` 实测导入 fastapi/uvicorn/sqlalchemy/psycopg2/alembic
+   作为构建门禁（失败即构建失败）。
+3. **前端自包含**：junction → 真实文件（递归物化 + 祖先真实路径环保护），
+   排除 `*.map`，并把 Next 内嵌的构建机绝对路径（`outputFileTracingRoot` /
+   `repoRoot` / `turbopack.root` / `appDir`）改写为中立值；物化后断言
+   reparse point 数为 0。实测 8,825 文件、0 环跳过、2 文件被改写。
+4. **首次安装引导凭据**：`seed.py` 不再内置固定开发密码（改为
+   `STAYOPS_ADMIN_PASSWORD` 环境变量，缺失即 Fail Safe）；安装版首次启动
+   生成随机高强度密码，DPAPI（当前用户作用域）密文存于
+   `%PROGRAMDATA%\StayOps\config\admin-bootstrap.dat`，只注入 seed 进程、
+   只在首次启动 UI 显示一次（`desktop.log` 中该字段固定 `***`）；管理员带
+   `must_change_password=true`（迁移 `b7c1e5a93d24`），后端在改密前拒绝
+   白名单外的全部接口，改密成功后销毁 bootstrap 凭据。
+5. **AI_ENCRYPTION_KEY**：每台安装独立的随机 32 字节 Fernet 密钥，DPAPI
+   保护，仅注入后端进程；packaged 模式不可用即不启动（绝不回退到公开的
+   开发默认值）。
+6. **Installer**：electron-builder **NSIS**，`perMachine: false`（per-user，
+   日常无需管理员），`deleteAppDataOnUninstall: false`（卸载不删业务库）；
+   程序在安装目录，数据/配置在 `%PROGRAMDATA%\StayOps`，日志在
+   `%LOCALAPPDATA%\StayOps\logs`。
+7. **实测缺陷修复（本轮发现并修复）**：
+   - `_tighten_acl` 用账号名授权 → icacls 解析为「域 + 空账号名」，生成无效
+     ACE，配合 `/inheritance:r` 把当前用户锁在配置目录之外（alpha.9.3 遗留的
+     真实机器状态导致安装版启动失败）。改为 **SID 授权 + 读/写回校验 +
+     自愈修复**（目录不可写时先修复，仍不可用则回退继承）。
+   - `seed()` 向 stdout 打印中文摘要，污染探针 JSON 契约（成功的 seed 会被
+     Electron 判为失败）→ 截获丢弃。
+   - `dev_runtime._alembic` 硬编码工作区 `.venv` 解释器 → 安装版
+     `FileNotFoundError`；改为优先使用当前解释器（`sys.executable`）。
+   - `desktop_db_backup.py` 的 PG bin 路径仅识别开发布局 → 改为优先识别
+     安装版 `resources/postgres`。
+8. **验证边界**：本机为 Windows 10 Home，无 Hyper-V / Windows Sandbox /
+   VMware / VirtualBox，因此**无法完成 clean-machine QA**；结论止于
+   `READY FOR CLEAN-MACHINE QA`，干净 VM/PC 验证通过前不打 tag、不发 Release。
+
 
 
 

@@ -25,10 +25,23 @@ files:
 
 # 前端生产构建（Next standalone）由 scripts/install-standalone.mjs 经
 # afterPack 钩子复制到 resources/frontend-server（不打进 asar：Node 子进程
-# 需要真实文件系统路径）。不用 extraResources：electron-builder 会静默排除
-# node_modules 且不跟随 pnpm junction；afterPack 在打包后、portable 压缩前
-# 执行，dir 与 portable 两个目标都自动携带资源。
+# 需要真实文件系统路径）。D2 起该目录被**物化**为真实文件（junction 全部
+# 展开，且清除 Next 内嵌的开发机绝对路径），安装版不依赖开发机工作区。
 afterPack: scripts/after-pack.cjs
+
+# D2：Fully Bundled runtime（真实文件系统，不进 asar）。
+# 由 `node scripts/bundle-runtimes.mjs` 生成 desktop/.bundle/ 后打包。
+extraResources:
+  - from: .bundle/backend
+    to: backend
+  - from: .bundle/python
+    to: python
+  - from: .bundle/postgres
+    to: postgres
+  - from: .bundle/node
+    to: node
+  - from: .bundle/scripts
+    to: scripts
 
 # 离线构建：直接复用 node_modules/electron/dist（pnpm 安装的固定版本
 # electron@44.0.0），不再联网下载 electron zip（网络受限环境必需，
@@ -46,6 +59,24 @@ win:
         - x64
   icon: build/icon.ico
   artifactName: StayOps-${version}-${arch}.${ext}
+
+# D2：NSIS 安装包（per-user，无需管理员日常运行）。
+# 数据目录 %PROGRAMDATA%\StayOps（数据库/配置）与安装目录彻底分离；
+# 卸载默认**不删除**业务数据库（deleteAppDataOnUninstall: false）。
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: StayOps
+  uninstallDisplayName: StayOps ${version}
+  deleteAppDataOnUninstall: false
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeaderIcon: build/icon.ico
+  artifactName: StayOps-Setup-${version}.${ext}
 
 portable:
   artifactName: StayOps-Portable-${version}-${arch}.${ext}

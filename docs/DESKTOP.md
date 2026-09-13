@@ -249,3 +249,90 @@ StayOps Desktop 自带并自主管理 PostgreSQL 16 实例，双击 StayOps.exe
   `%PROGRAMDATA%\StayOps\backups\`；`--restore <dump> --yes` 恢复）。
 - 首次全新安装流程：initdb 自动完成 → 启动窗口提示数据库升级 → 用户确认
   alembic upgrade head → 进入应用（与既有迁移 UX 一致）。
+
+## 13. Packaged Mode / 安装版（v1.0.0-alpha.9.4 · D2 foundation）
+
+安装版把**全部运行时**放进安装目录，用户机器上不需要任何预装组件
+（Python / Node.js / pnpm / PostgreSQL / Docker / Git 一律不需要）。
+
+### 13.1 两种运行模式
+
+| | Development Mode（未打包） | Packaged Mode（安装版） |
+|---|---|---|
+| 解析根 | StayOps 工作区（`D:\MY SELF\StayOps V1.0`） | `process.resourcesPath` |
+| Python | `backend/.venv/Scripts/python.exe` | `resources/python/python.exe` |
+| PostgreSQL | `<workspace>/runtime/postgres/pgsql` | `resources/postgres/pgsql` |
+| Node | PATH（或 `STAYOPS_NODE`） | `resources/node/node.exe` |
+| 前端 | `<workspace>/frontend/.next-desktop/standalone` | `resources/frontend-server` |
+| 探测脚本 | `<workspace>/scripts/*.py` | `resources/scripts/*.py` |
+| 前置条件 | 工作区 + `.venv` | **无**（结构自识别，不需要 `AGENTS.md`/`.venv`/`STAYOPS_ROOT`） |
+
+`config.ts` 的 `buildPaths()` 按 `isPackaged` 分支；`isValidWorkspaceRoot()` 同时
+识别「开发工作区」与「packaged runtime 布局」（`backend/app/main.py` +
+`python/python.exe`）。源码中**不再包含任何硬编码开发机路径**（安全审计要求）。
+
+### 13.2 安装目录布局（electron-builder extraResources）
+
+```
+<install>/resources/
+  app.asar              Electron 主进程 + 启动窗口资源（品牌图标）
+  backend/              FastAPI app + alembic + desktop_backend_runner.py
+  python/               Python 3.11 运行时 + 后端依赖（site-packages）
+  node/                 node.exe（Next standalone server 运行时）
+  postgres/pgsql/       PostgreSQL 16（bin/lib/share）
+  scripts/              desktop_runtime.py / dev_runtime.py / desktop_db_backup.py
+  frontend-server/      Next standalone（依赖已全部物化为真实文件）
+```
+
+构建：`pnpm.cmd dist:installer` = `make-brand-icons` → `bundle-runtimes.mjs`
+（装配 `desktop/.bundle/` + 安全扫描）→ `next build` → `electron-builder --win nsis`。
+
+### 13.3 前端自包含（junction → 真实文件）
+
+D1 的 `resources/frontend-server/node_modules` 是指向开发机
+`frontend/node_modules` 的 junction，换机器必然失效。D2 由
+`install-standalone.mjs` 递归物化：每个 junction 复制为真实文件（pnpm 兄弟
+依赖环用「祖先真实路径」集合防环），排除 `*.map`，并把 Next 内嵌的构建机
+绝对路径（`outputFileTracingRoot` / `repoRoot` / `turbopack.root` / `appDir`）
+改写为中立值；结束后断言树内 reparse point 为 0。
+
+### 13.4 首次安装引导（随机管理员密码）
+
+干净机器上没有可登录账号，因此启动链在迁移阶段执行幂等 `seed-ensure`：
+
+1. 权限 52 / 角色 6 / 房型 / 房间（28）等基础数据；
+2. 若 `admin` 尚不存在 → 生成**随机高强度密码**（`secrets.token_urlsafe(24)`），
+   以 **DPAPI（当前用户作用域）** 密文存于
+   `%PROGRAMDATA%\StayOps\config\admin-bootstrap.dat`（绝不存明文）；
+3. 密码**只注入 seed 进程**（`STAYOPS_ADMIN_PASSWORD`，用后即清除），
+   并且**只在首次启动 UI 显示一次**；`desktop.log` 中的该事件密码字段固定为 `***`；
+4. 该管理员带 `must_change_password=true`：改密前后端拒绝除
+   `/auth/me`、`/auth/change-password` 之外的接口（前端 `/change-password` 引导）；
+5. 改密成功后清除标记；下次启动检测到 bootstrap 凭据已不匹配当前哈希 →
+   **销毁**该凭据（不再保留任何引导凭据）。
+
+### 13.5 安装级 AI 加密密钥
+
+`AI_ENCRYPTION_KEY` 不再允许回退到公开的开发默认值：首次启动生成每台安装
+独立的随机 32 字节 Fernet 密钥，DPAPI 保护存放于
+`%PROGRAMDATA%\StayOps\config\ai_encryption.key`，仅注入后端进程环境变量；
+packaged 模式下不可用即 **Fail Safe**（不启动），绝不静默使用不安全默认值。
+
+### 13.6 数据生命周期
+
+| 类别 | 位置 | 升级 / 重装 | 卸载 |
+|---|---|---|---|
+| 程序 | 安装目录（per-user） | 覆盖 | 删除 |
+| 数据库 | `%PROGRAMDATA%\StayOps\PostgreSQL\data` | **保留** | **保留** |
+| 配置/密钥 | `%PROGRAMDATA%\StayOps\config` | **保留** | **保留** |
+| 日志 | `%LOCALAPPDATA%\StayOps\logs` | 保留 | 保留 |
+
+安装包默认 `perMachine: false`（per-user，不需要管理员日常运行）、
+`deleteAppDataOnUninstall: false`（卸载不删业务库）。
+
+### 13.7 已知技术债（本轮实测修复）
+
+- `_tighten_acl` 曾用账号名授权，被 icacls 解析为「域 + 空账号名」，生成无效
+  ACE，配合 `/inheritance:r` 会把当前用户锁在 `%PROGRAMDATA%\StayOps\config`
+  之外（alpha.9.3 遗留实测；已改为 **SID 授权 + 读/写回校验 + 自愈修复**）。
+- `seed()` 的 stdout 会污染探针 JSON（成功被误判为失败）→ 已截获丢弃。

@@ -20,9 +20,12 @@
   const views = {
     starting: document.getElementById("view-starting"),
     migration: document.getElementById("view-migration"),
+    admin: document.getElementById("view-admin"),
     error: document.getElementById("view-error"),
     ready: document.getElementById("view-ready"),
   };
+  // 管理员凭据视图的背景视图（点击「我已记录」后恢复）
+  let adminReturnView = "starting";
   const subtitle = document.getElementById("subtitle");
   const stepNote = document.getElementById("step-note");
   const steps = {};
@@ -85,6 +88,15 @@
         showView("migration");
         break;
       }
+      case "admin-bootstrap": {
+        // 首次安装：管理员初始密码只在此处显示一次（绝不写日志/持久化）
+        adminReturnView = views.ready.hidden ? "starting" : "ready";
+        document.getElementById("admin-username").textContent = event.username || "admin";
+        document.getElementById("admin-password").textContent = event.password || "";
+        subtitle.textContent = "首次启动：请记录管理员初始密码";
+        showView("admin");
+        break;
+      }
       case "error": {
         subtitle.textContent = "启动失败";
         document.getElementById("error-message").textContent = event.message || "未知错误";
@@ -120,6 +132,11 @@
   });
   document.getElementById("btn-logs").addEventListener("click", () => {
     if (api) api.openLogs();
+  });
+  document.getElementById("btn-admin-ack").addEventListener("click", () => {
+    // 用户已记录：清除显示内容并恢复背景视图（不再提供二次查看）
+    document.getElementById("admin-password").textContent = "—";
+    showView(adminReturnView);
   });
   document.getElementById("btn-quit-2").addEventListener("click", () => {
     if (api) api.quit();

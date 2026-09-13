@@ -25,10 +25,12 @@ import { IPC } from "./runtime/ipc";
 import { ScrubFileLogger } from "./runtime/logger";
 import { findOccupants, portInUse, resolveNodePath } from "./runtime/preflight";
 import {
+  aiKeyEnsure,
   dbCheck,
   dbEnsure,
   migrationStatus,
   migrationUpgrade,
+  seedEnsure,
   type ProbeContext,
 } from "./runtime/probe";
 import { ProcessSupervisor } from "./runtime/processes";
@@ -59,6 +61,8 @@ let supervisor = new ProcessSupervisor();
 let runner: StartupRunner | null = null;
 let startupWindow: BrowserWindow | null = null;
 let mainWindow: BrowserWindow | null = null;
+/** 首次安装已向 UI 下发管理员初始凭据（需保留启动窗口供用户记录一次） */
+let adminBootstrapPending = false;
 let tray: Tray | null = null;
 /** 事件日志：启动窗口加载完成后回放（最多保留最近 100 条）。 */
 const eventLog: StartupEvent[] = [];
@@ -110,14 +114,30 @@ function createStartupWindow(): void {
 function emitStartupEvent(event: StartupEvent): void {
   eventLog.push(event);
   if (eventLog.length > 100) eventLog.shift();
-  logger.write("STARTUP", JSON.stringify(event));
+  // 首次安装 bootstrap 密码只允许出现在 UI（用户要求：绝不进任何日志/崩溃转储）
+  logger.write(
+    "STARTUP",
+    JSON.stringify(
+      event.type === "admin-bootstrap"
+        ? { type: event.type, username: event.username, password: "***" }
+        : event,
+    ),
+  );
+  if (event.type === "admin-bootstrap") adminBootstrapPending = true;
   if (event.type === "ready") {
     // Runtime Ready：关闭启动窗口，打开正式应用窗口
     logger.write("MAIN", `Runtime ready: ${event.backendUrl} / ${event.frontendUrl}`);
     createMainWindow();
     if (startupWindow && !startupWindow.isDestroyed()) {
-      startupWindow.destroy();
-      startupWindow = null;
+      if (adminBootstrapPending) {
+        // 首次安装：保留启动窗口供用户记录初始密码；关闭后不再显示（show-once）
+        logger.write("MAIN", "startup window kept open for first-run admin credential");
+        startupWindow.show();
+        startupWindow.focus();
+      } else {
+        startupWindow.destroy();
+        startupWindow = null;
+      }
     }
     return;
   }
@@ -324,6 +344,25 @@ async function bootstrap(workspaceRoot: string | null): Promise<void> {
       }
       return result;
     },
+    aiKeyEnsure: async () => {
+      const result = await aiKeyEnsure(ctx, {
+        keyFile: paths.aiKeyFile,
+        configDir: paths.configDir,
+      });
+      if (result.ok && result.data?.ok && result.data.key) {
+        // §8：密钥只注入 backend 子进程继承的环境变量；绝不写日志/前端
+        process.env.AI_ENCRYPTION_KEY = result.data.key;
+        logger.write(
+          "AIKEY",
+          result.data.created
+            ? "per-install AI encryption key generated"
+            : "per-install AI encryption key loaded",
+        );
+      }
+      return result;
+    },
+    seedEnsure: () =>
+      seedEnsure(ctx, { keyFile: paths.adminBootstrapFile, configDir: paths.configDir }),
     dbCheck: () => dbCheck(ctx),
     migrationStatus: () => migrationStatus(ctx),
     migrationUpgrade: () => migrationUpgrade(ctx),

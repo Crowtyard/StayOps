@@ -53,6 +53,24 @@
         </div>
       </section>
 
+      <!-- 首次安装：管理员初始凭据（仅在本窗口显示一次） -->
+      <section id="view-admin" class="view" hidden>
+        <div class="panel warn">
+          <h2>首次启动：管理员初始密码</h2>
+          <p>请立即记录以下凭据。关闭本窗口后将无法再次查看。</p>
+          <p>
+            用户名：<code id="admin-username">admin</code><br />
+            初始密码：<code id="admin-password">—</code>
+          </p>
+          <p class="muted">
+            首次登录后请立即修改密码。该引导凭据在修改密码后会被销毁，且不会写入任何日志。
+          </p>
+        </div>
+        <div class="actions">
+          <button id="btn-admin-ack" class="primary">我已记录</button>
+        </div>
+      </section>
+
       <!-- 错误视图 -->
       <section id="view-error" class="view" hidden>
         <div class="panel error">

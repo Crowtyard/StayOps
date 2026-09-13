@@ -123,6 +123,43 @@ export interface PgRuntimePaths {
   port: number;
 }
 
+/**
+ * 每台安装独立的 AI_ENCRYPTION_KEY（§8 security）。
+ * key 仅经进程管道返回给主进程注入 backend 环境变量，绝不写日志/前端。
+ */
+export interface AiKeyEnsureData {
+  ok: boolean;
+  created: boolean;
+  key: string | null;
+  error: string | null;
+}
+
+/** AI 加密密钥的存储位置参数（与 config.ts 的 DesktopPaths 对应）。 */
+export interface AiKeyPaths {
+  keyFile: string;
+  configDir: string;
+}
+
+/** 首次安装 bootstrap 管理员凭据（仅 created=true 时返回密码，show-once）。 */
+export interface AdminBootstrapData {
+  ok: boolean;
+  created: boolean;
+  password: string | null;
+  protection: string | null;
+  error: string | null;
+}
+
+export interface SeedEnsureData {
+  ok: boolean;
+  seeded: boolean;
+  /** 首次安装生成了 bootstrap 管理员凭据（此时 password 才非空，仅显示一次） */
+  createdBootstrap: boolean;
+  /** 用户已完成首次改密 → bootstrap 凭据已销毁（不再保留任何引导凭据） */
+  bootstrapCleared: boolean;
+  password: string | null;
+  error: string | null;
+}
+
 export interface MigrationStatusData {
   state: "OK" | "BEHIND" | "MULTI_HEAD" | "ERROR";
   current: string | null;
@@ -188,6 +225,63 @@ export function dbEnsure(
       "--timeout-ms",
       "120000",
     ],
+    cwd: ctx.cwd,
+    timeoutMs: 180_000,
+  });
+}
+
+/**
+ * 确保每台安装独立的 AI_ENCRYPTION_KEY 存在（§8 security）：
+ * packaged 模式绝不允许回退到公开 dev 默认值；密钥经进程管道返回，不进日志/前端。
+ */
+export function aiKeyEnsure(
+  ctx: ProbeContext,
+  cfg: AiKeyPaths,
+): Promise<ProbeOutcome<AiKeyEnsureData>> {
+  return probeJson<AiKeyEnsureData>({
+    python: ctx.python,
+    script: ctx.probeScript,
+    args: [
+      "ai-key-ensure",
+      "--key-file",
+      cfg.keyFile,
+      "--config-dir",
+      cfg.configDir,
+    ],
+    cwd: ctx.cwd,
+    timeoutMs: 60_000,
+  });
+}
+
+/** 确保首次安装 bootstrap 管理员凭据存在（created=true 时返回密码供 UI 显示一次）。 */
+export function adminBootstrapEnsure(
+  ctx: ProbeContext,
+  cfg: AiKeyPaths,
+): Promise<ProbeOutcome<AdminBootstrapData>> {
+  return probeJson<AdminBootstrapData>({
+    python: ctx.python,
+    script: ctx.probeScript,
+    args: [
+      "admin-bootstrap-ensure",
+      "--bootstrap-file",
+      cfg.keyFile,
+      "--config-dir",
+      cfg.configDir,
+    ],
+    cwd: ctx.cwd,
+    timeoutMs: 60_000,
+  });
+}
+
+/** 幂等执行 seed：权限/角色/admin/房型/房间（干净机器首次安装必需）。 */
+export function seedEnsure(
+  ctx: ProbeContext,
+  cfg: AiKeyPaths,
+): Promise<ProbeOutcome<SeedEnsureData>> {
+  return probeJson<SeedEnsureData>({
+    python: ctx.python,
+    script: ctx.probeScript,
+    args: ["seed-ensure", "--bootstrap-file", cfg.keyFile],
     cwd: ctx.cwd,
     timeoutMs: 180_000,
   });

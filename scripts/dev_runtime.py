@@ -231,8 +231,22 @@ def check_ports(fail: bool = True) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def alembic_python() -> Path:
+    """执行 alembic 的解释器。
+
+    Development Mode：工作区 `.venv`（历史行为，保持兼容）。
+    Packaged Mode：探针本身由 bundled python 运行，工作区 `.venv` 不存在，
+    因此优先使用当前解释器（`sys.executable`）——这正是安装版唯一可用的
+    解释器，且其 site-packages 内已包含 alembic。
+    """
+    interpreter = Path(sys.executable) if sys.executable else None
+    if interpreter and interpreter.exists():
+        return interpreter
+    return VENV_PYTHON
+
+
 def _alembic(cmd: list[str]) -> tuple[bool, str]:
-    proc = run_capture([str(VENV_PYTHON), "-m", "alembic", *cmd], BACKEND_DIR)
+    proc = run_capture([str(alembic_python()), "-m", "alembic", *cmd], BACKEND_DIR)
     return proc.returncode == 0, proc.stdout + proc.stderr
 
 

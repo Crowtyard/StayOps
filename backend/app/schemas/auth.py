@@ -29,7 +29,15 @@ class MeOut(BaseModel):
     email: str | None
     phone: str | None
     is_active: bool
+    must_change_password: bool = False
     created_at: datetime
     updated_at: datetime
     roles: list[RoleBrief] = []
     permissions: list[str] = []
+
+
+class ChangePasswordRequest(BaseModel):
+    """自助修改密码（首次安装 bootstrap 凭据也必须经此路径更新）。"""
+
+    current_password: str = Field(..., min_length=1, max_length=128)
+    new_password: str = Field(..., min_length=8, max_length=128)

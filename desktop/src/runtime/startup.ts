@@ -21,11 +21,13 @@ import {
 } from "./config";
 import type { OccupiedPort } from "./preflight";
 import type {
+  AiKeyEnsureData,
   DbCheckData,
   DbEnsureData,
   MigrationStatusData,
   MigrationUpgradeData,
   ProbeOutcome,
+  SeedEnsureData,
 } from "./probe";
 import type { OwnedChild, ProcessSupervisor } from "./processes";
 
@@ -54,6 +56,8 @@ export type StartupEvent =
       detail?: string;
     }
   | { type: "migration-behind"; current: string; head: string }
+  /** 首次安装：管理员 bootstrap 凭据只在此事件中出现一次（不进日志/前端持久化） */
+  | { type: "admin-bootstrap"; username: string; password: string }
   | { type: "error"; code: ErrorCode; message: string; detail?: string }
   | { type: "ready"; backendUrl: string; frontendUrl: string };
 
@@ -63,6 +67,10 @@ export interface StartupDeps {
   findOccupants: () => Promise<OccupiedPort[]>;
   /** 确保自带 PostgreSQL Runtime 运行（init/start/ready/建库）；成功后主进程注入 DATABASE_URL。 */
   dbEnsure: () => Promise<ProbeOutcome<DbEnsureData>>;
+  /** 确保每台安装独立的 AI_ENCRYPTION_KEY 存在；成功后主进程注入 AI_ENCRYPTION_KEY（§8）。 */
+  aiKeyEnsure: () => Promise<ProbeOutcome<AiKeyEnsureData>>;
+  /** 幂等基础数据初始化（权限/角色/admin/房型/房间）；干净机器首次安装必需。 */
+  seedEnsure: () => Promise<ProbeOutcome<SeedEnsureData>>;
   dbCheck: () => Promise<ProbeOutcome<DbCheckData>>;
   migrationStatus: () => Promise<ProbeOutcome<MigrationStatusData>>;
   migrationUpgrade: () => Promise<ProbeOutcome<MigrationUpgradeData>>;
@@ -93,6 +101,8 @@ export class StartupRunner {
   private running = false;
   private stopped = false;
   private upgrading = false;
+  /** 初始化阶段的附加说明（用于 phase detail；绝不含任何凭据内容） */
+  private phaseDetail: string | undefined;
 
   constructor(private readonly deps: StartupDeps) {}
 
@@ -137,6 +147,7 @@ export class StartupRunner {
       const status = await this.deps.migrationStatus();
       const state = status.data?.state;
       if (state === "OK") {
+        if (!(await this.ensureSeed())) return;
         this.deps.onEvent({
           type: "phase",
           phase: "migration",
@@ -235,21 +246,39 @@ export class StartupRunner {
 
   private async phaseEnv(): Promise<boolean> {
     const p = this.deps.paths;
+    const packaged = p.mode === "packaged";
     const missing: string[] = [];
-    if (!fs.existsSync(p.venvPython)) missing.push("backend/.venv/Scripts/python.exe");
-    if (!fs.existsSync(p.frontendServerJs)) missing.push("frontend standalone server.js");
+    if (!fs.existsSync(p.venvPython)) {
+      missing.push(
+        packaged ? "resources/python/python.exe（bundled Python Runtime）" : "backend/.venv/Scripts/python.exe",
+      );
+    }
+    if (!fs.existsSync(p.frontendServerJs)) {
+      missing.push(
+        packaged
+          ? "resources/frontend-server/server.js（bundled 前端）"
+          : "frontend standalone server.js",
+      );
+    }
     const pgBinMissing = ["postgres.exe", "initdb.exe", "pg_ctl.exe", "psql.exe"].filter(
       (name) => !fs.existsSync(path.join(p.pgBinDir, name)),
     );
     if (pgBinMissing.length > 0) {
-      missing.push(`runtime/postgres/pgsql/bin（缺少 ${pgBinMissing.join("、")}）`);
+      missing.push(
+        packaged
+          ? `resources/postgres/pgsql/bin（缺少 ${pgBinMissing.join("、")}）`
+          : `runtime/postgres/pgsql/bin（缺少 ${pgBinMissing.join("、")}）`,
+      );
     }
     if (missing.length > 0) {
       this.emitPhase("env", "error");
       this.emitError(
         "ENV_MISSING",
         "缺少运行所需文件",
-        `未找到：${missing.join("、")}\n请确认 StayOps 工作区完整（backend/.venv 与前端生产构建）。`,
+        `未找到：${missing.join("、")}\n` +
+          (packaged
+            ? "安装不完整：请重新安装 StayOps。"
+            : "请确认 StayOps 工作区完整（backend/.venv 与前端生产构建）。"),
       );
       return false;
     }
@@ -259,11 +288,34 @@ export class StartupRunner {
       this.emitError(
         "ENV_MISSING",
         "未找到 Node.js 运行时",
-        `请确认 node 在 PATH 中，或设置环境变量 STAYOPS_NODE 指向 node.exe。`,
+        packaged
+          ? `未找到 bundled Node 运行时（${p.nodeExe}）。安装不完整：请重新安装 StayOps。`
+          : `请确认 node 在 PATH 中，或设置环境变量 STAYOPS_NODE 指向 node.exe。`,
       );
       return false;
     }
-    this.emitPhase("env", "ok");
+    // §8 安全：每台安装独立的 AI_ENCRYPTION_KEY（绝不允许 packaged 模式回退到公开 dev 默认值）
+    const aiKey = await this.deps.aiKeyEnsure();
+    if (!aiKey.ok || !aiKey.data?.ok) {
+      const detail = aiKey.data?.error ?? aiKey.error ?? undefined;
+      if (packaged) {
+        this.emitPhase("env", "error");
+        this.emitError(
+          "ENV_MISSING",
+          "无法初始化本地加密密钥",
+          `${detail ?? "未知原因"}\nStayOps 已停止启动以避免使用不安全的默认密钥。`,
+        );
+        return false;
+      }
+      // 开发模式：保留显式 dev fallback（backend/app/config.py 的 dev 默认值）
+      this.emitPhase("env", "ok", "开发模式：AI 加密密钥不可用，使用 dev fallback");
+      return true;
+    }
+    this.emitPhase(
+      "env",
+      "ok",
+      aiKey.data.created ? "已生成本机 AI 加密密钥" : undefined,
+    );
     return true;
   }
 
@@ -322,7 +374,13 @@ export class StartupRunner {
       return false;
     }
     if (data.state === "OK") {
-      this.emitPhase("migration", "ok", `current == head == ${data.heads[0] ?? ""}`);
+      if (!(await this.ensureSeed())) return false;
+      this.emitPhase(
+        "migration",
+        "ok",
+        this.phaseDetail ?? `current == head == ${data.heads[0] ?? ""}`,
+      );
+      this.phaseDetail = undefined;
       return true;
     }
     if (data.state === "MULTI_HEAD") {
@@ -346,6 +404,36 @@ export class StartupRunner {
     this.emitPhase("migration", "error");
     this.emitError("MIGRATION_ERROR", "迁移状态异常", data.detail ?? undefined);
     return false;
+  }
+
+  /**
+   * 幂等基础数据初始化（权限/角色/admin/房型/房间）。
+   * 干净机器首次安装必需：否则没有可登录账号。
+   * createdBootstrap=true 时把首次管理员密码交给 UI 显示一次（绝不进日志）。
+   */
+  private async ensureSeed(): Promise<boolean> {
+    const result = await this.deps.seedEnsure();
+    if (!result.ok || !result.data?.ok) {
+      this.emitPhase("migration", "error");
+      this.emitError(
+        "MIGRATION_ERROR",
+        "基础数据初始化失败",
+        result.data?.error ?? result.error ?? undefined,
+      );
+      return false;
+    }
+    if (result.data.createdBootstrap && result.data.password) {
+      this.deps.onEvent({
+        type: "admin-bootstrap",
+        username: "admin",
+        password: result.data.password,
+      });
+    }
+    if (result.data.bootstrapCleared) {
+      // 用户已完成首次改密：引导凭据已销毁（只记状态，不含任何凭据内容）
+      this.phaseDetail = "首次安装引导凭据已销毁";
+    }
+    return true;
   }
 
   private async phaseBackend(): Promise<boolean> {

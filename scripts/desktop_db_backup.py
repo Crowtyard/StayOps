@@ -26,7 +26,21 @@ from datetime import datetime
 from pathlib import Path
 
 WORKSPACE = Path(__file__).resolve().parents[1]
-DEFAULT_PG_BIN = WORKSPACE / "runtime" / "postgres" / "pgsql" / "bin"
+
+
+def _default_pg_bin() -> Path:
+    """PostgreSQL bin 目录。
+
+    Development Mode：<workspace>/runtime/postgres/pgsql/bin
+    Packaged Mode（安装版）：<resources>/postgres/pgsql/bin
+    """
+    bundled = WORKSPACE / "postgres" / "pgsql" / "bin"
+    if bundled.exists():
+        return bundled
+    return WORKSPACE / "runtime" / "postgres" / "pgsql" / "bin"
+
+
+DEFAULT_PG_BIN = _default_pg_bin()
 DEFAULT_CREDS = Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "StayOps" / "PostgreSQL" / "conf" / "dbpass.conf"
 BACKUP_DIR = Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "StayOps" / "backups"
 HOST, PORT, USER, DB = "127.0.0.1", "5433", "stayops", "stayops"

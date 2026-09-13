@@ -26,6 +26,9 @@ from sqlalchemy.orm import sessionmaker
 
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "Admin@123456"
+# D2：seed.py 不再内置默认管理员密码；测试环境显式注入 bootstrap 密码
+# （必须在任何 seed() 调用之前设置；seed_admin 在创建时才读取该变量）
+os.environ["STAYOPS_ADMIN_PASSWORD"] = ADMIN_PASSWORD
 
 
 @pytest.fixture(scope="session")
