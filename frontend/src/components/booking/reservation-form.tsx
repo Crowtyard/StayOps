@@ -3,7 +3,9 @@
 /**
  * ReservationForm：新建 / 编辑预订共用表单。
  * - 日期区间 [check_in_date, check_out_date)，check_out > check_in（422 级校验）
- * - WALK_IN：check_in_date 固定为 Property Business Date 今天（Asia/Shanghai）
+ * - WALK_IN（渠道 code = SYS_WALK_IN）：check_in_date 固定为 Property Business Date 今天
+ * - alpha.9.6 F3：来源渠道为下拉选择（美团 / 携程 / 飞猪 / 其他 + 自建渠道），
+ *   不再使用自由文本来源；提交 source_channel_id（唯一来源事实）
  * - 新建：先查真实 Availability 并选择可用房间（无可用不允许提交）
  * - 编辑（CONFIRMED）：修改日期/房间/房型重新执行 Availability；提交仅含变更字段
  * - 后端 409 / 422 原样展示（409 冲突条 + 后端 detail；422 表单错误），不吞掉
@@ -11,23 +13,22 @@
  * - 状态机不在前端复制：状态只能经专用 action 端点变更，本表单不含 status
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ApiError, api } from "@/lib/api";
 import type {
+  ChannelOut,
   GuestOut,
   ReservationCreate,
   ReservationOut,
-  ReservationSource,
   ReservationUpdate,
   RoomTypeOut,
 } from "@/lib/api/types";
+import { WALK_IN_CHANNEL_CODE, businessDate, validateDateRange } from "@/lib/booking";
 import {
-  RESERVATION_SOURCES,
-  SOURCE_LABELS,
-  businessDate,
-  validateDateRange,
-} from "@/lib/booking";
+  channelCategoryLabel,
+  selectableChannels,
+} from "@/lib/channels";
 import AvailabilityPicker from "@/components/booking/availability-picker";
 import GuestPicker from "@/components/booking/guest-picker";
 import {
@@ -80,6 +81,9 @@ export default function ReservationForm({
   const router = useRouter();
   const canReadGuest = permissions.has("guest:read");
   const canWriteGuest = permissions.has("guest:write");
+  // alpha.9.6 F3：来源渠道（channel:read 才能读取；无权限则不请求、不可选）
+  const canReadChannels = permissions.has("channel:read");
+  const canWriteChannels = permissions.has("channel:write");
 
   const [guest, setGuest] = useState<GuestOut | null>(null);
   const [checkIn, setCheckIn] = useState(
@@ -94,9 +98,12 @@ export default function ReservationForm({
   const [roomId, setRoomId] = useState<number | null>(
     initial?.room_id ?? prefill?.roomId ?? null,
   );
-  const [source, setSource] = useState<ReservationSource>(
-    initial?.source ?? "DIRECT",
+  const [channelId, setChannelId] = useState<number | null>(
+    initial?.source_channel_id ?? null,
   );
+  const [channels, setChannels] = useState<ChannelOut[]>([]);
+  /** 渠道列表的最新快照（事件处理器用，避免闭包读到旧值） */
+  const channelsRef = useRef<ChannelOut[]>([]);
   const [externalReference, setExternalReference] = useState(
     initial?.external_reference ?? "",
   );
@@ -142,6 +149,59 @@ export default function ReservationForm({
     };
   }, []);
 
+  // alpha.9.6 F3：来源渠道选项（仅启用渠道；新建时默认选中第一个）
+  useEffect(() => {
+    if (!canReadChannels) return;
+    let cancelled = false;
+    api.channels
+      .list({ page: 1, page_size: 100 })
+      .then((page) => {
+        if (cancelled) return;
+        channelsRef.current = page.items;
+        setChannels(page.items);
+        setChannelId((current) => {
+          if (current !== null || mode === "edit") return current;
+          const options = selectableChannels(page.items);
+          return options.length > 0 ? options[0].id : null;
+        });
+      })
+      .catch(() => {
+        // 渠道列表失败不阻塞表单；后端仍会校验 source_channel_id
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [canReadChannels, mode]);
+
+  const selectedChannel = useMemo(
+    () => channels.find((channel) => channel.id === channelId) ?? null,
+    [channels, channelId],
+  );
+  const isWalkInChannel = selectedChannel?.code === WALK_IN_CHANNEL_CODE;
+  /**
+   * 编辑历史预订时，其渠道可能已被停用：仍然展示并保留该渠道值，
+   * 避免一打开编辑就把历史渠道悄悄改成别的渠道。
+   */
+  const disabledInitialChannel = useMemo(() => {
+    if (mode !== "edit" || channelId === null) return null;
+    const inList = channels.find((channel) => channel.id === channelId);
+    if (inList && inList.enabled) return null;
+    if (inList) return inList;
+    const brief = initial?.source_channel;
+    if (!brief) return null;
+    return {
+      id: brief.id,
+      code: brief.code,
+      name: brief.name,
+      category: brief.category,
+      enabled: brief.enabled,
+      is_system: brief.is_system,
+      sort_order: 0,
+      created_at: "",
+      updated_at: "",
+    } satisfies ChannelOut;
+  }, [mode, channelId, channels, initial?.source_channel]);
+
   const dateRangeError = useMemo(
     () => validateDateRange(checkIn, checkOut),
     [checkIn, checkOut],
@@ -149,10 +209,12 @@ export default function ReservationForm({
   const datesValid =
     checkIn !== "" && checkOut !== "" && dateRangeError === null;
 
-  function handleSourceChange(next: ReservationSource) {
-    setSource(next);
-    if (next === "WALK_IN") {
-      // Walk-in 统一流程：check_in_date = Property Business Date 今天
+  function handleChannelChange(next: number) {
+    setChannelId(next);
+    // 散客（Walk-in）统一流程：check_in_date = Property Business Date 今天。
+    // 用 ref 读取最新渠道列表，避免闭包内 channels 尚未加载完成。
+    const picked = channelsRef.current.find((channel) => channel.id === next);
+    if (picked?.code === WALK_IN_CHANNEL_CODE) {
       setCheckIn(businessDate());
     }
   }
@@ -183,6 +245,11 @@ export default function ReservationForm({
     if (roomId === null) {
       return "请选择可用房间";
     }
+    if (channelId === null) {
+      return canReadChannels
+        ? "请选择来源渠道"
+        : "无渠道读取权限，无法选择来源渠道（请联系管理员分配 channel:read）";
+    }
     if (amount.trim() === "") {
       return "请填写约定金额";
     }
@@ -201,7 +268,7 @@ export default function ReservationForm({
         room_type_id: roomTypeId!,
         check_in_date: checkIn,
         check_out_date: checkOut,
-        source,
+        source_channel_id: channelId ?? undefined,
         external_reference: externalReference.trim() || null,
         agreed_total_amount: amount,
         currency: currency.trim() || "CNY",
@@ -220,7 +287,9 @@ export default function ReservationForm({
     }
     if (checkIn !== initial?.check_in_date) payload.check_in_date = checkIn;
     if (checkOut !== initial?.check_out_date) payload.check_out_date = checkOut;
-    if (source !== initial?.source) payload.source = source;
+    if (channelId !== null && channelId !== initial?.source_channel_id) {
+      payload.source_channel_id = channelId;
+    }
     const refValue = externalReference.trim() || null;
     if (refValue !== (initial?.external_reference ?? null)) {
       payload.external_reference = refValue;
@@ -306,7 +375,7 @@ export default function ReservationForm({
           required
           error={null}
           hint={
-            source === "WALK_IN"
+            isWalkInChannel
               ? "散客入住日期固定为业务日期今天（Asia/Shanghai）"
               : undefined
           }
@@ -315,7 +384,7 @@ export default function ReservationForm({
             type="date"
             value={checkIn}
             min={businessDate()}
-            disabled={source === "WALK_IN" || submitting}
+            disabled={isWalkInChannel || submitting}
             onChange={(e) => setCheckIn(e.target.value)}
             className={inputClass}
             aria-label="入住日期"
@@ -351,20 +420,44 @@ export default function ReservationForm({
       ) : null}
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="来源" error={null}>
+        <Field
+          label="来源渠道"
+          error={null}
+          hint={
+            canReadChannels
+              ? "客人从哪里来（美团 / 携程 / 飞猪 / 其他…）"
+              : "无渠道读取权限，无法选择来源渠道"
+          }
+        >
           <select
-            value={source}
-            disabled={submitting}
-            onChange={(e) => handleSourceChange(e.target.value as ReservationSource)}
+            value={channelId === null ? "" : String(channelId)}
+            disabled={submitting || !canReadChannels}
+            onChange={(e) => handleChannelChange(Number(e.target.value))}
             className={inputClass}
-            aria-label="预订来源"
+            aria-label="来源渠道"
           >
-            {RESERVATION_SOURCES.map((s) => (
-              <option key={s} value={s}>
-                {SOURCE_LABELS[s]}（{s}）
+            <option value="">请选择来源渠道</option>
+            {selectableChannels(channels).map((channel) => (
+              <option key={channel.id} value={channel.id}>
+                {channel.name}（{channelCategoryLabel(channel.category)}）
               </option>
             ))}
+            {disabledInitialChannel ? (
+              <option value={String(disabledInitialChannel.id)}>
+                {disabledInitialChannel.name}（已停用）
+              </option>
+            ) : null}
           </select>
+          {canWriteChannels ? (
+            <a
+              href="/channels"
+              target="_blank"
+              rel="noreferrer"
+              className="mt-1 inline-block text-xs text-gray-500 hover:underline"
+            >
+              没有想要的渠道？到渠道管理新增 →
+            </a>
+          ) : null}
         </Field>
         <Field label="外部订单号" error={null}>
           <input

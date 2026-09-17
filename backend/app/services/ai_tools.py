@@ -32,6 +32,9 @@ OPERATIONS_DOMAIN_TABLES: frozenset[str] = frozenset(
     {
         "AI_ROOM_TYPES",
         "AI_ROOMS",
+        # alpha.9.6 F3：客源渠道主数据（运营域 —— 主数据不含金额；
+        # 含金额的渠道经营分析走 get_analytics(channels)，受经营域权限约束）
+        "AI_CHANNELS",
         "AI_RESERVATIONS",
         "AI_STAYS",
         "AI_STAY_ROOM_ASSIGNMENTS",
@@ -72,6 +75,7 @@ OPERATIONS_ENDPOINTS: dict[str, str] = {
 }
 BUSINESS_ENDPOINTS: dict[str, str] = {
     "rooms": "合同房费 / 有价与无价房晚 / 合同 ADR / 合同 RevPAR",
+    "channels": "客源渠道经营分析（每渠道订单数 / 实际房晚 / 合同房费 / 占比 / 合同 ADR）",
     "inventory": "低/缺货快照 + 每物资领用量与领用强度",
     "procurement": "申请/订单/待收货 + 到货采购金额（供应商/物资/每日）",
 }
@@ -200,6 +204,11 @@ def run_get_analytics(
         to_date = date.fromisoformat(str(args["to"]))
         if endpoint == "rooms":
             data = analytics_svc.business_rooms_analytics(db, from_date, to_date)
+        elif endpoint == "channels":
+            # alpha.9.6 F4：客源渠道经营分析（回答「哪个渠道订单最多 / 收入最高」）
+            data = analytics_svc.channel_performance_analytics(
+                db, from_date, to_date
+            )
         elif endpoint == "inventory":
             data = analytics_svc.inventory_analytics(db, from_date, to_date)
         else:  # procurement
@@ -254,8 +263,10 @@ TOOL_DEFINITIONS: list[dict] = [
             "description": (
                 "获取 StayOps 正式经营分析指标（S8 Analytics，Backend 唯一权威）："
                 "运营域（operations）包括运营总览、预订、保洁、维修、换房、在册预测；"
-                "经营域（business）包括合同房费/ADR/RevPAR、库存、采购。"
-                "涉及正式指标（入住率、ADR、RevPAR、取消率、未到店率、ALOS、预测等）"
+                "经营域（business）包括合同房费/ADR/RevPAR、客源渠道经营分析、"
+                "库存、采购。"
+                "涉及正式指标（入住率、ADR、RevPAR、取消率、未到店率、ALOS、预测、"
+                "渠道订单数与渠道合同房费等）"
                 "必须使用本工具，不要自行计算。"
             ),
             # Hotfix（Real-use Defect #8）：Tool Schema 必须与 Backend Tool
@@ -273,9 +284,12 @@ TOOL_DEFINITIONS: list[dict] = [
                                 "enum": [
                                     "overview", "bookings", "housekeeping",
                                     "maintenance", "room-moves",
-                                    "rooms", "inventory", "procurement",
+                                    "rooms", "channels", "inventory",
+                                    "procurement",
                                 ],
-                                "description": "分析端点（需 period 的 Actual 端点）",
+                                "description": "分析端点（需 period 的 Actual 端点）；"
+                                "channels = 客源渠道经营分析（回答「哪个渠道"
+                                "订单最多 / 渠道合同房费最高 / 客源占比」）",
                             },
                             "from": {
                                 "type": "string",

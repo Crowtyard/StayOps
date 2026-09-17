@@ -55,7 +55,7 @@ def test_seed_idempotent_and_booking_role_mapping(_database):
     second = _snapshot()
     assert first == second, "连续执行两次 seed 必须收敛到一致状态"
 
-    assert first["permissions"] == 52  # 50（S8）+ Sprint 9 AI Manager 的 2
+    assert first["permissions"] == 55  # 52（S9）+ alpha.9.6 渠道 2 + QA DEF-1 房间库存 room:inventory_manage
     mapping = first["mapping"]
     # Sprint 8 §34：Analytics 权限码与矩阵
     assert {"analytics:operations_read", "analytics:business_read"} <= mapping["MANAGER"]

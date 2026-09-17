@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import locale
 import os
 import sys
 from pathlib import Path
@@ -225,12 +226,123 @@ def cmd_ports_check(args: argparse.Namespace) -> dict:
 STAYOPS_PG_SUPERUSER = "stayops"
 STAYOPS_PG_DATABASE = "stayops"
 
+# 初始化未完成标记（alpha.9.6 Windows hotfix）：
+#   initdb 开始前写入，成功后删除。只有「标记存在且 PG_VERSION 不存在」的目录
+#   才被认定为**失败初始化的残留**，允许清理重试；有 PG_VERSION 的 cluster
+#   永远不允许被自动删除。
+#
+#   ⚠ 标记文件必须放在 data 目录**之外（同级）**：initdb 要求目标目录为空，
+#   任何放在 data 里面的文件都会让 initdb 直接失败
+#   （"directory exists but is not empty"，2026-09-17 实机 QA 捕获）。
+INIT_INCOMPLETE_MARKER = ".stayops-init-incomplete"
+
+DATA_DIR_ABSENT = "absent"
+DATA_DIR_EMPTY = "empty"
+DATA_DIR_VALID_CLUSTER = "valid_cluster"
+DATA_DIR_PARTIAL_FAILED_INIT = "partial_failed_init"
+DATA_DIR_UNKNOWN_NONEMPTY = "unknown_nonempty"
+
+
+def init_marker_path(data_dir: Path) -> Path:
+    """失败初始化标记的位置（data 目录的**同级**文件，绝不放进 data 目录）。
+
+    文件名 = `<data 目录名>` + 后缀，例如
+    `%PROGRAMDATA%\\StayOps\\PostgreSQL\\data.stayops-init-incomplete`
+    —— 与具体 data 目录一一对应（同一父目录下多个 data 目录也不会互相干扰）。
+    """
+    return data_dir.parent / f"{data_dir.name}{INIT_INCOMPLETE_MARKER}"
+
+
+def classify_data_dir(data_dir: Path) -> str:
+    """判定数据目录状态（决定是否允许初始化 / 清理重试）。
+
+    - absent / empty                  → 正常首次初始化
+    - valid_cluster（有 PG_VERSION）   → **永不清理**，走启动路径
+    - partial_failed_init             → 有 incomplete 标记且无 PG_VERSION：可安全重试
+    - unknown_nonempty                → 非空、无 PG_VERSION、无标记：拒绝动手（Fail Safe）
+
+    注：历史版本曾把标记写在 data 目录内，这里对残留的 in-dir 标记文件
+    做兼容（不算作"内容"，可被清理）。
+    """
+    try:
+        if not data_dir.exists():
+            return DATA_DIR_ABSENT
+        if (data_dir / "PG_VERSION").is_file():
+            return DATA_DIR_VALID_CLUSTER
+        entries = [e for e in data_dir.iterdir() if e.name != INIT_INCOMPLETE_MARKER]
+    except OSError:
+        return DATA_DIR_UNKNOWN_NONEMPTY
+    if not entries:
+        return DATA_DIR_EMPTY
+    if init_marker_path(data_dir).is_file():
+        return DATA_DIR_PARTIAL_FAILED_INIT
+    return DATA_DIR_UNKNOWN_NONEMPTY
+
+
+def clean_partial_data_dir(data_dir: Path) -> tuple[bool, str]:
+    if (data_dir / "PG_VERSION").exists():
+        return False, "存在 PG_VERSION（有效数据库 cluster）——拒绝清理"
+    if not init_marker_path(data_dir).is_file():
+        return False, f"缺少 {INIT_INCOMPLETE_MARKER} 标记——无法确认是失败初始化残留，拒绝清理"
+    removed = 0
+    for child in sorted(data_dir.iterdir()):
+        try:
+            if child.is_dir() and not child.is_symlink():
+                __import__("shutil").rmtree(child, ignore_errors=True)
+            else:
+                child.unlink()
+            removed += 1
+        except OSError:
+            pass
+    return True, f"已清理失败初始化残留（{removed} 项，无 PG_VERSION）"
+
 # postgresql.conf 追加段（幂等：以 # stayops-auto 标记识别）
 _STAYOPS_PG_CONF = """\
 # stayops-auto
 port = {port}
 listen_addresses = '127.0.0.1'
 """
+
+
+def _preferred_decodings() -> tuple[str, ...]:
+    """解码候选顺序：UTF-8 → Windows preferred encoding / mbcs → 常见 ANSI codepage。"""
+    encodings: list[str] = []
+    try:
+        pref = locale.getpreferredencoding(False)
+        if pref:
+            encodings.append(pref)
+    except Exception:
+        pass
+    for name in ("mbcs", "cp936", "cp1252"):
+        if name not in encodings:
+            encodings.append(name)
+    return tuple(encodings)
+
+
+def decode_pg_output(raw: bytes | None) -> str:
+    """稳健解码 PostgreSQL CLI 输出（**不改变数据库编码**，只处理 CLI 文本）。
+
+    背景（alpha.9.6 Windows hotfix）：中文 Windows 下 PG 工具的部分输出按 ANSI
+    codepage 编码（如 GBK），无条件 `encoding="utf-8"` 解码会得到乱码
+    （`D:/���;Ƶ��������/…`），既污染用户可见错误，也让真正的原因难以定位。
+
+    顺序（严格按规范，绝不因为解码失败中断启动流程）：
+    1. UTF-8 strict —— PG 在 UTF-8 环境下的正常输出
+    2. Windows preferred encoding / mbcs（回退 cp936 / cp1252）
+    3. UTF-8 replacement —— 最后兜底，永不抛异常
+    """
+    if not raw:
+        return ""
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    for encoding in _preferred_decodings():
+        try:
+            return raw.decode(encoding)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return raw.decode("utf-8", errors="replace")
 
 
 def _no_window_kwargs() -> dict:
@@ -245,19 +357,24 @@ def _no_window_kwargs() -> dict:
 
 
 def _pg_run(bin_path: Path, args: list[str], timeout: int, env: dict | None = None) -> tuple[int, str, str]:
-    """运行 PG 工具，返回 (exit_code, stdout, stderr)；stdin 关闭避免任何交互挂起。"""
+    """运行 PG 工具，返回 (exit_code, stdout, stderr)；stdin 关闭避免任何交互挂起。
+
+    输出按 `decode_pg_output` 稳健解码（先 UTF-8，再系统 preferred encoding/mbcs，
+    最后 replacement）—— 中文 Windows 下 PG 可能输出 ANSI codepage 文本。
+    """
     proc = __import__("subprocess").run(
         [str(bin_path), *args],
         capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
         timeout=timeout,
         env=env,
         stdin=__import__("subprocess").DEVNULL,
         **_no_window_kwargs(),
     )
-    return proc.returncode, proc.stdout, proc.stderr
+    return (
+        proc.returncode,
+        decode_pg_output(proc.stdout),
+        decode_pg_output(proc.stderr),
+    )
 
 
 def _read_password(creds_file: Path) -> str | None:
@@ -462,7 +579,7 @@ def _pg_is_ready(bin_dir: Path, port: int) -> bool:
 def _apply_conf(data_dir: Path, port: int) -> None:
     """幂等写入 port / listen_addresses 覆盖段。"""
     conf = data_dir / "postgresql.conf"
-    text = conf.read_text(encoding="utf-8", errors="replace")
+    text = decode_pg_output(conf.read_bytes())
     if "# stayops-auto" in text:
         return
     with conf.open("a", encoding="utf-8") as fh:
@@ -470,7 +587,7 @@ def _apply_conf(data_dir: Path, port: int) -> None:
 
 
 def _pg_log_tail(data_dir: Path, lines: int = 12) -> str:
-    """启动失败时读取最近日志（按修改时间取最新文件）。"""
+    """启动失败时读取最近日志（按修改时间取最新文件；稳健解码避免乱码）。"""
     log_dir = data_dir / "log"
     try:
         files = sorted(log_dir.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -479,7 +596,9 @@ def _pg_log_tail(data_dir: Path, lines: int = 12) -> str:
     if not files:
         return ""
     try:
-        return "\n".join(files[0].read_text(encoding="utf-8", errors="replace").splitlines()[-lines:])
+        return "\n".join(
+            decode_pg_output(files[0].read_bytes()).splitlines()[-lines:]
+        )
     except OSError:
         return ""
 
@@ -508,6 +627,27 @@ def _pg_ctl_start(bin_dir: Path, data_dir: Path, port: int) -> tuple[int, str]:
     return proc.returncode, _pg_log_tail(data_dir)
 
 
+def _pg_ctl_stop(bin_dir: Path, data_dir: Path) -> tuple[int, str]:
+    """pg_ctl stop -m fast（仅测试 / 运维显式调用；产品退出时**故意不停止** PG）。"""
+    try:
+        proc = __import__("subprocess").run(
+            [
+                str(bin_dir / "pg_ctl.exe"),
+                "stop", "-m", "fast", "-w", "-t", "60",
+                "-D", str(data_dir),
+                "-s",
+            ],
+            stdout=__import__("subprocess").DEVNULL,
+            stderr=__import__("subprocess").DEVNULL,
+            stdin=__import__("subprocess").DEVNULL,
+            timeout=90,
+            **_no_window_kwargs(),
+        )
+    except Exception as exc:  # pragma: no cover - 仅测试辅助
+        return 1, str(exc)
+    return proc.returncode, _pg_log_tail(data_dir)
+
+
 def cmd_db_ensure(args: argparse.Namespace) -> dict:
     pg_bin = Path(args.pg_bin)
     data_dir = Path(args.data_dir)
@@ -522,15 +662,20 @@ def cmd_db_ensure(args: argparse.Namespace) -> dict:
             "ok": False,
             "initialized": False,
             "dbUrl": None,
-            "error": "PostgreSQL 运行时缺失（runtime/postgres/pgsql/bin 不完整："
+            "error": "PostgreSQL 运行时缺失（bin 目录不完整："
             + ", ".join(missing)
-            + "）。请重新安装 StayOps Desktop。",
+            + f"；目录 {pg_bin}）。请重新安装 StayOps Desktop。",
         }
 
     password = _ensure_creds(creds_file)
 
     def _step(msg: str) -> None:
         print(f"[db-ensure] {msg}", file=sys.stderr, flush=True)
+
+    # 审计线索：Packaged Mode 下这里必须是 ASCII-safe materialized runtime
+    # （%PROGRAMDATA%\StayOps\runtime\postgresql\<version>\pgsql\bin），
+    # 而不是安装目录里的 resources\postgres\...（安装路径可能含中文）。
+    _step(f"pg runtime bin: {pg_bin}")
 
     already_running = (data_dir / "PG_VERSION").exists() and _pg_connect_ok(
         pg_bin, port, password, "postgres"
@@ -540,11 +685,51 @@ def cmd_db_ensure(args: argparse.Namespace) -> dict:
     if not already_running:
         # 首次初始化
         if not (data_dir / "PG_VERSION").exists():
+            state = classify_data_dir(data_dir)
+            if state == DATA_DIR_UNKNOWN_NONEMPTY:
+                # 绝不对「非空且非 StayOps 可识别的部分初始化目录」动手：
+                # 既可能包含用户数据，也可能是别的程序目录。
+                _step("data dir is non-empty without PG_VERSION → refuse to touch")
+                return {
+                    "ok": False,
+                    "initialized": False,
+                    "dbUrl": None,
+                    "error": (
+                        "数据目录非空且不包含有效的 PostgreSQL 数据（缺少 PG_VERSION）："
+                        f"{data_dir}\n为避免破坏既有文件，StayOps 已停止初始化。"
+                        "请人工确认该目录后重试（StayOps 不会自动删除它）。"
+                    ),
+                }
+            if state == DATA_DIR_PARTIAL_FAILED_INIT:
+                # 只清理「明确属于失败初始化」的部分 cluster：有 incomplete 标记、无 PG_VERSION
+                cleaned, reason = clean_partial_data_dir(data_dir)
+                _step(f"partial init cleanup: {reason}")
+                if not cleaned:
+                    return {
+                        "ok": False,
+                        "initialized": False,
+                        "dbUrl": None,
+                        "error": f"数据目录状态异常，已停止以避免误删：{reason}（目录 {data_dir}）",
+                    }
+
             initialized = True
             _step("first run: initdb …")
             pwfile = data_dir.parent / ".stayops-pwfile.tmp"
+            marker = init_marker_path(data_dir)
             try:
                 data_dir.parent.mkdir(parents=True, exist_ok=True)
+                # 历史残留：早期版本把标记写进了 data 目录 → 必须清掉，
+                # 否则 initdb 会拒绝非空目录
+                legacy_marker = data_dir / INIT_INCOMPLETE_MARKER
+                if legacy_marker.exists():
+                    try:
+                        legacy_marker.unlink()
+                    except OSError:
+                        pass
+                data_dir.mkdir(parents=True, exist_ok=True)
+                # 初始化开始前落标记（在 data 目录**同级**）：
+                # 只有它存在（且无 PG_VERSION）才允许重试清理
+                marker.write_text("1\n", encoding="utf-8")
                 pwfile.write_text(password + "\n", encoding="utf-8")
                 code, _, err = _pg_run(
                     pg_bin / "initdb.exe",
@@ -564,6 +749,7 @@ def cmd_db_ensure(args: argparse.Namespace) -> dict:
                 except OSError:
                     pass
             if code != 0:
+                # 失败：保留 incomplete 标记（下次可安全重试），且绝不删除含 PG_VERSION 的 cluster
                 _step(f"initdb failed: {scrub_text(err.strip())[-200:]}")
                 return {
                     "ok": False,
@@ -571,6 +757,10 @@ def cmd_db_ensure(args: argparse.Namespace) -> dict:
                     "dbUrl": None,
                     "error": "数据库初始化失败：" + scrub_text(err.strip())[-400:],
                 }
+            try:
+                marker.unlink()
+            except OSError:
+                pass
             _apply_conf(data_dir, port)
             _step("initdb done")
 

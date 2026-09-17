@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Analytics API 客户端（Sprint 8）。
  *
  * 权限域（§35/§37，后端最终权威；前端按 permission 决定是否发起请求）：
@@ -10,6 +10,7 @@
 import { requestJson, type Transport } from "./client";
 import type {
   BookingsOut,
+  BusinessChannelsOut,
   BusinessInventoryOut,
   BusinessProcurementOut,
   BusinessRoomsOut,
@@ -42,6 +43,8 @@ export interface AnalyticsApi {
   ): Promise<MaintenanceOut>;
   operationsRoomMoves(params: AnalyticsPeriodParams): Promise<RoomMovesOut>;
   businessRooms(params: AnalyticsPeriodParams): Promise<BusinessRoomsOut>;
+  /** alpha.9.6 F4：客源渠道经营分析 */
+  businessChannels(params: AnalyticsPeriodParams): Promise<BusinessChannelsOut>;
   businessInventory(
     params: AnalyticsPeriodParams,
   ): Promise<BusinessInventoryOut>;
@@ -77,6 +80,12 @@ export function createAnalyticsApi(transport: Transport): AnalyticsApi {
       requestJson<BusinessRoomsOut>(transport, "/analytics/business/rooms", {
         query: { ...params },
       }),
+    businessChannels: (params) =>
+      requestJson<BusinessChannelsOut>(
+        transport,
+        "/analytics/business/channels",
+        { query: { ...params } },
+      ),
     businessInventory: (params) =>
       requestJson<BusinessInventoryOut>(transport, "/analytics/business/inventory", {
         query: { ...params },

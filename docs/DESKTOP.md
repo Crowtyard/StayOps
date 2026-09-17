@@ -238,10 +238,18 @@ StayOps Desktop 自带并自主管理 PostgreSQL 16 实例，双击 StayOps.exe
   随 runtime 分发；缺失时启动窗口明确报错）。
 - 数据目录：`%PROGRAMDATA%\StayOps\PostgreSQL\data`（与程序目录彻底分离，
   升级永不触碰业务数据）。
+- **执行路径（Packaged Mode，alpha.9.6 hotfix）**：安装版的 PG 工具不再从
+  `resources\postgres\...` 直接执行，而是 materialize 到
+  `%PROGRAMDATA%\StayOps\runtime\postgresql\<version>\pgsql`
+  （ASCII-safe）后统一从该路径执行 —— 否则安装路径含中文时 `initdb` 会失败：
+  `FATAL: invalid byte sequence for encoding "UTF8": 0xb0`。
+  完整性标记：`…/<version>/pgsql/.stayops-runtime.json`（半复制不会被复用）。
+  Development Mode 行为不变（继续使用工作区 `runtime/postgres/pgsql/bin`）。
+  详见 docs/DECISIONS.md（2026-09-17 Windows runtime compatibility hotfix）。
 - 凭据：`%PROGRAMDATA%\StayOps\PostgreSQL\conf\dbpass.conf`（首次 initdb
   自动生成 scram 密码，icacls 收紧 ACL）。
 - 网络：仅监听 `127.0.0.1:5433`（与开发 Docker 5432 并存，不暴露局域网）。
-- 启动链：`StayOps.exe → db-ensure 探针（init/start/ready/建库）→
+- 启动链：`StayOps.exe → db-ensure 探针（materialize runtime → init/start/ready/建库）→
   alembic 检查 → backend(注入 DATABASE_URL) → frontend → 主窗口`。
 - 生命周期：pg_ctl 独立进程，StayOps 退出后 PostgreSQL 保持运行
   （可靠性优先：秒级重开 + WAL 崩溃恢复）。
@@ -261,7 +269,8 @@ StayOps Desktop 自带并自主管理 PostgreSQL 16 实例，双击 StayOps.exe
 |---|---|---|
 | 解析根 | StayOps 工作区（`D:\MY SELF\StayOps V1.0`） | `process.resourcesPath` |
 | Python | `backend/.venv/Scripts/python.exe` | `resources/python/python.exe` |
-| PostgreSQL | `<workspace>/runtime/postgres/pgsql` | `resources/postgres/pgsql` |
+| PostgreSQL（源） | `<workspace>/runtime/postgres/pgsql` | `resources/postgres/pgsql` |
+| PostgreSQL（**执行**） | `<workspace>/runtime/postgres/pgsql/bin` | `%PROGRAMDATA%\StayOps\runtime\postgresql\<version>\pgsql\bin`（materialize，ASCII-safe） |
 | Node | PATH（或 `STAYOPS_NODE`） | `resources/node/node.exe` |
 | 前端 | `<workspace>/frontend/.next-desktop/standalone` | `resources/frontend-server` |
 | 探测脚本 | `<workspace>/scripts/*.py` | `resources/scripts/*.py` |
@@ -279,10 +288,15 @@ StayOps Desktop 自带并自主管理 PostgreSQL 16 实例，双击 StayOps.exe
   backend/              FastAPI app + alembic + desktop_backend_runner.py
   python/               Python 3.11 运行时 + 后端依赖（site-packages）
   node/                 node.exe（Next standalone server 运行时）
-  postgres/pgsql/       PostgreSQL 16（bin/lib/share）
+  postgres/pgsql/       PostgreSQL 16（bin/lib/share）+ .stayops-runtime.json（版本标记）
   scripts/              desktop_runtime.py / dev_runtime.py / desktop_db_backup.py
   frontend-server/      Next standalone（依赖已全部物化为真实文件）
 ```
+
+> `resources/postgres/pgsql` 是**源**（可能与安装路径一起含中文）；
+> 首次启动会把它 materialize 到
+> `%PROGRAMDATA%\StayOps\runtime\postgresql\<version>\pgsql` 后执行 ——
+> 安装路径因此可以包含中文（alpha.9.6 hotfix）。
 
 构建：`pnpm.cmd dist:installer` = `make-brand-icons` → `bundle-runtimes.mjs`
 （装配 `desktop/.bundle/` + 安全扫描）→ `next build` → `electron-builder --win nsis`。

@@ -35,6 +35,8 @@ function makeRoom(roomNumber: string, floor: number): RoomOut {
   return {
     id: Number(roomNumber),
     room_number: roomNumber,
+    name: null,
+    is_active: true,
     room_type_id: floor % 2 === 0 ? 3 : 4,
     floor,
     occupancy_status: "available",

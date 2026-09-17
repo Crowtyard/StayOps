@@ -13,6 +13,7 @@ import type {
   StayOut,
 } from "@/lib/api/types";
 import { businessDate } from "@/lib/booking";
+import { reservationChannelLabel } from "@/lib/channels";
 import {
   HK_PRIORITY_META,
   HK_TASK_STATUS_META,
@@ -419,7 +420,7 @@ export default function RoomDetailView({ id }: { id: string }) {
               </div>
               <div>
                 <dt className="inline text-xs text-gray-500">来源：</dt>
-                <dd className="inline">{nextReservation.source}</dd>
+                <dd className="inline">{reservationChannelLabel(nextReservation.source_channel, nextReservation.source)}</dd>
               </div>
               {canReadGuest && nextReservation.guest_name ? (
                 <div>

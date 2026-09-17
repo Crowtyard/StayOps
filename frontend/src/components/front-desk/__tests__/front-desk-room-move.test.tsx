@@ -364,6 +364,8 @@ describe("Mobile Today Board 换房入口（§25 移动端）", () => {
     return {
       id: 205,
       room_number: "205",
+      name: null,
+      is_active: true,
       room_type_id: 3,
       floor: 2,
       occupancy_status: "occupied",

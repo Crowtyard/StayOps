@@ -10,6 +10,17 @@ Reservation = 未来住宿计划（与 Stay 分离，决策见 docs/DECISIONS.md
   数据库级 Double Booking 最终仲裁（23P01 -> 409，应用层预检仅为快速路径）。
 - 日期区间统一 [check_in_date, check_out_date)：紧邻允许，重叠禁止。
 - 创建/修改未来 Reservation 不修改 Room 的 occupancy_status（与当前房态解耦）。
+
+alpha.9.6 F3（真实酒店现场试用反馈）：客源渠道规范化 ——
+- **`source_channel_id`（FK channels, nullable）是唯一渠道业务事实源。**
+  新建/编辑预订只能写本字段；渠道分析（F4）按本字段归因。
+- **legacy `source`（PG enum reservation_source）降级为只读历史投影**：
+  alpha.9.6 不删除该列（Migration 已按固定映射表回填 source_channel_id，
+  原值一字未改），仅用于历史兼容与必要的只读展示回退。
+  **新逻辑禁止以 `source` 作为来源事实**；后续单独的 schema-cleanup 版本
+  再评估删除。
+- 应用层约束（app/schemas/reservation.py）：新建预订必须提供 source_channel_id；
+  已存在的历史数据保留 NULL 容错路径，归入「未指定渠道」桶参与对账。
 """
 
 import enum
@@ -29,6 +40,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
+from app.models.channel import Channel
 from app.models.guest import Guest
 from app.models.room import Room, RoomType
 
@@ -42,6 +54,12 @@ class ReservationStatus(str, enum.Enum):
 
 
 class ReservationSource(str, enum.Enum):
+    """LEGACY（alpha.9.6 起为只读历史投影，禁止作为新的来源事实）。
+
+    新来源事实 = Reservation.source_channel_id -> channels。
+    保留本枚举仅为历史兼容（迁移映射、旧数据展示回退）。
+    """
+
     DIRECT = "DIRECT"
     PHONE = "PHONE"
     WECHAT = "WECHAT"
@@ -94,6 +112,12 @@ class Reservation(Base):
         default=ReservationSource.DIRECT,
         server_default=ReservationSource.DIRECT.value,
     )
+    # alpha.9.6 F3：客源渠道（唯一渠道业务事实源）。
+    # nullable 仅为历史数据容错（alpha.9.6 迁移已全量回填）；新建预订由
+    # schema 层强制要求，后端 service 校验渠道存在且 enabled。
+    source_channel_id: Mapped[int | None] = mapped_column(
+        ForeignKey("channels.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
     external_reference: Mapped[str | None] = mapped_column(String(100))
     agreed_total_amount: Mapped[Decimal] = mapped_column(
         Numeric(10, 2), nullable=False
@@ -121,5 +145,7 @@ class Reservation(Base):
     guest: Mapped[Guest] = relationship()
     room: Mapped[Room] = relationship()
     room_type: Mapped[RoomType] = relationship()
+    # alpha.9.6 F3：渠道（lazy 加载；渠道分析/响应序列化使用）
+    source_channel: Mapped[Channel | None] = relationship()
     # 跨模块关系（Stay 定义于 stay.py）：使用字符串注册表解析，避免循环导入
     stay = relationship("Stay", back_populates="reservation", uselist=False)

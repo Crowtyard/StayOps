@@ -9,6 +9,8 @@ import { createAiApi, type AiApi } from "./ai";
 import { createAnalyticsApi, type AnalyticsApi } from "./analytics";
 import { createAuditLogsApi, type AuditLogsApi } from "./audit-logs";
 import { createAvailabilityApi, type AvailabilityApi } from "./availability";
+import { createChannelsApi, type ChannelsApi } from "./channels";
+import { createDashboardApi, type DashboardApi } from "./dashboard";
 import { createGuestsApi, type GuestsApi } from "./guests";
 import { createHousekeepingApi, type HousekeepingApi } from "./housekeeping";
 import { createInventoryApi, type InventoryApi } from "./inventory";
@@ -26,6 +28,10 @@ export interface ApiClient {
   ai: AiApi;
   rooms: RoomsApi;
   roomTypes: RoomTypesApi;
+  /** alpha.9.6 F3：客源渠道主数据 */
+  channels: ChannelsApi;
+  /** alpha.9.6 F2：某日房态 */
+  dashboard: DashboardApi;
   users: UsersApi;
   roles: RolesApi;
   permissions: PermissionsApi;
@@ -46,6 +52,8 @@ export function createApiClient(transport: Transport): ApiClient {
     ai: createAiApi(transport),
     rooms: createRoomsApi(transport),
     roomTypes: createRoomTypesApi(transport),
+    channels: createChannelsApi(transport),
+    dashboard: createDashboardApi(transport),
     users: createUsersApi(transport),
     roles: createRolesApi(transport),
     permissions: createPermissionsApi(transport),

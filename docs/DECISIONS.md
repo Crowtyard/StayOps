@@ -807,8 +807,364 @@ dev standalone 均报 Cannot find module '@swc/helpers/_/_interop_require_defaul
    VMware / VirtualBox，因此**无法完成 clean-machine QA**；结论止于
    `READY FOR CLEAN-MACHINE QA`，干净 VM/PC 验证通过前不打 tag、不发 Release。
 
+## 2026-09-14 — alpha.9.6：Field Trial Operations Improvements（真实酒店现场试用反馈闭环）
 
+反馈来源：**real hotel field trial / real operator feedback**（不含个人身份信息）。
+本轮 4 个需求属于同一条业务链：房间基础资料 → 某日房态 → 订单来源渠道 →
+渠道经营分析，因此统一设计、不四处打补丁。范围边界：alpha.9.5 只做 Windows
+non-ASCII install path / PostgreSQL initdb 兼容 hotfix，两者不混版；本版
+**NO TAG / NO RELEASE**，待独立 QA。
 
+### 1. 房间数量不是独立业务事实（F1）
 
+**Room records = 业务事实；Room count = 当前启用 Room 记录的计算结果。**
+`GET /rooms/summary` 用 `COUNT(*) FILTER (WHERE is_active)` 计算总数 / 启用 /
+停用，**禁止**新增 `rooms.room_count = 28` 这类会与 Room 表形成双事实源的字段
+（migration 测试显式断言 rooms 表不存在 `%room_count%` 列）。
 
+### 2. 停用优先于删除；停用不释放房号（F1）
 
+- 房间不再售卖时默认动作是**停用**（`is_active=false`），不是删除：
+  存在历史 Reservation / Stay / StayRoomAssignment / HousekeepingTask /
+  MaintenanceWorkOrder 引用时，`DELETE /rooms/{id}` 返回 409 并提示改用停用。
+  只有从未被任何业务记录引用的房间才允许物理删除。
+- **room_number 保持全局唯一（含停用房间），不建立 partial unique index。**
+  理由：房号代表持续存在的物理房间身份，必须保证历史 Reservation / Stay /
+  Maintenance 语义稳定；停用即释放房号会允许「同一房号的第二段历史」，
+  造成历史口径歧义。重复房号时错误信息区分「已被启用房间占用」与
+  「已被停用房间占用（停用房号不释放）」。
+- 在住房间不可停用（409，提示先退房或换房）。
+
+### 3. 物理房态与某日房态严格分离（F2）
+
+- **`rooms.occupancy_status` 只表达 Business Date 当天的物理/运营状态**，
+  由 check-in / check-out / Maintenance 事务单点维护；它**不表达"未来某天是否
+  被预订"**。创建未来 Reservation 不修改 Room 状态（既有决策，本轮强化）。
+- **某日房态必须由 `app/services/room_status.py` 的 date occupancy resolver 计算**，
+  禁止前端拉全量 Reservation 自行计算，也禁止用当前 `Room.status` 冒充未来房态。
+- 计算规则（后端单点权威）：
+  - 只统计启用房间（`is_active=true`）；停用房单列，不进入任何占用分区与分母。
+  - 日期占用区间 **半开 `[check_in_date, check_out_date)`**，与
+    `ex_reservations_room_daterange` 排他约束、`check_room_availability` 完全同语义；
+    **退房日不算整日占用**（20 日退房，20 日可售）。
+  - ACTIVE `Stay` 覆盖 date -> `OCCUPIED`；`CONFIRMED` `Reservation` 覆盖 date -> `RESERVED`；
+    否则 -> `AVAILABLE`。`CANCELLED` / `NO_SHOW` / `COMPLETED` 不参与日期占用。
+  - **physical override 优先**：`unavailability_source=MAINTENANCE`、
+    `occupancy_status ∈ {blocked, out_of_service}`、当天存在阻断性维修工单
+    -> `OUT_OF_SERVICE`（不因当天无预订就标为可售）。
+  - `date > business_date`（未来）：**只承认明确的长期停用**（`out_of_service`），
+    不把临时锁房 / 当天维修 / 清洁状态外推到未来；响应
+    `physical_status_authoritative=false`，前端必须显式提示。
+  - **不推断未来 CLEANING**：`current_cleaning_status` 与
+    `effective_occupancy_status` 仅在 `date == business_date` 时返回。
+  - `arriving`（预计到店）= `status=RESERVED` 且 `date == check_in_date`；
+    **绝不把「预计到店」谎报成「在住」**。
+- 不变式（测试锁定）：启用房间恰好落入
+  `available + reserved + occupied + out_of_service` 之一，
+  且 `total_enabled_rooms == enabled_room_count`。
+- `GET /dashboard/room-status` 权限为 `room:read`，查询范围限制在
+  `[business_date-31, business_date+365]`。
+
+### 4. Channel 是主数据，不是硬编码 enum（F3）
+
+- 新表 `channels` + PG 枚举 `channel_category`（OTA / DIRECT / OFFLINE /
+  CORPORATE / OTHER）。预置 10 个系统渠道（美团 / 携程 / 飞猪 / 直订 / 电话 /
+  微信 / 散客 / 协议客户 / 其他 / 历史来源）。
+- **「其他」不做成 `channel=OTHER + other_text`**：所有渠道在表中平权，
+  「其他」只是一行默认渠道；“其他/新增渠道”入口即「新增自定义渠道」。
+  这样才能让抖音 / 小红书 / 途家 / Booking 等渠道在经营分析中长期独立成行。
+- 策略：系统预置渠道**名称固定、不可删除**，仅可启用/停用；自定义渠道可改名、
+  可停用；**停用不释放名称**（避免经营分析出现同名渠道）；**已被 Reservation
+  引用的渠道拒绝删除**（历史归因必须可回溯），提示改用停用。
+  `CUSTOM_OTHER` / `CUSTOM_LEGACY` 例外允许改名 —— 其稳定归属由不可变 `code` 保证。
+- 自定义渠道 `code` 由后端生成（`CUSTOM_<slug>`，非 ASCII 名称退化为 UUID 后缀），
+  一经生成不可变。
+
+### 5. Reservation 来源：单一事实 = source_channel_id；legacy source 为只读投影（F3）
+
+- **`reservations.source_channel_id`（FK channels）是唯一渠道业务事实源。**
+- `reservations.source`（legacy PG enum `reservation_source`）**本轮不删除**，
+  降级为**只读历史投影**：
+  - 迁移按固定映射表全量回填 `source_channel_id`，**原列值一字不改**；
+  - 写入路径只由渠道**单向派生**该列（`legacy_source_for_channel`）；
+  - **读取路径一律以 `source_channel_id` 为准**；
+  - 入站兼容：旧客户端仍可只传 `source`，service 层解析为渠道后落库
+    （不是第二事实源）；两者冲突时**以 `source_channel_id` 为准**并记录告警日志；
+  - 两者都缺失时**不阻断写入**（既有客户端/E2E 兼容），但 `source_channel_id`
+    为 NULL 并记录 WARNING，在渠道分析中归入「未指定渠道」桶。
+  - 后续单独的 schema-cleanup 版本再评估删除 `source` 列。
+- **migration mapping（逐值固定，不丢历史值）**：
+
+  | legacy source | -> channel | 依据 |
+  |---|---|---|
+  | `DIRECT` | 直订 | 语义等价 |
+  | `PHONE` | 电话 | 语义等价 |
+  | `WECHAT` | 微信 | 语义等价 |
+  | `WALK_IN` | 散客 | 语义等价 |
+  | `OTA` | **其他** | 历史 OTA 无法可靠拆分到具体平台，禁止猜测 |
+  | `CORPORATE` | 协议客户 | 语义等价 |
+  | `OTHER` | 其他 | 语义等价 |
+  | NULL / 未知 | 历史来源 | 兜底 |
+
+  该映射在 migration 与 service 各有一份，由测试断言两者完全一致（防漂移）。
+
+### 6. 渠道经营分析口径（F4，LOCKED）
+
+- 端点 `GET /analytics/business/channels`，权限 **`analytics:business_read`**
+  （与既有经营域一致；FINANCE / MANAGER 可见，FRONT_DESK 不可见且
+  **不因 channel:read 获得经营分析能力**）。
+- **归因链**：`Stay → Reservation.source_channel_id → Channel`。
+  每单恰好归因一次；`COUNT(DISTINCT stay_id)` 语义，**换房（Room Move）不重复计房晚**。
+- **订单数**：Arrival Cohort（`check_in_date ∈ [from, to)`），
+  **排除 `CANCELLED` / `NO_SHOW`**。与 `/operations/bookings` 同源同界。
+- **实际房晚**：逐字复用既有 `_stay_intervals_sql`（COMPLETED 用
+  `bd(actual_check_out_at)`，ACTIVE 用 `current_business_date` exclusive）。
+- **合同房费**：逐字复用 `business_rooms_analytics` 的口径
+  （`agreed_total_amount / planned_nights` 分摊到实际占用且落在计划区间内的房晚）。
+  **不新造收入口径**；`/business/rooms` 与 `/business/channels` 合计必须精确对账。
+- **命名纪律**：StayOps 无 Folio / Payment / Settlement，因此
+  **禁止使用「营业收入 / 实收」**；UI 与 API 一律使用「合同房费」，并明确标注
+  **非实际收款**。`contracted_adr` 同为合同口径（分母 = 有价实际房晚）。
+- 分母 0 -> `null`（渠道占比 / 合同 ADR），禁止 NaN / Infinity。
+- **对账不变式**：`Σ channels + unassigned(未指定渠道) == totals`（测试锁定）。
+- 渠道停用后其**历史业绩仍出现在经营分析中**并标记 `enabled=false`。
+
+### 7. AI Manager 兼容策略（不新造子系统）
+
+- `get_analytics` 的 `BUSINESS_ENDPOINTS` 增加 `"channels"`，与既有
+  `rooms` / `inventory` / `procurement` 完全同构 —— 沿用既有工具协议与
+  `analytics:business_read` 域校验，**不新增工具名、不新建 AI 子系统**。
+- 新增 AI 只读视图 `ai_channels`（运营域：主数据不含金额；含金额的渠道经营
+  分析走 `get_analytics(channels)`，受经营域约束）；`ai_rooms` 增加
+  `name, is_active`；`ai_reservations` 增加 `source_channel_id`。
+  AI 视图总数 21 → 22，`EXPECTED_AI_VIEWS` 同步更新。
+- `ai_schema_context.py` 同步说明「source_channel_id 是唯一来源事实、
+  `source` 是 legacy 只读投影、渠道指标请用 get_analytics 不要自行计算」。
+
+### 8. 权限模型（F1/F3，复用既有 RBAC，不造平行系统）
+
+- 新增权限码 `channel:read` / `channel:write`（权限总数 52 → 54）：
+  MANAGER 两者；FRONT_DESK 仅 `channel:read`；HOUSEKEEPING / MAINTENANCE /
+  FINANCE 无。
+- 新增权限码 `room:inventory_manage`（权限总数 54 → 55）：MANAGER 持有；
+  FRONT_DESK / HOUSEKEEPING / MAINTENANCE / FINANCE 均无。
+  **房间主数据管理不再由 `room:write` 承担**（详见 §11 DEF-1）；
+  `room:write` 语义保持 alpha.9.4 以来不变 = 日常房态操作；
+  `room:delete` 仍不授予任何常规角色。
+- **新增权限码只经 `app/seed.py` 的 `PERMISSIONS` + `ROLE_PERMISSIONS` 幂等收敛**
+  （既有先例：Sprint 8/9 同样只改 seed）；**migration 不写 permissions /
+  role_permissions、不授权** —— 否则会出现第二套授权来源。
+- **新路由一律单权限码鉴权**，不新增 `require_permissions` 多码 AND 用法
+  （仓库既无先例，避免制造无先例的权限语义）。
+  例外（QA §2 要求，已在 §11 记录）：**既有** `DELETE /rooms/{id}` 使用
+  `room:inventory_manage` **且** `room:delete` 两码 —— 既把删除纳入房间主数据
+  保护区，又保持 `room:delete` 不授予常规角色的既有决策，不产生权限扩张。
+- 渠道是运营域主数据（`ai_channels`），**渠道收入/ADR 属经营域**，
+  两个域不交叉。
+
+### 9. 停用通道不得污染既有业务（F1/F3）
+
+- 停用房间：不参与可售性（`check_room_availability` 与 `GET /availability`
+  均排除），不可新建预订；但**既有预订仍可正常 check-in / check-out / 取消**，
+  历史记录完整可读。
+- 停用渠道：不可用于新预订（409 可读错误）；既有预订仍完整可读，
+  响应内嵌 `source_channel.enabled=false` 供前端提示。
+- 停用房间仍计入房型 `room_count`（房型房间数 = 全部房间，含停用），
+  避免停用导致历史房间数口径变化。
+
+### 10. 本轮测试口径
+
+- Backend pytest **783**（基线 649 + 134 新增：migration 5、房间管理 22、
+  渠道 27、某日房态 31、预订渠道 21、渠道分析 19、AI 兼容 8）
+- Frontend Vitest **495**（基线 462 + 33 新增：房间资料 UI 9、
+  房态概览按日期 8、渠道管理 + 渠道经营分析 15 …）
+- Playwright 新增 `field-trial-alpha96.spec.ts` 4 条真实 E2E（对应任务书 §12 的
+  4 条流程），E2E 数据全部经真实 API 构造 + 仓库既有 backdate 脚本回填历史时间戳
+- 迁移验证：alpha.9.4 真实 schema → head（28 房 + 全部 reservation 保留、
+  7 种 legacy source 逐值回填正确、空库升级、重复升级幂等、downgrade 往返、
+  单 head）
+
+### 11. 独立 QA 复检修复（alpha.9.6 QA Fix，不改动被冻结的业务规则）
+
+#### DEF-1（HIGH / release blocker）· 房间主数据权限从 `room:write` 分离
+
+- **问题事实**：alpha.9.6 为 F1 新增的 `POST /rooms/{id}/disable|enable`
+  沿用了 `room:write` 守卫，而 FRONT_DESK 自 alpha.9.4 起已持有 `room:write`，
+  于是该权限码的**授权面被静默扩大**到房间主数据（新增 / 编辑 / 停用 / 启用）。
+  独立 QA 以真实 HTTP 复现：`POST /rooms` 201、`PATCH /rooms/{id}` 200、
+  `POST /rooms/{id}/enable` 200。这与 Field Trial PRD「不要让普通低权限用户
+  随意修改基础房间库存」直接冲突 —— 是**权限扩张回归**，不是风格问题。
+- **决策**：**能力分类先行，权限码跟随能力**：
+  - 「房间**主数据**管理」= 新增 / 编辑（含房号、房型、楼层、名称、备注、
+    经营启停）/ 停用 / 启用 / 删除 → 新权限码 `room:inventory_manage`
+  - 「**日常房态作业**」= `POST /rooms/{id}/status`（占用 / 清洁状态机）→
+    仍由 `room:write`（或维度专用码）守卫，语义与 alpha.9.4 完全一致
+- **落地**：`POST /rooms`、`PUT`/`PATCH /rooms/{id}`、`disable`、`enable`
+  改为 `require_permissions("room:inventory_manage")`；
+  `DELETE /rooms/{id}` 为
+  `require_permissions("room:inventory_manage", "room:delete")`
+  —— QA 修复项 §2 明确要求 DELETE 纳入 `room:inventory_manage` 保护区，而
+  仓库既有决策是「`room:delete` 不授予任何常规角色」，两码 AND 同时满足两者：
+  FRONT_DESK 与 MANAGER 都不能删除房间，**不产生任何权限扩张**。
+  这是本仓库唯一的多码 AND 用法，属有意为之并在此记录（原「新路由单权限码」
+  纪律针对的是**新增路由**，本次是既有路由的守卫收敛）。
+  前端按钮门控同步改为 `room:inventory_manage` / `room:delete`。
+- **不采用**的方案：① 只在前端隐藏按钮（无效 —— 后端仍是权威，且 QA 是用
+  HTTP 复现的）；② 在 `room:write` 上叠加多码 AND（会让房态操作也需要主数据
+  权限，方向相反）；③ 硬编码角色名判断（违反仓库既有「用 permission 判断，
+  禁止硬编码角色名」规则）。
+- **授权来源不变**：只改 `app/seed.py` 的 `PERMISSIONS` + `ROLE_PERMISSIONS`；
+  **migration 不写 permissions / role_permissions**，维持单一授权来源。
+- **回归保护**：新增测试同时锁两个方向 —— FRONT_DESK 主数据端点全 403
+  **且** 房态操作仍 200（拆分权限 ≠ 削弱日常作业）；前端测试锁「仅
+  `room:write` 不显示主数据按钮」与「有 `room:inventory_manage` 无 `room:write`
+  也能管理主数据」。SUPER_ADMIN 经 seed 动态全权限，`room:delete` 行为不变。
+
+#### DEF-2（MEDIUM）· E2E 登录改为可判定流程
+
+- **问题事实**：`z-ai-manager.spec.ts` Flow C 在全量套件中出现过 1 次
+  FINANCE 登录后仍停在 `/login` 的失败（run1 84 通过 / run2 83+1 失败 /
+  run3 84 通过），隔离重跑 6/6 通过 —— 属测试**同步方式**不确定，不是产品缺陷
+  （账号、角色、DB 状态均已排除）。
+- **决策**：登录助手改为**状态可判定**而非依赖隐式时序：先等到达 `/login`、
+  用会话端点确认确为未登录、再填凭据、等待登录响应、最后断言 `/dashboard`。
+  失败时输出 HTTP 状态 + 页面错误文案 + 当前 URL（**绝不输出密码**）。
+- **明确拒绝**：`sleep(3000)`、盲目重试、跳过断言。这些会把真实权限/认证缺陷
+  伪装成 flake —— 正是本轮要消除的风险。
+
+#### DEF-3（LOW）· 日期房态字段语义澄清（仅文档，不改行为）
+
+- `GET /dashboard/room-status` 的 `effective_occupancy_status` /
+  `current_cleaning_status` 在**非业务日期**（前一天 / 后一天）为 `null`，
+  这是设计如此：`rooms.occupancy_status` 只有「现在」一个时刻的事实，
+  把今天的在住读成前天 / 明天在住就是编造事实。历史日期由 `status=OCCUPIED`、
+  未来日期由 `status=RESERVED` 表达。已在 `docs/API.md`
+  「日期房态 vs 物理房态」一节写明；前端仅在 `is_today` 时渲染该徽标。
+- **行为零改动**：不改 resolver、不改响应结构。
+
+#### DEF-4（LOW）· `docs/DECISIONS.md` 文件末尾多余空行已移除
+
+- 使 `git diff --check` 干净通过。
+
+## 2026-09-17 — alpha.9.6 Windows runtime compatibility hotfix（非 ASCII 安装路径）
+
+**背景（真实复现，不是理论问题）**：Packaged Mode 之前直接从
+`process.resourcesPath\postgres\pgsql\bin` 执行 PostgreSQL CLI。当**安装路径**
+含中文（例：`D:\安客酒店试用软件\StayOps\resources`）时，首次 `initdb` 失败：
+
+```
+FATAL:  invalid byte sequence for encoding "UTF8": 0xb0
+child process exited with exit code 1
+initdb: removing contents of data directory "..."
+```
+
+复现与定位（本机 PostgreSQL 16.15，同一套参数 `-E UTF8 --locale=C`）：
+
+| 场景 | bin 路径 | data 路径 | 结果 |
+|---|---|---|---|
+| A | 含中文 | ASCII（`%PROGRAMDATA%`） | **FAIL**（`invalid byte sequence … 0xb0`） |
+| B | ASCII | 含中文 | PASS |
+| 对照 | ASCII | ASCII | PASS |
+
+→ 触发条件是 **PG 工具自身的执行路径**（PostgreSQL 相对 executable 解析 `share/`，
+非 ASCII 路径使其内部文本处理越界），与 data 目录路径无关。因此修复必须落在
+「从哪里执行 PG CLI」，而不是数据目录。
+
+### 1. Packaged Mode：materialize 到 ASCII-safe runtime 后执行
+
+- 目标布局（版本化，与 data / config 分离）：
+
+  ```
+  %PROGRAMDATA%\StayOps\
+    runtime\postgresql\<version>\pgsql\        ← materialized runtime（执行路径）
+      bin\ lib\ share\ …  .stayops-runtime.json
+    PostgreSQL\data\                            ← 数据库数据（升级不触碰）
+    config\                                     ← ai_encryption.key / admin-bootstrap.dat
+  ```
+
+- **所有** PG CLI（initdb / pg_ctl / pg_isready / psql / pg_dump / pg_restore）
+  统一从该路径执行：Electron 侧 `desktop/src/runtime/pgRuntime.ts` 解析出 bin 目录，
+  经既有 `--pg-bin` 参数传给 `scripts/desktop_runtime.py`；
+  `scripts/desktop_db_backup.py` 使用同一套 resolver 语义（否则会出现
+  「initdb 用 ASCII runtime，pg_dump 却仍从中文 resourcesPath 运行」的不一致）。
+- Development Mode **行为不变**（继续使用工作区 `runtime/postgres/pgsql/bin`）。
+- 明确不采用：8.3 short path（脆弱、非长期方案）、SQL_ASCII、降低 UTF8 要求、
+  要求用户只能安装到英文目录。
+
+### 2. Materialization 安全（逐条实现并可测）
+
+| 要求 | 实现 |
+|---|---|
+| versioned runtime dir | `…\postgresql\<version>\pgsql`（版本来自 build 期 marker / `postgres.exe --version`） |
+| staging | `…\<version>\.staging-<pid>-<rand>\pgsql` |
+| 复制后校验 | 7 个必需 binary + `share/postgres.bki`、`share/postgresql.conf.sample`、`share/timezone`、`lib` |
+| 原子 promote | 同卷 `fs.renameSync`（先校验、再写 marker、再 rename） |
+| 幂等 | 完整同版本 runtime 直接复用（`action: reused`） |
+| 半复制不算成功 | 完整性标记**最后写入**且只在 staged 目录内 → 半复制目录必然缺标记，永不复用 |
+| 不碰 data dir / 不删库 | resolver 不接收 data 目录参数；只写 `runtime\…` 子树 |
+| materialize 失败 | Fail Safe：报可读错误并停止启动（绝不静默回退到非 ASCII 路径执行） |
+
+补充：`%PROGRAMDATA%` 自身若非 ASCII（极端重定位场景）→ 同样 Fail Safe 并给出
+可读提示；崩溃残留的 `.staging-*` / `.broken-*` 会在下次 materialize 时清理。
+
+### 3. PG CLI 输出解码（乱码修复，不改数据库编码）
+
+`subprocess` 之前无条件 `encoding="utf-8"` 解码 PG 工具输出；中文 Windows 下
+PG 部分输出为 ANSI codepage（GBK），导致用户可见错误里出现
+`D:/���;Ƶ��������/StayOpsTest/pgdata` 这类乱码。现改为
+`decode_pg_output()`：**UTF-8 strict → 系统 preferred encoding / mbcs（回退
+cp936 / cp1252）→ UTF-8 replacement**，永不抛异常；仅处理 CLI 文本解码，
+**不改变数据库编码**。`desktop_runtime.py` 与 `desktop_db_backup.py` 使用同一策略。
+
+### 4. 失败初始化的部分 cluster（只清理可确证者）
+
+- initdb 开始前写入标记
+  `%PROGRAMDATA%\StayOps\PostgreSQL\data.stayops-init-incomplete`
+  （**与 data 目录同级，绝不放进 data 目录** —— initdb 要求目标目录为空，
+  data 里任何文件都会让它直接失败：`directory exists but is not empty`；
+  该缺陷由 2026-09-17 实机 QA 捕获，详见 §7），成功后删除。
+- `classify_data_dir()` 五态：`absent` / `empty` / `valid_cluster`（有 PG_VERSION）/
+  `partial_failed_init`（有标记且无 PG_VERSION）/ `unknown_nonempty`。
+- `clean_partial_data_dir()` 仅在「有标记且无 PG_VERSION」时清理；
+  **有 PG_VERSION 的 cluster 永不删除**；无法确证的非空目录一律拒绝并报可读错误
+  （绝不自动删除用户文件）。
+
+### 5. 测试
+
+- 单元测试：`desktop/src/runtime/__tests__/pgRuntime.test.ts`（16 条：resolver /
+  materialization / 幂等复用 / 半复制 / 损坏隔离 / staging 残留 / data dir 不动 /
+  Fail Safe / 版本探测 / 工具覆盖面 / marker 不含开发机路径）。
+- Python 纯逻辑测试：`backend/tests/test_desktop_runtime_pg.py`（19 条：解码三级
+  策略、data dir 五态判定、清理守卫、标记必须在 data 之外、备份 resolver 忽略
+  半复制 runtime）。
+- **真实集成测试**：
+  - `desktop/src/runtime/__tests__/pgRuntime.integration.test.ts`
+    （`STAYOPS_PG_INTEGRATION=1`，默认跳过）：把 runtime 放到
+    `D:\测试目录\StayOps\resources\postgres\pgsql`（非 ASCII）→ materialize 到
+    `C:\ProgramData\StayOps\runtime\postgresql\16.15\pgsql` → 执行真实
+    `initdb -E UTF8 --locale=C` → **PASS**（输出可读、无 U+FFFD、提示路径为
+    materialized runtime）。
+  - `backend/tests/test_desktop_runtime_pg_integration.py`（同 env 开关，默认跳过）：
+    真实 `cmd_db_ensure`（与安装版启动同一条代码路径）→ 标记写在 data 之外 →
+    `initdb -E UTF8 --locale=C` → `pg_ctl start` → `pg_isready` → 建库 `stayops`；
+    第二次调用幂等；有 PG_VERSION 时清理守卫必须拒绝。
+
+### 7. 由实机 QA 捕获并修复的缺陷（记录以防回归）
+
+1. **incomplete 标记放在 data 目录内** → 全新安装首次 `initdb` 失败：
+   `initdb: 错误: 目录 "C:/ProgramData/StayOps/PostgreSQL/data" 已存在，但不是空的`。
+   修复：标记移到 data 同级的 `<data 名>.stayops-init-incomplete`，并兼容清理
+   早期版本残留在 data 内的标记文件；同时新增真实集成测试
+   （`test_desktop_runtime_pg_integration.py`）覆盖「全新 initdb」这条路径 ——
+   纯逻辑单元测试无法发现该缺陷。
+2. **`app.asar` 内含开发机绝对路径**：electron-builder 生成的
+   `dist/builder-debug.yml`（内容包含 `D:\MY SELF\...`）被 `files: dist/**`
+   打进 asar，违反 security audit（安装包内不得出现开发机路径）。
+   修复：`desktop/electron-builder.yml` 显式排除
+   `dist/builder-debug.yml` / `dist/StayOps-Setup-*` / `*.blockmap` /
+   `RELEASE-NOTES-*`。
+
+### 6. 版本边界
+
+alpha.9.6 同时包含 Field Trial Improvements 与本次 Windows runtime hotfix；
+原计划的独立 alpha.9.5 版本取消（不存在可验证的独立边界），不单独打 tag。

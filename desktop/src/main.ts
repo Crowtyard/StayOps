@@ -23,6 +23,7 @@ import {
 } from "./runtime/config";
 import { IPC } from "./runtime/ipc";
 import { ScrubFileLogger } from "./runtime/logger";
+import { ensurePgRuntime } from "./runtime/pgRuntime";
 import { findOccupants, portInUse, resolveNodePath } from "./runtime/preflight";
 import {
   aiKeyEnsure,
@@ -327,8 +328,31 @@ async function bootstrap(workspaceRoot: string | null): Promise<void> {
         { label: "frontend", port: DESKTOP_FRONTEND_PORT },
       ]),
     dbEnsure: async () => {
+      // alpha.9.6 Windows non-ASCII hotfix：Packaged Mode 下 PG CLI 必须从
+      // ASCII-safe materialized runtime 执行（安装路径可能含中文，直接执行
+      // resources/postgres 会让 initdb 报 invalid byte sequence for UTF8）。
+      // Development Mode 行为不变（pgRuntime 直接返回工作区 bin）。
+      const pg = ensurePgRuntime({
+        mode: paths.mode,
+        bundledPgDir: paths.pgBundledDir,
+        devBinDir: paths.pgBinDir,
+        runtimeRootDir: paths.pgRuntimeRootDir,
+      });
+      if (!pg.ok) {
+        logger.write("DB", `postgres runtime unavailable: ${pg.error}`);
+        return {
+          ok: false,
+          data: null,
+          error: `${pg.error}${pg.detail ? `\n${pg.detail}` : ""}`,
+          exitCode: null,
+        };
+      }
+      logger.write(
+        "DB",
+        `postgres runtime: ${pg.binDir} (${pg.action}${pg.version ? `, ${pg.version}` : ""})`,
+      );
       const result = await dbEnsure(ctx, {
-        bin: paths.pgBinDir,
+        bin: pg.binDir,
         data: paths.pgDataDir,
         creds: paths.pgCredsFile,
         port: DESKTOP_PG_PORT,

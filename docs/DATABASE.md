@@ -1,5 +1,24 @@
 # StayOps 数据库
 
+> alpha.9.6 新增（Migration `a96b1c4d7e02`，Field Trial Operations Improvements）：
+> - `rooms` 增加 `name`（房间显示名称，nullable）与 `is_active`（是否投入经营，
+>   NOT NULL default true，`ix_rooms_is_active`）。
+>   **未新增任何 room_count 真值字段** —— 房间数量永远是 rooms 记录的计算结果
+>   （`GET /rooms/summary` 用 `COUNT(*) FILTER`）。
+> - 新表 `channels`（客源渠道主数据）+ PG 枚举 `channel_category`
+>   （OTA / DIRECT / OFFLINE / CORPORATE / OTHER）+ 唯一索引
+>   `ix_channels_code` / `ix_channels_name`；预置 10 个系统渠道。
+> - `reservations` 增加 `source_channel_id`（FK→channels RESTRICT, nullable,
+>   `ix_reservations_source_channel_id`）= **唯一渠道业务事实源**；
+>   legacy `source` 列保留为**只读历史投影**，迁移按固定映射表全量回填
+>   （原值一字不改）。
+> - AI 只读视图：新增 `ai_channels`，`ai_rooms` 增加 `name, is_active`，
+>   `ai_reservations` 增加 `source_channel_id`（**21 → 22 个 `ai_*` 视图**）。
+> - 新增权限码 `channel:read` / `channel:write`（52 → 54），只经 `app/seed.py`
+>   幂等收敛，**migration 不写权限表、不授权**。
+> - **不自动 downgrade**（仓库政策）；该 revision 本身可逆（downgrade 会 DROP 视图
+>   重建为 legacy 定义，legacy `source` 列始终未被修改，原始来源事实不丢失）。
+
 > Sprint 1 范围：`users`、`roles`、`permissions`、`user_roles`、`room_types`、`rooms`、`audit_logs`（另含关联表 `role_permissions`）。
 > Sprint 2（S2-T1）新增：`guests`、`reservations`、`stays`（另含 PG 枚举 `reservation_status` / `reservation_source` / `stay_status`、Sequence `reservation_no_seq` / `stay_no_seq`、排他约束 `ex_reservations_room_daterange`）。
 > Sprint 3 新增：`housekeeping_tasks`（另含 PG 枚举 `hk_task_status` / `hk_task_source` / `hk_task_priority`、Sequence `housekeeping_task_no_seq`、部分唯一索引 `uq_housekeeping_tasks_active_room`）。
@@ -19,7 +38,7 @@
 | user_roles | user_id, role_id | 复合主键，级联删除 |
 | role_permissions | role_id, permission_id | 复合主键，级联删除 |
 | room_types | id, name(unique), base_price(Numeric), capacity, description | |
-| rooms | id, room_number(unique), room_type_id(FK), floor, **occupancy_status**, **cleaning_status**, **unavailability_source**(nullable), notes | 房态双维度 + 不可售来源（见下） |
+| rooms | id, room_number(unique), **name**(nullable), room_type_id(FK), floor, **is_active**(bool, default true), **occupancy_status**, **cleaning_status**, **unavailability_source**(nullable), notes | 房态双维度 + 不可售来源（见下）；**name = 房间显示名称；is_active = 是否投入经营（停用不释放房号、不破坏历史）**；房间数量由 COUNT 计算，无 room_count 列 |
 | audit_logs | id, user_id(FK nullable, SET NULL), action, resource_type, resource_id, details(JSONB), ip | 后端业务层自动写入 |
 
 ## Booking 域表结构（Sprint 2 · S2-T1，Migration `16debb5c57f8`）
@@ -27,8 +46,25 @@
 | 表 | 关键字段 | 说明 |
 |---|---|---|
 | guests | id, name, phone, email, notes, created_at, updated_at | Guest = PII，由 `guest:read` 门控；**不存**身份证号/人脸/公安登记数据 |
-| reservations | id, reservation_no(unique), guest_id(FK→guests RESTRICT), room_id(FK→rooms RESTRICT), room_type_id(FK→room_types RESTRICT), check_in_date, check_out_date, status(枚举), source(枚举), external_reference, agreed_total_amount(Numeric(10,2)), currency, notes, created_by/updated_by(FK→users SET NULL), created_at, updated_at | Reservation = 未来住宿计划；日期区间 `[check_in_date, check_out_date)`；**Sprint 6：Check-in 后 room_id 冻结为原分配房** |
+| reservations | id, reservation_no(unique), guest_id(FK→guests RESTRICT), room_id(FK→rooms RESTRICT), room_type_id(FK→room_types RESTRICT), check_in_date, check_out_date, status(枚举), source(枚举, **legacy 只读投影**), **source_channel_id**(FK→channels RESTRICT, **唯一来源事实**), external_reference, agreed_total_amount(Numeric(10,2)), currency, notes, created_by/updated_by(FK→users SET NULL), created_at, updated_at | Reservation = 未来住宿计划；日期区间 `[check_in_date, check_out_date)`；**Sprint 6：Check-in 后 room_id 冻结为原分配房** |
 | stays | id, stay_no(unique), reservation_id(FK→reservations RESTRICT, **unique**), room_id(FK→rooms RESTRICT), status(枚举), actual_check_in_at(timestamptz), planned_check_out_date, actual_check_out_at(timestamptz), created_by/updated_by(FK→users SET NULL), created_at, updated_at | Stay = 实际入住事实；一个 Reservation 至多一个 Stay；**room_id = 当前实际房间快速指针（Sprint 6）** |
+
+## Channel 域表结构（alpha.9.6 F3，Migration `a96b1c4d7e02`）
+
+| 表 | 关键字段 | 说明 |
+|---|---|---|
+| channels | id, code(unique, String(50)), name(unique, String(100)), category(枚举 channel_category), enabled(bool), is_system(bool), sort_order(int), created_at, updated_at | **客源渠道主数据**（可扩展，非硬编码 enum）。`code` 稳定不可变（系统渠道 `SYS_*` / 迁移预置 `CUSTOM_OTHER`·`CUSTOM_LEGACY` / 自建渠道后端生成 `CUSTOM_<slug>`）；`name` 全局唯一（**含停用渠道：停用不释放名称**）；`is_system=true` 名称固定且不可删除；`enabled=false` 不可用于新预订但历史预订完整保留 |
+
+`channel_category` 枚举值：`OTA`（OTA 平台）/ `DIRECT`（直销）/ `OFFLINE`（线下）/
+`CORPORATE`（协议客户）/ `OTHER`（其他）。
+
+预置系统渠道（顺序 = `sort_order`）：美团(OTA,10) / 携程(OTA,20) / 飞猪(OTA,30) /
+直订(DIRECT,40) / 电话(OFFLINE,50) / 微信(OFFLINE,60) / 散客(OFFLINE,70) /
+协议客户(CORPORATE,80) / 其他(OTHER,900) / 历史来源(OTHER,990)。
+
+**legacy source → channel 回填映射（migration，逐值固定）**：
+`DIRECT→直订`、`PHONE→电话`、`WECHAT→微信`、`WALK_IN→散客`、`OTA→其他`、
+`CORPORATE→协议客户`、`OTHER→其他`、NULL/未知→`历史来源`。
 
 ## Room Move 域表结构（Sprint 6，Migration `c8e2b7a4d1f3`）
 
@@ -305,7 +341,7 @@ purchase_order_status:    DRAFT / ORDERED / PARTIALLY_RECEIVED /
 
 ### AI 只读视图（21 个 `ai_*`，数据库级表/字段白名单）
 
-- **operations 域**：ai_room_types / ai_rooms / ai_reservations（无 guest_id、
+- **operations 域**：ai_room_types / ai_rooms（含 name / is_active）/ **ai_channels**（alpha.9.6 F3）/ ai_reservations（无 guest_id、
   无金额、无 notes）/ ai_stays / ai_stay_room_assignments /
   ai_housekeeping_tasks / ai_maintenance_work_orders / ai_users（无
   email/phone/password_hash）

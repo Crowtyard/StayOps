@@ -3,6 +3,7 @@
 from app.models.ai import AIConversation, AIMessage, AISetting
 from app.models.audit import AuditLog
 from app.models.base import Base
+from app.models.channel import Channel, ChannelCategory
 from app.models.guest import Guest
 from app.models.housekeeping import (
     HousekeepingTask,
@@ -59,6 +60,8 @@ __all__ = [
     "AISetting",
     "AuditLog",
     "Base",
+    "Channel",
+    "ChannelCategory",
     "Guest",
     "HousekeepingTask",
     "HousekeepingTaskPriority",

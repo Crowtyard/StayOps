@@ -21,10 +21,10 @@ import type {
 } from "@/lib/api/types";
 import {
   RESERVATION_STATUS_META,
-  SOURCE_LABELS,
   formatDateTime,
   formatMoney,
 } from "@/lib/booking";
+import { reservationChannelLabel } from "@/lib/channels";
 import { CleaningBadge, OccupancyBadge, StatusBadge } from "@/components/status-badge";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { ErrorView, Forbidden, Loading } from "@/components/status-views";
@@ -239,8 +239,8 @@ export default function ReservationDetailView({ id }: { id: string }) {
     { label: "入住日期", value: reservation.check_in_date },
     { label: "退房日期", value: reservation.check_out_date },
     {
-      label: "来源",
-      value: `${SOURCE_LABELS[reservation.source] ?? reservation.source}（${reservation.source}）`,
+      label: "来源渠道",
+      value: reservationChannelLabel(reservation.source_channel, reservation.source),
     },
     {
       label: "金额",

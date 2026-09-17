@@ -4,83 +4,34 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ApiError, api } from "@/lib/api";
-import type { ReservationOut, RoomOut, StayOut } from "@/lib/api/types";
+import type {
+  DailyRoomStatus,
+  ReservationOut,
+  RoomStatusItemOut,
+  RoomStatusOut,
+  StayOut,
+} from "@/lib/api/types";
 import { addDays, businessDate } from "@/lib/booking";
+import {
+  DAILY_ROOM_STATUS_META,
+} from "@/lib/channels";
 import { ErrorView, Loading } from "@/components/status-views";
 import { useUser } from "@/components/app-shell";
 
-interface Stats {
-  total: number;
-  available: number;
-  reserved: number;
-  occupied: number;
-  blocked: number;
-  outOfService: number;
-  clean: number;
-  dirty: number;
-  cleaning: number;
-  inspection: number;
-  rework: number;
-}
+/**
+ * 首页房态概览（alpha.9.6 F2：按日期显示）。
+ *
+ * 核心语义（后端权威，见 app/services/room_status.py）：
+ * - 展示的是**所选日期的房态**（可售 / 已预订 / 在住 / 维修停用），
+ *   不是 rooms.occupancy_status 的当前值。
+ * - 未来日期 physical_status_authoritative=false：物理房态不具权威性，
+ *   页面必须显式提示，禁止把当前房态冒充未来房态。
+ * - 「预计到店」在到店日为 RESERVED 且 arriving=true，绝不谎报成「在住」。
+ * - 清洁维度只在业务日期当天有意义，其它日期不显示（不推断未来 CLEANING）。
+ */
 
-const EMPTY_STATS: Stats = {
-  total: 0,
-  available: 0,
-  reserved: 0,
-  occupied: 0,
-  blocked: 0,
-  outOfService: 0,
-  clean: 0,
-  dirty: 0,
-  cleaning: 0,
-  inspection: 0,
-  rework: 0,
-};
-
-function computeStats(rooms: RoomOut[]): Stats {
-  const stats: Stats = { ...EMPTY_STATS };
-  for (const room of rooms) {
-    stats.total += 1;
-    switch (room.occupancy_status) {
-      case "available":
-        stats.available += 1;
-        break;
-      case "reserved":
-        stats.reserved += 1;
-        break;
-      case "occupied":
-        stats.occupied += 1;
-        break;
-      case "blocked":
-        stats.blocked += 1;
-        break;
-      case "out_of_service":
-        stats.outOfService += 1;
-        break;
-    }
-    switch (room.cleaning_status) {
-      case "clean":
-        stats.clean += 1;
-        break;
-      case "dirty":
-        stats.dirty += 1;
-        break;
-      case "cleaning":
-        stats.cleaning += 1;
-        break;
-      case "inspection":
-        stats.inspection += 1;
-        break;
-      case "rework":
-        stats.rework += 1;
-        break;
-    }
-  }
-  return stats;
-}
-
-interface StatCard {
-  key: string;
+interface StatusCard {
+  key: DailyRoomStatus | "enabled" | "disabled";
   label: string;
   value: number;
   accent: string;
@@ -91,16 +42,23 @@ export default function DashboardView() {
   const router = useRouter();
   const user = useUser();
   const permissions = useMemo(() => new Set(user?.permissions ?? []), [user]);
-  const [rooms, setRooms] = useState<RoomOut[] | null>(null);
+  const today = businessDate();
+  const [selectedDate, setSelectedDate] = useState<string>(today);
+  // 按请求键缓存（key = 查询日期），避免在 effect 内同步 setState 造成级联渲染
+  const [fetched, setFetched] = useState<{
+    key: string;
+    data: RoomStatusOut;
+  } | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [drill, setDrill] = useState<DailyRoomStatus | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    api.rooms
-      .list({ page: 1, page_size: 100 })
-      .then((page) => {
-        if (!cancelled) setRooms(page.items);
+    api.dashboard
+      .roomStatus({ date: selectedDate })
+      .then((data) => {
+        if (!cancelled) setFetched({ key: selectedDate, data });
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -108,16 +66,17 @@ export default function DashboardView() {
           router.replace("/login");
           return;
         }
-        setError(err instanceof ApiError ? err : new ApiError("unknown", null, "加载失败"));
+        setError(
+          err instanceof ApiError ? err : new ApiError("unknown", null, "加载失败"),
+        );
       });
     return () => {
       cancelled = true;
     };
-  }, [router, reloadKey]);
+  }, [router, selectedDate, reloadKey]);
 
   const retry = useCallback(() => {
     setError(null);
-    setRooms(null);
     setReloadKey((k) => k + 1);
   }, []);
 
@@ -130,31 +89,73 @@ export default function DashboardView() {
       />
     );
   }
-  if (!rooms) {
-    return <Loading text="正在加载房态数据…" />;
-  }
 
-  const stats = computeStats(rooms);
+  const status = fetched?.key === selectedDate ? fetched.data : null;
 
-  const cards: StatCard[] = [
-    { key: "total", label: "总房", value: stats.total, accent: "text-gray-900", title: "全部房间数" },
-    { key: "available", label: "可售", value: stats.available, accent: "text-emerald-600", title: "占用状态为可售" },
-    { key: "reserved", label: "已预订", value: stats.reserved, accent: "text-amber-600", title: "占用状态为已预订" },
-    { key: "occupied", label: "在住", value: stats.occupied, accent: "text-blue-600", title: "占用状态为在住" },
-    { key: "blocked", label: "锁房", value: stats.blocked, accent: "text-slate-600", title: "占用状态为锁房" },
-    { key: "outOfService", label: "停用", value: stats.outOfService, accent: "text-red-600", title: "占用状态为停用" },
-    { key: "dirty", label: "待清扫", value: stats.dirty, accent: "text-amber-600", title: "清洁状态为待清扫" },
-    { key: "cleaning", label: "清扫中", value: stats.cleaning, accent: "text-blue-600", title: "清洁状态为清扫中" },
-    { key: "inspection", label: "待检查", value: stats.inspection, accent: "text-violet-600", title: "清洁状态为待检查" },
+  const counts = status?.counts;
+  const cards: StatusCard[] = [
+    {
+      key: "enabled",
+      label: "启用房间",
+      value: status?.enabled_room_count ?? 0,
+      accent: "text-gray-900",
+      title: "投入经营的房间数（停用房间不计入）",
+    },
+    {
+      key: "AVAILABLE",
+      label: "可售",
+      value: counts?.available ?? 0,
+      accent: "text-emerald-600",
+      title: `${selectedDate} 当日可售房间`,
+    },
+    {
+      key: "RESERVED",
+      label: "已预订",
+      value: counts?.reserved ?? 0,
+      accent: "text-amber-600",
+      title: `${selectedDate} 当日已确认预订（尚未入住）`,
+    },
+    {
+      key: "OCCUPIED",
+      label: "在住",
+      value: counts?.occupied ?? 0,
+      accent: "text-blue-600",
+      title: `${selectedDate} 当日在住房间`,
+    },
+    {
+      key: "OUT_OF_SERVICE",
+      label: "维修停用",
+      value: counts?.out_of_service ?? 0,
+      accent: "text-red-600",
+      title: "维修 / 锁房 / 停用（含长期停用）",
+    },
+    {
+      key: "disabled",
+      label: "停用房间",
+      value: status?.disabled_room_count ?? 0,
+      accent: "text-gray-400",
+      title: "已停用房间（不参与可售与分母）",
+    },
   ];
+
+  const drilled: RoomStatusItemOut[] =
+    drill === null
+      ? []
+      : (status?.rooms ?? []).filter((r) => r.status === drill && r.is_active);
 
   return (
     <div>
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+      <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold text-gray-900">当前房态概览</h1>
+          <h1 className="text-xl font-semibold text-gray-900">
+            房态概览 · {selectedDate}
+          </h1>
           <p className="mt-1 text-sm text-gray-500">
-            基于实时房态数据计算 · 数据更新于最近一次加载
+            {status?.is_today
+              ? "业务日期当天：物理房态与当日占用一致"
+              : status?.is_past
+                ? "历史日期：按当时已落库的物理状态与占用事实显示"
+                : "未来日期：物理房态仅供参考，以预订占用为准"}
           </p>
         </div>
         <Link
@@ -165,49 +166,200 @@ export default function DashboardView() {
         </Link>
       </div>
 
-      {rooms.length === 0 ? (
+      {/* 日期选择（前一天 / 日期 / 后一天 / 今天 / 日期选择器） */}
+      <div className="mb-5 flex flex-wrap items-center gap-2 rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
+        <button
+          type="button"
+          aria-label="前一天"
+          onClick={() => setSelectedDate((d) => addDays(d, -1))}
+          className="rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+        >
+          ‹
+        </button>
+        <input
+          type="date"
+          aria-label="房态日期"
+          value={selectedDate}
+          onChange={(e) => {
+            if (e.target.value) setSelectedDate(e.target.value);
+          }}
+          className="rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-gray-900 focus:outline-none focus:ring-1 focus:ring-gray-900"
+        />
+        <button
+          type="button"
+          aria-label="后一天"
+          onClick={() => setSelectedDate((d) => addDays(d, 1))}
+          className="rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+        >
+          ›
+        </button>
+        <button
+          type="button"
+          onClick={() => setSelectedDate(today)}
+          disabled={selectedDate === today}
+          className="rounded-md bg-gray-900 px-3.5 py-2 text-sm font-medium text-white hover:bg-gray-700 disabled:opacity-40"
+        >
+          今天
+        </button>
+        {status && !status.physical_status_authoritative ? (
+          <span className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-700 ring-1 ring-inset ring-amber-200">
+            未来日期：不显示当前物理/清洁状态，仅显示预订占用
+          </span>
+        ) : null}
+      </div>
+
+      {!status || !counts ? (
+        <Loading text="正在加载房态数据…" />
+      ) : status.rooms.length === 0 ? (
         <p className="rounded-md border border-dashed border-gray-300 py-16 text-center text-sm text-gray-500">
           暂无房间数据，请先创建房间
         </p>
       ) : (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-9">
-          {cards.map((card) => (
-            <div
-              key={card.key}
-              title={card.title}
-              className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm"
-            >
-              <p className="text-xs text-gray-500">{card.label}</p>
-              <p className={`mt-1.5 text-2xl font-semibold tabular-nums ${card.accent}`}>
-                {card.value}
+        <>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+            {cards.map((card) => {
+              const clickable =
+                card.key !== "enabled" && card.key !== "disabled" && card.value > 0;
+              const active = drill === card.key;
+              return (
+                <button
+                  key={card.key}
+                  type="button"
+                  title={card.title}
+                  disabled={!clickable}
+                  onClick={() =>
+                    setDrill((prev) =>
+                      prev === (card.key as DailyRoomStatus)
+                        ? null
+                        : (card.key as DailyRoomStatus),
+                    )
+                  }
+                  className={`rounded-lg border bg-white p-4 text-left shadow-sm ${
+                    active ? "border-gray-900 ring-1 ring-gray-900" : "border-gray-200"
+                  } ${clickable ? "hover:border-gray-400" : "cursor-default"}`}
+                >
+                  <p className="text-xs text-gray-500">{card.label}</p>
+                  <p
+                    className={`mt-1.5 text-2xl font-semibold tabular-nums ${card.accent}`}
+                  >
+                    {card.value}
+                  </p>
+                  {clickable ? (
+                    <p className="mt-1 text-[11px] text-gray-400">
+                      {active ? "收起房间列表" : "点击查看房间 →"}
+                    </p>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* 点击分类钻取：对应房间列表 */}
+          {drill !== null ? (
+            <div className="mt-4 rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+              <div className="mb-3 flex items-center justify-between">
+                <h2 className="text-sm font-semibold text-gray-900">
+                  {DAILY_ROOM_STATUS_META[drill].label}（{drilled.length} 间）
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => setDrill(null)}
+                  className="text-xs text-gray-500 hover:underline"
+                >
+                  收起
+                </button>
+              </div>
+              {drilled.length === 0 ? (
+                <p className="text-sm text-gray-400">该分类下暂无房间</p>
+              ) : (
+                <ul className="flex list-none flex-wrap gap-2">
+                  {drilled.map((room) => (
+                    <li key={room.room_id}>
+                      <Link
+                        href={`/rooms/${room.room_id}`}
+                        className="inline-flex items-center gap-2 rounded-md border border-gray-200 px-2.5 py-1.5 text-sm text-gray-700 hover:bg-gray-50"
+                      >
+                        <span className="font-medium">{room.room_number}</span>
+                        {room.room_name ? (
+                          <span className="text-xs text-gray-500">
+                            {room.room_name}
+                          </span>
+                        ) : null}
+                        {room.arriving ? (
+                          <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[11px] text-amber-800">
+                            今日到店
+                          </span>
+                        ) : null}
+                        {room.unavailability_source === "MAINTENANCE" ? (
+                          <span className="rounded bg-red-50 px-1.5 py-0.5 text-[11px] text-red-700">
+                            维修
+                          </span>
+                        ) : null}
+                        {room.status === "OCCUPIED" && room.stay_no ? (
+                          <span className="text-[11px] text-gray-400">
+                            {room.stay_no}
+                          </span>
+                        ) : null}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ) : null}
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+              <h2 className="text-sm font-semibold text-gray-900">
+                {selectedDate} 占用维度
+              </h2>
+              <p className="mt-2 text-sm leading-relaxed text-gray-600">
+                可售 {counts.available} · 已预订 {counts.reserved} · 在住{" "}
+                {counts.occupied} · 维修停用 {counts.out_of_service}
+              </p>
+              <p className="mt-1 text-xs text-gray-400">
+                合计 {counts.total_enabled_rooms} 间（启用房间）= 总数{" "}
+                {status.total_room_count} − 停用 {status.disabled_room_count}
               </p>
             </div>
-          ))}
-        </div>
+            <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+              <h2 className="text-sm font-semibold text-gray-900">清洁维度</h2>
+              {status.is_today ? (
+                <p className="mt-2 text-sm leading-relaxed text-gray-600">
+                  {cleanSummary(status.rooms)}
+                </p>
+              ) : (
+                <p className="mt-2 text-sm text-gray-400">
+                  清洁状态仅表示当天实况，历史 / 未来日期不推断
+                </p>
+              )}
+            </div>
+          </div>
+        </>
       )}
-
-      <div className="mt-6 grid gap-3 sm:grid-cols-2">
-        <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
-          <h2 className="text-sm font-semibold text-gray-900">占用维度</h2>
-          <p className="mt-2 text-sm leading-relaxed text-gray-600">
-            可售 {stats.available} · 已预订 {stats.reserved} · 在住 {stats.occupied} ·
-            锁房 {stats.blocked} · 停用 {stats.outOfService}
-          </p>
-        </div>
-        <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
-          <h2 className="text-sm font-semibold text-gray-900">清洁维度</h2>
-          <p className="mt-2 text-sm leading-relaxed text-gray-600">
-            干净 {stats.clean} · 待清扫 {stats.dirty} · 清扫中 {stats.cleaning} ·
-            待检查 {stats.inspection} · 返工 {stats.rework}
-          </p>
-        </div>
-      </div>
 
       <BookingOverview permissions={permissions} />
       <HousekeepingOverview permissions={permissions} />
       <InventoryAlertsOverview permissions={permissions} />
     </div>
   );
+}
+
+/** 当日清洁维度汇总（仅在业务日期当天有意义）。 */
+function cleanSummary(rooms: RoomStatusItemOut[]): string {
+  const order: { key: string; label: string }[] = [
+    { key: "clean", label: "干净" },
+    { key: "dirty", label: "待清扫" },
+    { key: "cleaning", label: "清扫中" },
+    { key: "inspection", label: "待检查" },
+    { key: "rework", label: "返工" },
+  ];
+  const counts: Record<string, number> = {};
+  for (const room of rooms) {
+    const key = room.current_cleaning_status;
+    if (key) counts[key] = (counts[key] ?? 0) + 1;
+  }
+  return order.map((o) => `${o.label} ${counts[o.key] ?? 0}`).join(" · ");
 }
 
 /**

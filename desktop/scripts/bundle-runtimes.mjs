@@ -190,8 +190,55 @@ function bundlePostgres() {
   for (const exe of ["postgres.exe", "initdb.exe", "pg_ctl.exe", "psql.exe"]) {
     if (!fs.existsSync(path.join(dst, "bin", exe))) fail(`bundled postgres missing bin/${exe}`);
   }
-  log(`postgres: ${mb(sizeOf(dst))}`);
+
+  // alpha.9.6 Windows non-ASCII hotfix：写入 build 期 runtime marker。
+  // Packaged Mode 依据它确定 materialize 目标版本目录（`…/postgresql/<version>/pgsql`），
+  // 无需在用户机器上执行 binary 探测；marker 只含版本与体积统计，**不含任何开发机路径**。
+  const marker = buildRuntimeMarker(dst);
+  fs.writeFileSync(
+    path.join(dst, ".stayops-runtime.json"),
+    `${JSON.stringify(marker, null, 2)}\n`,
+    "utf8",
+  );
+  log(`postgres: ${mb(sizeOf(dst))} (pg ${marker.version}, ${marker.files} files)`);
   return dst;
+}
+
+/** 读取 bundled PostgreSQL 版本并统计 runtime 体积（用于 materialize 完整性标记）。 */
+function buildRuntimeMarker(pgDir) {
+  let version = "unknown";
+  try {
+    const out = execFileSync(path.join(pgDir, "bin", "postgres.exe"), ["--version"], {
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 20_000,
+    }).trim();
+    const match = /(\d+)\.(\d+)(?:\.(\d+))?/.exec(out);
+    if (match) version = match[3] ? `${match[1]}.${match[2]}.${match[3]}` : `${match[1]}.${match[2]}`;
+  } catch (err) {
+    fail(`cannot determine bundled PostgreSQL version: ${String(err)}`);
+  }
+  if (version === "unknown") fail("cannot determine bundled PostgreSQL version");
+  const stats = { files: 0, bytes: 0 };
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      const st = fs.lstatSync(full);
+      if (st.isDirectory()) walk(full);
+      else {
+        stats.files += 1;
+        stats.bytes += st.size;
+      }
+    }
+  };
+  walk(pgDir);
+  return {
+    schema: 1,
+    version,
+    files: stats.files,
+    bytes: stats.bytes,
+    createdAt: new Date().toISOString(),
+  };
 }
 
 // ---------------------------------------------------------------------------

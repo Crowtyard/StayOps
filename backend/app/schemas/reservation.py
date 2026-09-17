@@ -6,8 +6,18 @@
 - status 字段不进入 Create/Update（状态只能经 cancel / no-show / check-in /
   check-out 专用 action 端点变更）
 - agreed_total_amount 为 Decimal，JSON 序列化为字符串（沿用 base_price 约定）
+
+alpha.9.6 F3（客源渠道）：
+- **`source_channel_id` 是唯一来源事实**（FK channels）。新建预订必须提供它。
+- **legacy `source` 降级为「入站兼容 / 只读投影」**：
+  - 入站：旧客户端或端到端测试仍可只传 `source`，后端按固定映射解析为渠道并
+    写入 `source_channel_id`（**不是第二事实源**，只是兼容适配器）。
+  - 两者同时提供时以 `source_channel_id` 为准（`source` 被忽略并记录告警日志）。
+  - 出站：响应保留 `source`（legacy 投影，供未升级前端回退显示）并新增
+    `source_channel`，前端应以 `source_channel.name` 为「来源渠道」主展示。
 """
 
+import logging
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -20,7 +30,23 @@ from pydantic import (
 )
 
 from app.core.business_date import add_days, business_date
+from app.models.channel import ChannelCategory
 from app.models.reservation import ReservationSource, ReservationStatus
+
+logger = logging.getLogger(__name__)
+
+
+class SourceChannelBrief(BaseModel):
+    """预订响应内嵌的渠道摘要（「来源渠道」的业务可读表达）。"""
+
+    id: int
+    code: str
+    name: str
+    category: ChannelCategory
+    # 渠道事后被停用时，历史预订仍返回其渠道名，并用 enabled=false 提示
+    enabled: bool
+    # 系统预置渠道标记（前端据此决定是否允许在内联「新增渠道」入口修改）
+    is_system: bool = False
 
 
 class ReservationCreate(BaseModel):
@@ -29,7 +55,10 @@ class ReservationCreate(BaseModel):
     room_type_id: int
     check_in_date: date | None = None
     check_out_date: date | None = None
-    source: ReservationSource = ReservationSource.DIRECT
+    # alpha.9.6 F3：唯一来源事实（推荐；缺失时回退 legacy source）
+    source_channel_id: int | None = None
+    # LEGACY 入站字段（向后兼容；新前端不应再使用）
+    source: ReservationSource | None = None
     external_reference: str | None = Field(None, max_length=100)
     agreed_total_amount: Decimal = Field(..., ge=0)
     currency: str = Field("CNY", min_length=3, max_length=3)
@@ -69,6 +98,9 @@ class ReservationUpdate(BaseModel):
 
     修改 room_id / room_type_id / check_in_date / check_out_date 时
     service 层重新执行 Availability + Double Booking + Room/RoomType 一致性校验。
+
+    alpha.9.6 F3：来源渠道用 `source_channel_id` 修改；legacy `source` 仍接受
+    （解析为渠道），两者同时提供时以 `source_channel_id` 为准。
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -78,6 +110,7 @@ class ReservationUpdate(BaseModel):
     room_type_id: int | None = None
     check_in_date: date | None = None
     check_out_date: date | None = None
+    source_channel_id: int | None = None
     source: ReservationSource | None = None
     external_reference: str | None = Field(None, max_length=100)
     agreed_total_amount: Decimal | None = Field(None, ge=0)
@@ -104,6 +137,7 @@ class ReservationUpdate(BaseModel):
                 "room_type_id",
                 "check_in_date",
                 "check_out_date",
+                "source_channel_id",
                 "source",
                 "external_reference",
                 "agreed_total_amount",
@@ -128,7 +162,11 @@ class ReservationOut(BaseModel):
     check_in_date: date
     check_out_date: date
     status: ReservationStatus
-    source: ReservationSource
+    # alpha.9.6 F3：来源渠道（唯一事实）
+    source_channel_id: int | None = None
+    source_channel: SourceChannelBrief | None = None
+    # LEGACY 只读投影（未升级前端仍可用；新前端请用 source_channel）
+    source: ReservationSource | None = None
     external_reference: str | None = None
     agreed_total_amount: Decimal | None = None
     currency: str | None = None
@@ -154,6 +192,8 @@ class ReservationSummary(BaseModel):
     check_in_date: date
     check_out_date: date
     status: ReservationStatus
-    source: ReservationSource
+    source_channel_id: int | None = None
+    source_channel: SourceChannelBrief | None = None
+    source: ReservationSource | None = None
     agreed_total_amount: Decimal
     currency: str

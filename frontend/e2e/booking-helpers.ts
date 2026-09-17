@@ -174,6 +174,39 @@ export async function apiCreateGuest(
   return (await resp.json()) as GuestApi;
 }
 
+/** alpha.9.6 F3：客源渠道（来源事实 = source_channel_id） */
+export interface ChannelApi {
+  id: number;
+  code: string;
+  name: string;
+  category: string;
+  enabled: boolean;
+  is_system: boolean;
+}
+
+export async function apiListChannels(
+  api: ApiSession,
+  params: Record<string, string | number> = { page: 1, page_size: 100 },
+): Promise<ChannelApi[]> {
+  const resp = await api.ctx.get("/api/v1/channels", {
+    headers: api.headers,
+    params,
+  });
+  expect(resp.status(), `读取渠道列表失败：${await resp.text()}`).toBe(200);
+  return ((await resp.json()) as { items: ChannelApi[] }).items;
+}
+
+/** 按名称取渠道 id（种子渠道名固定：美团 / 携程 / 飞猪 / 直订 / 电话 / 微信 …） */
+export async function apiChannelIdByName(
+  api: ApiSession,
+  name: string,
+): Promise<number> {
+  const channels = await apiListChannels(api);
+  const found = channels.find((c) => c.name === name);
+  expect(found, `渠道「${name}」应存在（需已 seed 预置渠道）`).toBeTruthy();
+  return (found as ChannelApi).id;
+}
+
 export interface ReservationApi {
   id: number;
   reservation_no: string;
@@ -197,16 +230,20 @@ export async function apiCreateReservation(
     room_type_id: number;
     check_in_date: string;
     check_out_date: string;
+    /** alpha.9.6 F3：来源渠道（唯一来源事实）；缺省 = 直订渠道 */
+    source_channel_id?: number;
+    /** LEGACY：后端仍接受（解析为渠道），新用例请用 source_channel_id */
     source?: string;
     agreed_total_amount: string;
   },
 ): Promise<ReservationApi> {
+  const data = { ...payload };
+  if (data.source_channel_id === undefined && data.source === undefined) {
+    data.source_channel_id = await apiChannelIdByName(api, "直订");
+  }
   const resp = await api.ctx.post("/api/v1/reservations", {
     headers: api.headers,
-    data: {
-      source: "DIRECT",
-      ...payload,
-    },
+    data,
   });
   expect(
     resp.status(),
@@ -346,7 +383,11 @@ export interface ReservationUIOptions {
   checkIn: string;
   checkOut: string;
   roomNumber: string;
-  source: string;
+  /**
+   * alpha.9.6 F3：来源渠道**名称**（如「美团」「携程」「电话」）。
+   * 表单为渠道下拉（来源事实 = source_channel_id），不再有 legacy 来源枚举。
+   */
+  channelName: string;
   amount: string;
   notes?: string;
 }
@@ -378,7 +419,9 @@ export async function uiCreateReservation(
   await roomButton.click();
   await expect(page.getByText(`已选择房间 ${opts.roomNumber}`)).toBeVisible();
 
-  await page.getByLabel("预订来源").selectOption(opts.source);
+  // 渠道下拉的 option value 是渠道 id：先用真实 API 取渠道 id，再按 value 选择
+  const channelId = await apiChannelIdByName(await adminApi(), opts.channelName);
+  await page.getByLabel("来源渠道").selectOption(String(channelId));
   await page.getByLabel("约定金额").fill(opts.amount);
   if (opts.notes !== undefined) {
     await page.getByLabel("预订备注").fill(opts.notes);

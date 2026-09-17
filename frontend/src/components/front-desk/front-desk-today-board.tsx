@@ -16,8 +16,8 @@ import type {
 } from "@/lib/api/types";
 import {
   RESERVATION_STATUS_META,
-  SOURCE_LABELS,
 } from "@/lib/booking";
+import { reservationChannelLabel } from "@/lib/channels";
 import {
   attentionRuleLabel,
   type AttentionItem,
@@ -204,7 +204,7 @@ export default function FrontDeskTodayBoard({
                     </span>
                     <span className="block text-xs text-gray-500">
                       房间 {res.room_number ?? `#${res.room_id}`} ·{" "}
-                      {SOURCE_LABELS[res.source] ?? res.source}
+                      {reservationChannelLabel(res.source_channel, res.source)}
                     </span>
                   </span>
                   <StatusBadge meta={RESERVATION_STATUS_META[res.status]} />

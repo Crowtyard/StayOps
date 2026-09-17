@@ -26,9 +26,9 @@ import type {
 } from "@/lib/api/types";
 import {
   RESERVATION_STATUS_META,
-  SOURCE_LABELS,
   formatMoney,
 } from "@/lib/booking";
+import { reservationChannelLabel } from "@/lib/channels";
 import {
   HK_SOURCE_LABELS,
   HK_TASK_STATUS_META,
@@ -353,7 +353,7 @@ function ArrivalsView({
               </span>
               <span className="block text-xs text-gray-500">
                 房间 {res.room_number ?? `#${res.room_id}`} ·{" "}
-                {SOURCE_LABELS[res.source] ?? res.source} · 共{" "}
+                {reservationChannelLabel(res.source_channel, res.source)} · 共{" "}
                 {reservationNights(res)} 晚
               </span>
             </span>
@@ -792,7 +792,7 @@ function ReservationQuickView({
             {reservation.reservation_no}
           </p>
           <p className="text-xs text-gray-500">
-            {SOURCE_LABELS[reservation.source] ?? reservation.source}
+            {reservationChannelLabel(reservation.source_channel, reservation.source)}
           </p>
         </div>
         <StatusBadge meta={RESERVATION_STATUS_META[reservation.status]} />
@@ -847,8 +847,8 @@ function ReservationQuickView({
           {reservation.check_in_date} → {reservation.check_out_date}
         </FieldRow>
         <FieldRow label="晚数">{nights} 晚</FieldRow>
-        <FieldRow label="来源">
-          {SOURCE_LABELS[reservation.source] ?? reservation.source}
+        <FieldRow label="来源渠道">
+          {reservationChannelLabel(reservation.source_channel, reservation.source)}
         </FieldRow>
         <FieldRow label="金额">
           {formatMoney(
@@ -1127,7 +1127,10 @@ function RoomQuickView({
             <p className="text-xs text-gray-500">
               {nextReservation.check_in_date} → {nextReservation.check_out_date}
               {" · "}
-              {SOURCE_LABELS[nextReservation.source] ?? nextReservation.source}
+              {reservationChannelLabel(
+                nextReservation.source_channel,
+                nextReservation.source,
+              )}
             </p>
             <button
               type="button"

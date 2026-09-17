@@ -67,7 +67,7 @@ test("Golden Path：预订 → 重叠 409 → 入住 → 退房 → 刷新保持
     checkIn: CHECK_IN,
     checkOut: CHECK_OUT,
     roomNumber: ROOM,
-    source: "WECHAT",
+    channelName: "微信",
     amount: AMOUNT,
     notes: "微信预订备注",
   });
@@ -117,7 +117,7 @@ test("Golden Path：预订 → 重叠 409 → 入住 → 退房 → 刷新保持
       room_type_id: resDetail.room_type_id,
       check_in_date: CHECK_IN,
       check_out_date: CHECK_OUT,
-      source: "WECHAT",
+      channelName: "微信",
       agreed_total_amount: "399.00",
     },
   });

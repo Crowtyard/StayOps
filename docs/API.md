@@ -36,12 +36,24 @@
 | GET | /room-types/{id} | 房型详情 | room_type:read |
 | PUT | /room-types/{id} | 更新房型 | room_type:write |
 | DELETE | /room-types/{id} | 删除房型（有房间时 409） | room_type:delete |
-| GET | /rooms | 房间列表（分页，`?occupancy_status=` / `?cleaning_status=` / `?room_type_id=` 筛选；响应含 `unavailability_source`） | room:read |
-| POST | /rooms | 创建房间（occupancy_status 默认 available，cleaning_status 默认 clean；blocked/OOS 时 `unavailability_source` 自动 MANUAL） | room:write |
-| GET | /rooms/{id} | 房间详情（含 `unavailability_source`） | room:read |
-| PUT | /rooms/{id} | 更新房间基础信息（不含状态） | room:write |
-| DELETE | /rooms/{id} | 删除房间 | room:delete |
+| GET | /rooms | 房间列表（分页，`?occupancy_status=` / `?cleaning_status=` / `?room_type_id=` / `?is_active=` 筛选；响应含 `name` / `is_active` / `unavailability_source`） | room:read |
+| GET | /rooms/summary | **房间数量统计**（`total_count` / `enabled_count` / `disabled_count`，全部由 DB COUNT 计算；**不存在 room_count 真值字段**） | room:read |
+| POST | /rooms | 创建房间（`room_number` / `name?` / `room_type_id` / `floor` / `is_active?`；occupancy_status 默认 available，cleaning_status 默认 clean）【房间主数据】 | room:inventory_manage |
+| GET | /rooms/{id} | 房间详情（含 `name` / `is_active` / `unavailability_source`） | room:read |
+| PUT | /rooms/{id} | 更新房间基础信息（不含房态）【房间主数据】 | room:inventory_manage |
+| PATCH | /rooms/{id} | 局部更新（`room_number` / `name` / `room_type_id` / `floor` / `is_active` / `notes`；与 PUT 同一实现）【房间主数据】 | room:inventory_manage |
+| POST | /rooms/{id}/disable | **停用房间**（软停用；幂等；在住房间 409；不释放房号、不破坏历史记录）【房间主数据】 | room:inventory_manage |
+| POST | /rooms/{id}/enable | **恢复启用房间**（幂等）【房间主数据】 | room:inventory_manage |
+| DELETE | /rooms/{id} | 删除房间（**仅当从未被任何业务记录引用**；有历史 → 409 并提示改用停用） | room:inventory_manage **且** room:delete |
 | POST | /rooms/{id}/status | 房态变更（状态机校验，非法 409；写审计；`unavailability_source` 由后端派生：目标 blocked/OOS → MANUAL，目标 available/reserved/occupied → NULL） | room:write 或 room:status_cleaning / room:status_maintenance（对应目标房态） |
+| GET | /channels | **客源渠道列表**（分页，`?enabled=` / `?include_disabled=` / `?category=`；默认仅启用） | channel:read |
+| POST | /channels | 新增自定义渠道（`name` / `category?` / `sort_order?`；`code` 由后端生成；重名 409） | channel:write |
+| GET | /channels/{id} | 渠道详情 | channel:read |
+| PATCH | /channels/{id} | 编辑渠道（`name` / `category` / `sort_order` / `enabled`；**系统预置渠道改名 409**） | channel:write |
+| POST | /channels/{id}/enable | 启用渠道（幂等） | channel:write |
+| POST | /channels/{id}/disable | 停用渠道（幂等；不释放名称；历史预订不受影响） | channel:write |
+| DELETE | /channels/{id} | 删除渠道（系统渠道 409；**已被预订引用 409**，提示改用停用） | channel:write |
+| GET | /dashboard/room-status | **某日房态概览**（`?date=YYYY-MM-DD`，默认业务日期；返回启用房间的四分类 `AVAILABLE`/`RESERVED`/`OCCUPIED`/`OUT_OF_SERVICE` + 启用/停用房间数；未来日期 `physical_status_authoritative=false`） | room:read |
 | GET | /audit-logs | 审计日志列表（分页，`?action=` / `?user_id=` / `?resource_type=` 筛选） | audit:read |
 | GET | /guests | 客人列表（分页，`?search=` 匹配 name OR phone） | guest:read |
 | POST | /guests | 创建客人 | guest:write |
@@ -136,6 +148,29 @@
 | 清洁 | rework | cleaning |
 
 同一状态转换视为非法（409）；两维度互不约束（如 reserved+dirty 合法）。鉴权：`room:write` 可改任意维度；`room:status_cleaning` 仅清洁维度；`room:status_maintenance` 仅把占用置为 out_of_service；无 `room:write` 不允许同时改两维度（403）。
+
+**权限边界（alpha.9.6 QA DEF-1 修复）**：房态操作与房间主数据管理是两件事，权限码分离：
+
+| 能力 | 端点 | 权限码 |
+|---|---|---|
+| 日常房态操作 | `POST /rooms/{id}/status` | `room:write`（或维度专用码） |
+| 房间主数据管理（新增/编辑/停用/启用） | `POST /rooms`、`PUT`/`PATCH /rooms/{id}`、`POST /rooms/{id}/disable`、`POST /rooms/{id}/enable` | `room:inventory_manage` |
+| 物理删除房间 | `DELETE /rooms/{id}` | `room:inventory_manage` **且** `room:delete`（两个码都要求：删除是主数据管理，同时保留既有「`room:delete` 不授予任何常规角色」决策 → 前台与店长均不可删除） |
+
+`room:write` **不**授予任何房间主数据能力。典型角色：MANAGER 持有 `room:inventory_manage`；FRONT_DESK 仅持有 `room:write`（房态操作），因此不能新增/编辑/停用/启用房间。授权唯一来源为 `backend/app/seed.py`（migration 不写 `permissions` / `role_permissions`）。
+
+## 日期房态 vs 物理房态（alpha.9.6 F2 · QA DEF-3 澄清）
+
+`GET /dashboard/room-status?date=YYYY-MM-DD` 中两个字段**刻意不同源**，不是同一个概念的两种写法：
+
+| 字段 | 含义 | 取值规则 |
+|---|---|---|
+| `status` | **该日期（date）的房态** —— 可售 / 已预订 / 在住 / 维修停用 | 对**任意**查询日期都有值；由 ACTIVE Stay 与 CONFIRMED Reservation 按半开区间 `check_in <= date < check_out` 判定，并受 physical override（维修 / 长期停用 / 锁房）优先约束 |
+| `effective_occupancy_status` | **当前物理占用状态**（`rooms.occupancy_status` 的当天投影，来自真实入住记录） | **仅当 `date == business_date`（当天）时有值；过去日期与未来日期一律为 `null`** |
+| `current_cleaning_status` | **当前清洁状态** | 同上，仅当天有值；**不为未来日期推断 CLEANING** |
+| `physical_status_authoritative` | 物理房态是否具权威性 | 未来日期为 `false`，前端须显式提示「物理房态仅供参考」 |
+
+**为何非当天返回 `null`（设计如此，非缺陷）**：`rooms.occupancy_status` 只有「现在」这一个时刻的事实；把今天有客人住读成「前天也在住」或「明天也在住」都是编造事实。历史日期由 `status=OCCUPIED` 表达（当天确有在住记录），未来日期由 `status=RESERVED` 表达（当天有已确认预订）。前端也仅在 `is_today` 时渲染该字段的徽标，因此非当天既不显示也不误导。
 
 ## 前端 BFF 端点（Next.js Route Handler，T3a）
 
@@ -743,6 +778,7 @@ MAINTENANCE 无；FINANCE 仅 business。
 | GET | /analytics/operations/maintenance | operations | 新建/完成/进行中/阻断快照 + MTTR/验收 + 分类与房间分布 |
 | GET | /analytics/operations/room-moves | operations | 换房次数/涉及住宿/换房率 + 原因与换出房分布 |
 | GET | /analytics/business/rooms | business | 合同房费金额/有价与无价房晚/合同 ADR/合同 RevPAR + 每日趋势 |
+| GET | /analytics/business/channels | business | **客源渠道经营分析**（alpha.9.6 F4）：渠道订单数/实际房晚/合同房费/渠道占比/合同 ADR + 合计与「未指定渠道」桶（取消与未到店不计入；换房不重复计房晚） |
 | GET | /analytics/business/inventory | business | 低/缺货快照 + 每物资领用量与领用强度（不跨单位求和） |
 | GET | /analytics/business/procurement | business | 申请/订单/待收货 + 到货采购金额（供应商/物资/每日）+ 无单价行 |
 | GET | /analytics/forecast | operations | On-books 7d/14d/30d + 30 日每日序列（无参数） |

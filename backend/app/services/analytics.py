@@ -19,10 +19,11 @@ from __future__ import annotations
 from datetime import date, timedelta
 from decimal import Decimal
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.core.business_date import business_date
+from app.models import Channel
 
 # ---------------------------------------------------------------------------
 # 常量
@@ -1152,6 +1153,205 @@ def procurement_analytics(db: Session, from_date: date, to_date: date) -> dict:
             {"business_date": r.business_date, "received_purchase_value": _money(Decimal(r.value))}
             for r in daily
         ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Business: Channel Performance（alpha.9.6 F4 客源渠道经营分析）
+# ---------------------------------------------------------------------------
+
+
+def channel_performance_analytics(
+    db: Session, from_date: date, to_date: date
+) -> dict:
+    """客源渠道经营分析（「客人从哪里来」）。
+
+    统计口径（LOCKED，见 docs/DECISIONS.md；全部复用既有事实源，不新增口径）：
+
+    - **归因链**：`Stay -> Reservation.source_channel_id -> Channel`。
+      每单恰好归因一次（`COUNT(DISTINCT reservation_id)`），无二次计数。
+    - **订单数 order_count**：Arrival Cohort —— `reservation.check_in_date ∈ [from, to)`，
+      且排除 `CANCELLED` / `NO_SHOW`（取消单不计入正式经营订单）。
+      与 `/analytics/operations/bookings` 的 cohort 同源同界。
+    - **实际占用房晚 occupied_room_nights**：逐字复用 `_stay_intervals_sql`
+      （COMPLETED 用 `bd(actual_check_out_at)`，ACTIVE 用 `current_business_date`
+      exclusive），只对同时归属于该渠道的住宿计数。
+    - **合同房费 contracted_room_value**：逐字复用
+      `business_rooms_analytics` 的 `agreed_total_amount / planned_nights ×
+      实际占用且落在计划区间内的房晚`。**不是实际收款**（StayOps 无
+      Folio / Payment / Settlement），UI 必须注明。
+    - **合同 ADR contracted_adr** = 合同房费 ÷ 有价实际房晚（分母 0 -> null）。
+    - **渠道占比 share** = 该渠道合同房费 ÷ 区间合同房费总额（分母 0 -> null）。
+    - `unassigned`：`source_channel_id IS NULL` 的预订（历史兼容路径），
+      单独计一桶，保证 `Σ channels + unassigned == totals`。
+    - 默认包含「启用但区间内无业务」的渠道（count=0 / value=0），
+      便于经营者看到全覆盖渠道清单；`include_zero=False` 可只返回有业务的渠道。
+    """
+    current_bd = business_date()
+
+    # --- 订单数（Arrival Cohort；排除 CANCELLED / NO_SHOW） ---
+    order_rows = db.execute(
+        text(
+            """
+            SELECT r.source_channel_id AS channel_id,
+                   COUNT(*)::int AS order_count
+              FROM reservations r
+             WHERE r.check_in_date >= :from
+               AND r.check_in_date < :to
+               AND r.status NOT IN ('CANCELLED', 'NO_SHOW')
+             GROUP BY r.source_channel_id
+            """
+        ),
+        {"from": from_date, "to": to_date},
+    ).all()
+
+    # --- 房晚 + 合同房费（与 business_rooms_analytics 同一 CTE 语义） ---
+    # 注意：一个 Stay 可能含 Room Move，因此按 distinct stay 计一次房晚，
+    # 渠道归因走 Stay -> Reservation（而非 assignment），天然防重复计数。
+    revenue_rows = db.execute(
+        text(
+            f"""
+            WITH stay_intervals AS (
+                SELECT id,
+                       reservation_id,
+                       {_BD.format(col="actual_check_in_at")} AS check_in_bd,
+                       CASE WHEN status = 'ACTIVE' THEN :current_bd
+                            ELSE {_BD.format(col="actual_check_out_at")} END
+                           AS check_out_bd
+                  FROM stays
+            ),
+            nights AS (
+                SELECT s.id AS stay_id,
+                       r.source_channel_id AS channel_id,
+                       g.day::date AS business_date,
+                       r.check_in_date,
+                       r.check_out_date,
+                       r.agreed_total_amount,
+                       (r.check_out_date - r.check_in_date) AS planned_nights
+                  FROM stay_intervals s
+                  JOIN reservations r ON r.id = s.reservation_id
+                  JOIN generate_series(
+                         CAST(:from AS date), CAST(:to AS date) - 1, interval '1 day'
+                       ) AS g(day)
+                    ON g.day::date >= s.check_in_bd
+                   AND g.day::date < s.check_out_bd
+            )
+            SELECT channel_id,
+                   COUNT(*) FILTER (WHERE business_date >= check_in_date
+                                      AND business_date < check_out_date)::int
+                       AS priced_nights,
+                   COUNT(*) FILTER (WHERE NOT (business_date >= check_in_date
+                                      AND business_date < check_out_date))::int
+                       AS unpriced_nights,
+                   COUNT(DISTINCT stay_id)::int AS stay_count,
+                   COALESCE(SUM(agreed_total_amount / NULLIF(planned_nights, 0))
+                       FILTER (WHERE business_date >= check_in_date
+                                 AND business_date < check_out_date), 0)
+                       AS contracted_value
+              FROM nights
+             GROUP BY channel_id
+            """
+        ),
+        {"from": from_date, "to": to_date, "current_bd": current_bd},
+    ).all()
+
+    orders_by_channel = {r.channel_id: r.order_count for r in order_rows}
+    revenue_by_channel = {r.channel_id: r for r in revenue_rows}
+
+    channels = db.scalars(
+        select(Channel).order_by(Channel.sort_order, Channel.id)
+    ).all()
+
+    rows: list[dict] = []
+    total_value = ZERO
+    total_orders = 0
+    total_nights = 0
+    total_stays = 0
+
+    for channel in channels:
+        orders = orders_by_channel.get(channel.id, 0)
+        rev = revenue_by_channel.get(channel.id)
+        value = _money(Decimal(rev.contracted_value)) if rev else ZERO
+        nights = rev.priced_nights if rev else 0
+        stays = rev.stay_count if rev else 0
+        total_value += value
+        total_orders += orders
+        total_nights += nights
+        total_stays += stays
+        rows.append(
+            {
+                "channel_id": channel.id,
+                "channel_code": channel.code,
+                "channel_name": channel.name,
+                "channel_category": channel.category,
+                "channel_enabled": channel.enabled,
+                "is_system": channel.is_system,
+                "order_count": orders,
+                "stay_count": stays,
+                "occupied_room_nights": nights,
+                "contracted_room_value": value,
+                "contracted_adr": (
+                    (value / Decimal(nights)).quantize(Decimal("0.01"))
+                    if nights
+                    else None
+                ),
+            }
+        )
+
+    # 「未指定渠道」桶（source_channel_id IS NULL；历史兼容路径）
+    unassigned_orders = orders_by_channel.get(None, 0)
+    unassigned_rev = revenue_by_channel.get(None)
+    unassigned_value = (
+        _money(Decimal(unassigned_rev.contracted_value)) if unassigned_rev else ZERO
+    )
+    unassigned_nights = unassigned_rev.priced_nights if unassigned_rev else 0
+    unassigned_stays = unassigned_rev.stay_count if unassigned_rev else 0
+    total_value += unassigned_value
+    total_orders += unassigned_orders
+    total_nights += unassigned_nights
+    total_stays += unassigned_stays
+
+    # 占比（分母 0 -> null；禁止 NaN/Infinity）
+    for row in rows:
+        row["share"] = _rate(row["contracted_room_value"], total_value)
+
+    unassigned_row = {
+        "channel_id": None,
+        "channel_code": None,
+        "channel_name": "未指定渠道",
+        "channel_category": None,
+        "channel_enabled": True,
+        "is_system": False,
+        "order_count": unassigned_orders,
+        "stay_count": unassigned_stays,
+        "occupied_room_nights": unassigned_nights,
+        "contracted_room_value": unassigned_value,
+        "contracted_adr": (
+            (unassigned_value / Decimal(unassigned_nights)).quantize(
+                Decimal("0.01")
+            )
+            if unassigned_nights
+            else None
+        ),
+        "share": _rate(unassigned_value, total_value),
+    }
+
+    return {
+        "business_date": current_bd,
+        "physical_room_count": physical_room_count(db),
+        "totals": {
+            "order_count": total_orders,
+            "stay_count": total_stays,
+            "occupied_room_nights": total_nights,
+            "contracted_room_value": _money(total_value),
+            "contracted_adr": (
+                (total_value / Decimal(total_nights)).quantize(Decimal("0.01"))
+                if total_nights
+                else None
+            ),
+        },
+        "channels": rows,
+        "unassigned": unassigned_row,
     }
 
 

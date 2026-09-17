@@ -31,6 +31,7 @@ import type {
 
 const {
   roomsListMock,
+  channelsListMock,
   reservationsListMock,
   staysListMock,
   tasksListMock,
@@ -40,6 +41,7 @@ const {
   reservationsNoShowMock,
 } = vi.hoisted(() => ({
   roomsListMock: vi.fn(),
+  channelsListMock: vi.fn(),
   reservationsListMock: vi.fn(),
   staysListMock: vi.fn(),
   tasksListMock: vi.fn(),
@@ -87,6 +89,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
       stays: { list: staysListMock },
       housekeeping: { list: tasksListMock },
       roomTypes: { list: vi.fn() },
+      // alpha.9.6 F3：前台创建预订需要读取渠道
+      channels: { list: channelsListMock },
     },
   };
 });
@@ -107,6 +111,8 @@ const PERMISSIONS = [
   "stay:check_out",
   "housekeeping_task:read",
   "housekeeping_task:write",
+  // alpha.9.6 F3：来源渠道（前台创建预订需要读取渠道）
+  "channel:read",
 ];
 
 function makeUser(permissions: string[]): MeOut {
@@ -131,6 +137,8 @@ function makeRoom(
   return {
     id: Number(roomNumber),
     room_number: roomNumber,
+    name: null,
+    is_active: true,
     room_type_id: 3,
     floor: Number(roomNumber[0]),
     occupancy_status: "available",
@@ -254,6 +262,24 @@ async function ready() {
 beforeEach(() => {
   const d = defaultData();
   roomsListMock.mockReset().mockResolvedValue(PAGE(d.rooms));
+  channelsListMock.mockReset().mockResolvedValue({
+    items: [
+      {
+        id: 11,
+        code: "SYS_MEITUAN",
+        name: "美团",
+        category: "OTA",
+        enabled: true,
+        is_system: true,
+        sort_order: 10,
+        created_at: "x",
+        updated_at: "x",
+      },
+    ],
+    total: 1,
+    page: 1,
+    page_size: 100,
+  });
   reservationsListMock.mockReset().mockImplementation(
     (params: Record<string, unknown>) => {
       if (params.room_id !== undefined) {

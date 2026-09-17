@@ -73,11 +73,13 @@ def test_me_returns_profile_and_permissions(client, admin_token):
         "audit:read",
     ]:
         assert code in codes, f"缺少权限 {code}"
-    assert len(codes) == 52  # SUPER_ADMIN = 全部权限（Sprint 9：50 + AI Manager 的 2）
+    assert len(codes) == 55  # SUPER_ADMIN = 全部权限（S9 的 52 + alpha.9.6 渠道 2 + QA DEF-1 房间库存 1）
     # Sprint 8 §34：Analytics 权限码存在
     assert {"analytics:operations_read", "analytics:business_read"} <= codes
     # Sprint 9 §22：AI Manager 权限码存在
     assert {"ai_manager:use", "ai_manager:manage"} <= codes
+    # alpha.9.6 F3：渠道主数据权限码存在
+    assert {"channel:read", "channel:write"} <= codes
 
 
 def test_me_without_token(client):

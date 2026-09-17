@@ -15,6 +15,8 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.models.channel import ChannelCategory
+
 
 class AnalyticsPeriod(BaseModel):
     """报告区间 [from, to)，Business Date 口径（§2.4）。"""
@@ -331,3 +333,51 @@ class ForecastOut(BaseModel):
     physical_room_count: int
     horizons: OnBooksSummary
     daily: list[ForecastDaily]
+
+
+# ---------------------------------------------------------------------------
+# Business: Channel Performance（alpha.9.6 F4 客源渠道经营分析）
+# ---------------------------------------------------------------------------
+
+
+class ChannelPerformanceRow(BaseModel):
+    """单渠道经营表现。
+
+    `contracted_room_value` = 合同房费金额（**非实际收款**；StayOps 无
+    Folio / Payment / Settlement）。`contracted_adr` 同为合同口径。
+    """
+
+    channel_id: int | None = None  # None = 「未指定渠道」桶
+    channel_code: str | None = None
+    channel_name: str
+    channel_category: ChannelCategory | None = None
+    channel_enabled: bool = True
+    is_system: bool = False
+    order_count: int
+    stay_count: int
+    occupied_room_nights: int
+    contracted_room_value: Decimal
+    contracted_adr: Decimal | None = None
+    # 渠道占比（ratio 0..1；区间总额为 0 -> null）
+    share: float | None = None
+
+
+class ChannelPerformanceTotals(BaseModel):
+    """全部渠道合计（与 /analytics/business/rooms、/operations/bookings 同区间对账）。"""
+
+    order_count: int
+    stay_count: int
+    occupied_room_nights: int
+    contracted_room_value: Decimal
+    contracted_adr: Decimal | None = None
+
+
+class BusinessChannelsOut(BaseModel):
+    """GET /analytics/business/channels"""
+
+    business_date: date
+    period: AnalyticsPeriod
+    physical_room_count: int
+    totals: ChannelPerformanceTotals
+    channels: list[ChannelPerformanceRow]
+    unassigned: ChannelPerformanceRow

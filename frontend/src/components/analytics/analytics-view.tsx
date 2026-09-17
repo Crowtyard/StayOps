@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { ApiError, api } from "@/lib/api";
 import type {
   BookingsOut,
+  BusinessChannelsOut,
   BusinessInventoryOut,
   BusinessProcurementOut,
   BusinessRoomsOut,
@@ -30,12 +31,19 @@ import OverviewTab from "./overview-tab";
 import RoomsBookingsTab from "./rooms-bookings-tab";
 import OperationsTab from "./operations-tab";
 import InventoryProcurementTab from "./inventory-procurement-tab";
+import ChannelsTab from "./channels-tab";
 
-type TabKey = "overview" | "rooms-bookings" | "operations" | "inventory-procurement";
+type TabKey =
+  | "overview"
+  | "rooms-bookings"
+  | "channels"
+  | "operations"
+  | "inventory-procurement";
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: "overview", label: "总览" },
   { key: "rooms-bookings", label: "客房与预订" },
+  { key: "channels", label: "客源渠道" },
   { key: "operations", label: "运营效率" },
   { key: "inventory-procurement", label: "库存与采购" },
 ];
@@ -48,6 +56,7 @@ interface DataBundle {
   maintenance?: MaintenanceOut;
   roomMoves?: RoomMovesOut;
   rooms?: BusinessRoomsOut;
+  channels?: BusinessChannelsOut;
   inventory?: BusinessInventoryOut;
   procurement?: BusinessProcurementOut;
 }
@@ -146,6 +155,13 @@ export default function AnalyticsView() {
           bundle.rooms = d;
         }));
       }
+    } else if (tab === "channels") {
+      // alpha.9.6 F4：客源渠道经营分析（经营域）
+      if (canBiz) {
+        jobs.push(api.analytics.businessChannels(params).then((d) => {
+          bundle.channels = d;
+        }));
+      }
     } else if (tab === "operations") {
       if (canOps) {
         jobs.push(api.analytics.operationsHousekeeping(params).then((d) => {
@@ -216,6 +232,7 @@ export default function AnalyticsView() {
   const visibleTabs = TABS.filter((t) => {
     if (t.key === "operations") return canOps;
     if (t.key === "inventory-procurement") return canBiz;
+    if (t.key === "channels") return canBiz;
     return true;
   });
 
@@ -293,6 +310,10 @@ export default function AnalyticsView() {
                   forecast={canOps ? (data?.forecast ?? null) : null}
                   rooms={canBiz ? (data?.rooms ?? null) : null}
                 />
+              );
+            case "channels":
+              return (
+                <ChannelsTab channels={canBiz ? (data?.channels ?? null) : null} />
               );
             case "operations":
               return (

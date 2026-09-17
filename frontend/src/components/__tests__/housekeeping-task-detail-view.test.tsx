@@ -113,6 +113,8 @@ function makeRoom(): RoomOut {
   return {
     id: 10,
     room_number: "210",
+    name: null,
+    is_active: true,
     room_type_id: 1,
     floor: 2,
     occupancy_status: "available",

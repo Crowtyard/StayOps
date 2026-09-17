@@ -55,7 +55,7 @@ test("RBAC：FRONT_DESK 可见导航且可完成预订创建与取消", async ({
     checkIn: todayPlus(5),
     checkOut: todayPlus(7),
     roomNumber: "205",
-    source: "PHONE",
+    channelName: "电话",
     amount: "268.00",
   });
   await expect(

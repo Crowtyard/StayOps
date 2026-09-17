@@ -16,6 +16,7 @@ Check-in / Check-out 的事务性逻辑必须单点维护（任一步失败全�
 """
 
 from datetime import date
+import logging
 
 from fastapi import HTTPException, status
 from sqlalchemy import Date, cast, func, select, text
@@ -30,10 +31,12 @@ from app.core.booking_state_machine import (
 from app.core.business_date import business_date, property_now
 from app.core.state_machine import can_change_occupancy
 from app.models import (
+    Channel,
     CleaningStatus,
     Guest,
     OccupancyStatus,
     Reservation,
+    ReservationSource,
     ReservationStatus,
     Room,
     RoomType,
@@ -44,11 +47,14 @@ from app.models import (
     User,
 )
 from app.schemas.reservation import ReservationCreate, ReservationUpdate
+from app.services import channels as channel_svc
 from app.services.housekeeping import create_checkout_task
 from app.services.maintenance import (
     active_blocking_room_ids,
     has_active_blocking_orders,
 )
+
+logger = logging.getLogger(__name__)
 
 # 业务单号使用的 PG Sequence（Migration 创建）
 RESERVATION_NO_SEQ = "reservation_no_seq"
@@ -77,6 +83,68 @@ def _conflict(detail: str) -> HTTPException:
 def _unprocessable(detail: str) -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=detail
+    )
+
+
+# ---------------------------------------------------------------------------
+# 来源渠道（alpha.9.6 F3）
+# ---------------------------------------------------------------------------
+
+
+def resolve_reservation_channel(db: Session, payload) -> tuple[Channel | None, bool]:
+    """解析预订来源渠道（唯一来源事实 = channels）。
+
+    规则（见 app/schemas/reservation.py 与 docs/DECISIONS.md）：
+    - `source_channel_id` 优先；渠道必须存在（404）且 enabled（409）。
+    - 缺失时回退 legacy `source`（入站兼容适配器，仅用于旧客户端/测试），
+      解析结果立即写入 source_channel_id，**不构成第二事实源**。
+    - 两者都没有 -> `(None, False)`：由调用方走 `_warn_missing_channel`
+      历史兼容路径（不阻断，但归入「未指定渠道」桶并留告警）。
+    - 两者都有且不一致 -> 以 source_channel_id 为准并记录告警日志。
+
+    返回 (channel | None, legacy_source_field_provided)。
+    """
+    channel_id = getattr(payload, "source_channel_id", None)
+    legacy_source = getattr(payload, "source", None)
+
+    if channel_id is not None:
+        channel = channel_svc.resolve_enabled_channel(db, channel_id)
+        if legacy_source is not None:
+            projected = channel_svc.legacy_source_for_channel(channel)
+            if projected != legacy_source:
+                logger.warning(
+                    "来源渠道冲突：source_channel_id=%s (渠道 %s => legacy %s) "
+                    "与请求 source=%s 不一致，以 source_channel_id 为准",
+                    channel_id,
+                    channel.name,
+                    projected.value,
+                    legacy_source.value,
+                )
+        return channel, legacy_source is not None
+
+    if legacy_source is not None:
+        # 入站兼容：旧客户端只传 source。允许停用渠道（历史语义），
+        # 但必须记录为 legacy 解析路径。
+        return (
+            channel_svc.resolve_channel_by_legacy_source(db, legacy_source),
+            True,
+        )
+
+    return None, False
+
+
+def _warn_missing_channel(reservation: Reservation) -> None:
+    """历史兼容路径：既未提供 source_channel_id 也未提供 legacy source。
+
+    不阻断写入（既有客户端 / E2E 兼容），但**必须留下可检索的告警**：
+    该预订在渠道经营分析中归入「未指定渠道」桶，且 source_channel_id 为 NULL。
+    新前端始终提供渠道，因此该路径只应出现在未升级的调用方。
+    """
+    logger.warning(
+        "预订 %s 未提供来源渠道（source_channel_id=NULL，source=%s）；"
+        "该预订将归入渠道分析「未指定渠道」桶，建议调用方改传 source_channel_id",
+        reservation.reservation_no,
+        reservation.source.value,
     )
 
 
@@ -183,13 +251,15 @@ def check_room_availability(
 ) -> tuple[bool, str | None]:
     """应用层预检（快速路径）。返回 (可售?, 不可售原因)。
 
-    排除：blocked / out_of_service；重叠 CONFIRMED / CHECKED_IN；
+    排除：停用房间（is_active=false）；blocked / out_of_service；重叠 CONFIRMED /
     重叠 Active Stay；查询区间含业务日期当天时 occupied / reserved；
     Active Blocking Maintenance（Sprint 5 §16：OPEN/ASSIGNED/IN_PROGRESS/
     RESOLVED 且 blocks_room=true，无论 Room 当前 occupancy 为何）。
     未来预订不要求 cleaning_status = clean（Clean 要求只在 Check-in 当下）。
     数据库排他约束仍为最终仲裁。
     """
+    if not room.is_active:
+        return False, "该房间已停用，不可预订"
     if room.occupancy_status in (
         OccupancyStatus.blocked,
         OccupancyStatus.out_of_service,
@@ -284,7 +354,9 @@ def query_availability(
     available_count = 0
     for room in rooms:
         reason: str | None = None
-        if room.occupancy_status in (
+        if not room.is_active:
+            reason = "该房间已停用"
+        elif room.occupancy_status in (
             OccupancyStatus.blocked,
             OccupancyStatus.out_of_service,
         ):
@@ -380,7 +452,22 @@ def _audit_reservation_basics(reservation: Reservation) -> dict:
         "room_id": reservation.room_id,
         "check_in_date": reservation.check_in_date.isoformat(),
         "check_out_date": reservation.check_out_date.isoformat(),
+        "source_channel_id": reservation.source_channel_id,
         "source": reservation.source.value,
+    }
+
+
+def build_channel_brief(channel: Channel | None) -> dict | None:
+    """渠道摘要（响应内嵌；渠道事后停用仍返回其名称并标记 enabled=false）。"""
+    if channel is None:
+        return None
+    return {
+        "id": channel.id,
+        "code": channel.code,
+        "name": channel.name,
+        "category": channel.category,
+        "enabled": channel.enabled,
+        "is_system": channel.is_system,
     }
 
 
@@ -406,6 +493,8 @@ def create_reservation(
             status_code=status.HTTP_404_NOT_FOUND, detail="房型不存在"
         )
     ensure_room_room_type_consistency(room, payload.room_type_id)
+    # alpha.9.6 F3：来源渠道（唯一来源事实；legacy source 仅作入站兼容）
+    channel, legacy_source_used = resolve_reservation_channel(db, payload)
     available, reason = check_room_availability(
         db, room, payload.check_in_date, payload.check_out_date
     )
@@ -420,7 +509,13 @@ def create_reservation(
         check_in_date=payload.check_in_date,
         check_out_date=payload.check_out_date,
         status=ReservationStatus.CONFIRMED,
-        source=payload.source,
+        source_channel_id=channel.id if channel is not None else None,
+        # legacy 投影：仅由渠道单向派生（无渠道时保留 schema 默认值，不猜渠道）
+        source=(
+            channel_svc.legacy_source_for_channel(channel)
+            if channel is not None
+            else ReservationSource.DIRECT
+        ),
         external_reference=payload.external_reference,
         agreed_total_amount=payload.agreed_total_amount,
         currency=payload.currency,
@@ -434,6 +529,13 @@ def create_reservation(
         details = _audit_reservation_basics(reservation)
         details["status"] = reservation.status.value
         details["currency"] = reservation.currency
+        if channel is not None:
+            details["source_channel_name"] = channel.name
+        else:
+            details["source_channel_missing"] = True
+            _warn_missing_channel(reservation)
+        if legacy_source_used:
+            details["legacy_source_inbound"] = True
         write_audit_log(
             db,
             user,
@@ -584,12 +686,27 @@ def update_reservation(
             "to": payload.check_out_date.isoformat(),
         }
         reservation.check_out_date = payload.check_out_date
-    if payload.source is not None and payload.source != reservation.source:
-        changes["source"] = {
-            "from": reservation.source.value,
-            "to": payload.source.value,
-        }
-        reservation.source = payload.source
+    if payload.source_channel_id is not None or payload.source is not None:
+        # alpha.9.6 F3：来源渠道（唯一事实）。legacy source 仅作入站兼容。
+        channel, legacy_source_used = resolve_reservation_channel(db, payload)
+        if channel is not None and channel.id != reservation.source_channel_id:
+            changes["source_channel_id"] = {
+                "from": reservation.source_channel_id,
+                "to": channel.id,
+            }
+            changes["source_channel_name"] = channel.name
+            reservation.source_channel_id = channel.id
+            if legacy_source_used:
+                changes["legacy_source_inbound"] = True
+        if channel is not None:
+            # legacy 投影始终与渠道保持一致（单向派生）
+            projected_source = channel_svc.legacy_source_for_channel(channel)
+            if projected_source != reservation.source:
+                changes["source"] = {
+                    "from": reservation.source.value,
+                    "to": projected_source.value,
+                }
+                reservation.source = projected_source
     if (
         payload.external_reference is not None
         and payload.external_reference != reservation.external_reference
@@ -1007,6 +1124,9 @@ def build_reservation_out(
         "check_in_date": reservation.check_in_date,
         "check_out_date": reservation.check_out_date,
         "status": reservation.status,
+        "source_channel_id": reservation.source_channel_id,
+        "source_channel": build_channel_brief(reservation.source_channel),
+        # LEGACY 只读投影（未升级前端回退用；新前端请用 source_channel）
         "source": reservation.source,
         "external_reference": reservation.external_reference,
         "agreed_total_amount": reservation.agreed_total_amount,
@@ -1084,6 +1204,10 @@ def build_stay_out(
                 "check_in_date": reservation.check_in_date,
                 "check_out_date": reservation.check_out_date,
                 "status": reservation.status,
+                "source_channel_id": reservation.source_channel_id,
+                "source_channel": build_channel_brief(
+                    reservation.source_channel
+                ),
                 "source": reservation.source,
                 "agreed_total_amount": reservation.agreed_total_amount,
                 "currency": reservation.currency,

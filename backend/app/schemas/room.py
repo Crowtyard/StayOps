@@ -52,20 +52,42 @@ class RoomTypeOut(BaseModel):
 
 class RoomCreate(BaseModel):
     room_number: str = Field(..., min_length=1, max_length=20)
+    # alpha.9.6 F1：房间显示名称（选填；未填时 UI 回退显示房号）
+    name: str | None = Field(None, max_length=100)
     room_type_id: int
     floor: int
     occupancy_status: OccupancyStatus = OccupancyStatus.available
     cleaning_status: CleaningStatus = CleaningStatus.clean
+    # alpha.9.6 F1：是否投入经营（新增房间默认启用）
+    is_active: bool = True
     notes: str | None = Field(None, max_length=255)
 
 
 class RoomUpdate(BaseModel):
-    """更新房间基础信息；不含状态（房态只能走状态机接口）。"""
+    """更新房间基础信息；不含房态（房态只能走状态机接口）。
+
+    alpha.9.6 F1：新增 name / is_active；occupancy_status / cleaning_status
+    仍然**不接受**（必须走 POST /rooms/{id}/status 的状态机校验）。
+    """
 
     room_number: str | None = Field(None, min_length=1, max_length=20)
+    name: str | None = Field(None, max_length=100)
     room_type_id: int | None = None
     floor: int | None = None
+    is_active: bool | None = None
     notes: str | None = Field(None, max_length=255)
+
+
+class RoomSummaryOut(BaseModel):
+    """房间数量统计（alpha.9.6 F1 §3.3）。
+
+    **数量永远是 rooms 记录的计算结果**（后端 COUNT 查询），
+    不是可编辑字段，也不存在 rooms.room_count 真值列。
+    """
+
+    total_count: int
+    enabled_count: int
+    disabled_count: int
 
 
 class RoomStatusChange(BaseModel):
@@ -86,8 +108,10 @@ class RoomOut(BaseModel):
 
     id: int
     room_number: str
+    name: str | None = None
     room_type_id: int
     floor: int
+    is_active: bool
     occupancy_status: OccupancyStatus
     cleaning_status: CleaningStatus
     unavailability_source: UnavailabilitySource | None = None

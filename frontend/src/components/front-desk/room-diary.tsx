@@ -33,7 +33,7 @@ import {
 } from "@/lib/front-desk";
 import { DIARY_WINDOWS } from "@/lib/front-desk";
 import { addDays } from "@/lib/booking";
-import { SOURCE_LABELS } from "@/lib/booking";
+import { reservationChannelLabel } from "@/lib/channels";
 import { CleaningBadge, OccupancyBadge } from "@/components/status-badge";
 import { IconCleaning } from "@/components/icons";
 import { inputClass } from "@/components/booking/shared";
@@ -396,7 +396,8 @@ export default function RoomDiary({
                             </span>
                             {placement.width >= 130 ? (
                               <span className="block truncate text-[10px] leading-tight opacity-90">
-                                {res.status} · {SOURCE_LABELS[res.source] ?? res.source}
+                                {res.status} ·{" "}
+                                {reservationChannelLabel(res.source_channel, res.source)}
                               </span>
                             ) : null}
                           </button>

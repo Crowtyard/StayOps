@@ -96,6 +96,8 @@ const CHECKED_OUT_STAY: StayOut = {
 const ROOM_DIRTY: RoomOut = {
   id: 1,
   room_number: "203",
+  name: null,
+  is_active: true,
   room_type_id: 3,
   floor: 2,
   occupancy_status: "available",

@@ -13,11 +13,12 @@ test("1. 管理员登录并进入 Dashboard（真实后端数据）", async ({ p
 
   await expect(page).toHaveURL(/\/dashboard/);
   await expect(
-    page.getByRole("heading", { name: "当前房态概览" }),
+    page.getByRole("heading", { name: /房态概览/ }),
   ).toBeVisible();
-  // 真实种子数据：28 间客房
+  // 真实种子数据：28 间启用客房（alpha.9.6 F2：首页为「某日房态」，
+  // 卡片标签由「总房」改为「启用房间」——停用房间不计入可售口径）
   const main = page.locator("main");
-  await expect(main.getByText("总房")).toBeVisible();
+  await expect(main.getByText("启用房间", { exact: true })).toBeVisible();
   await expect(main.getByText("28", { exact: true }).first()).toBeVisible();
   // 顶栏显示当前用户与角色
   await expect(page.getByText("SUPER_ADMIN").first()).toBeVisible();

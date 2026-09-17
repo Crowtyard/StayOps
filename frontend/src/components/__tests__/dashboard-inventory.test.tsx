@@ -8,6 +8,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import type { MeOut } from "@/lib/api/types";
+import { businessDate } from "@/lib/booking";
 import DashboardView from "@/components/dashboard-view";
 import { UserContext } from "@/components/app-shell";
 
@@ -19,6 +20,7 @@ const {
   invListItemsMock,
   prListRequestsMock,
   prListOrdersMock,
+  dashboardRoomStatusMock,
 } = vi.hoisted(() => ({
   roomsListMock: vi.fn(),
   reservationsListMock: vi.fn(),
@@ -27,6 +29,7 @@ const {
   invListItemsMock: vi.fn(),
   prListRequestsMock: vi.fn(),
   prListOrdersMock: vi.fn(),
+  dashboardRoomStatusMock: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -55,6 +58,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     ...actual,
     api: {
       rooms: { list: roomsListMock },
+      dashboard: { roomStatus: dashboardRoomStatusMock },
       reservations: { list: reservationsListMock },
       stays: { list: staysListMock },
       housekeeping: { list: hkListMock },
@@ -82,9 +86,34 @@ function makeUser(permissions: string[]): MeOut {
   };
 }
 
+/** alpha.9.6 F2：房态概览改为按日期从后端取（前端不再自行计算房态）。 */
+function emptyRoomStatus() {
+  const today = businessDate();
+  return {
+    date: today,
+    business_date: today,
+    is_today: true,
+    is_past: false,
+    physical_status_authoritative: true,
+    enabled_room_count: 0,
+    disabled_room_count: 0,
+    total_room_count: 0,
+    counts: {
+      available: 0,
+      reserved: 0,
+      occupied: 0,
+      out_of_service: 0,
+      total_enabled_rooms: 0,
+      sellable_total: 0,
+    },
+    rooms: [],
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   roomsListMock.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 100 });
+  dashboardRoomStatusMock.mockResolvedValue(emptyRoomStatus());
   reservationsListMock.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 100 });
   staysListMock.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 100 });
   hkListMock.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 100 });
@@ -212,7 +241,7 @@ describe("Dashboard 库存与采购预警（Sprint 7 §45）", () => {
 
   it("两个权限都没有：不请求、不渲染区块", async () => {
     renderDashboard(["room:read"]);
-    await screen.findByText("当前房态概览");
+    await screen.findByRole("heading", { name: /房态概览/ });
     expect(screen.queryByText("库存与采购预警")).not.toBeInTheDocument();
     expect(invListItemsMock).not.toHaveBeenCalled();
     expect(prListRequestsMock).not.toHaveBeenCalled();
@@ -222,7 +251,7 @@ describe("Dashboard 库存与采购预警（Sprint 7 §45）", () => {
   it("加载失败 → 区块内错误提示（不阻塞房态区）", async () => {
     invListItemsMock.mockRejectedValue(new Error("boom"));
     renderDashboard(["room:read", "inventory:read"]);
-    expect(await screen.findByText("当前房态概览")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /房态概览/ })).toBeInTheDocument();
     expect(
       await screen.findByText("库存/采购预警加载失败"),
     ).toBeInTheDocument();

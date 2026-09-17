@@ -166,6 +166,8 @@ describe("快速新建预填（front-desk 空白日期格）", () => {
     roomsGetMock.mockResolvedValue({
       id: 203,
       room_number: "203",
+      name: null,
+      is_active: true,
       room_type_id: 3,
       floor: 2,
       occupancy_status: "available",

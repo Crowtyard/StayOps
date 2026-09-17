@@ -29,6 +29,8 @@ from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
 from app.models import (
+    Channel,
+    ChannelCategory,
     CleaningStatus,
     InventoryLocation,
     OccupancyStatus,
@@ -69,13 +71,29 @@ PERMISSIONS: dict[str, tuple[str, str]] = {
     "role:write": ("编辑角色", "创建与更新角色、设置角色权限"),
     "role:delete": ("删除角色", "删除角色"),
     "room:read": ("查看房间", "查看房间列表与详情"),
-    "room:write": ("编辑房间", "创建与更新房间、变更房态"),
-    "room:delete": ("删除房间", "删除房间"),
+    # room:write = **日常运营房态操作**（不承担房间主数据管理）：
+    #   仅用于 POST /rooms/{id}/status（占用/清洁维度状态机变更）与
+    #   deps.authorize_status_change 的"可改任意维度"判定。
+    #   房间主数据（房号/房型/楼层/名称/备注/启用停用/物理库存归属）
+    #   一律由 room:inventory_manage 守卫 —— 见 alpha.9.6 QA DEF-1 决策。
+    "room:write": ("房间房态操作", "变更房间占用/清洁状态（房态状态机操作）"),
+    "room:inventory_manage": (
+        "管理房间库存",
+        "新增/编辑/停用/启用/删除房间主数据（房号、房型、楼层、名称、备注、经营启停）",
+    ),
+    "room:delete": ("删除房间", "删除房间（仅限从未被业务记录引用的房间）"),
     "room:status_cleaning": ("清洁状态变更", "变更房间清洁状态（cleaning_status）"),
     "room:status_maintenance": ("置为维修停用", "将房间占用状态置为 out_of_service（维修/停用）"),
     "room_type:read": ("查看房型", "查看房型列表与详情"),
     "room_type:write": ("编辑房型", "创建与更新房型"),
     "room_type:delete": ("删除房型", "删除房型"),
+    # alpha.9.6 F3：客源渠道主数据权限（用 permission 判断，不用角色名）
+    #   channel:read  前台创建/编辑 Reservation 时读取并选择来源渠道
+    #   channel:write 渠道主数据管理（新增/改名/停用/删除）
+    #   注意：channel:read 不授予任何渠道收入/ADR 经营分析能力 ——
+    #   渠道经营分析属 analytics:business_read 域。
+    "channel:read": ("查看渠道", "查看客源渠道列表（用于预订选择来源渠道）"),
+    "channel:write": ("管理渠道", "新增、编辑、停用、删除客源渠道"),
     "audit:read": ("查看审计日志", "查看审计日志"),
     "audit:write": ("写入审计日志", "写入审计日志"),
     "audit:delete": ("删除审计日志", "删除审计日志"),
@@ -160,6 +178,16 @@ BOOKING_PERMISSIONS: list[str] = [
 #   HOUSEKEEPING / MAINTENANCE / FINANCE ×
 ROOM_MOVE_PERMISSIONS: list[str] = ["stay:room_move"]
 
+# alpha.9.6 F3：渠道主数据角色矩阵（用途判断，禁止硬编码角色名）
+#   channel:read   MANAGER ✓ / FRONT_DESK ✓ —— 前台必须能在创建 Reservation 时
+#                  选择来源渠道（否则无法录入订单来源）
+#   channel:write  MANAGER ✓ —— 仅店长/经理可管理渠道主数据
+#                  FRONT_DESK ×：不得停用/删改渠道配置
+#   HOUSEKEEPING / MAINTENANCE / FINANCE 均不获得渠道权限
+#   （FINANCE 的渠道【经营分析】走既有 analytics:business_read，与 channel:* 无关）
+CHANNEL_READ: list[str] = ["channel:read"]
+CHANNEL_WRITE: list[str] = ["channel:read", "channel:write"]
+
 # Sprint 3：Housekeeping 域角色矩阵（SUPER_ADMIN 动态全部）
 #   MANAGER     = read + write + work + inspect + cancel
 #   FRONT_DESK  = read + write
@@ -226,6 +254,21 @@ ANALYTICS_BUSINESS: list[str] = ["analytics:business_read"]
 AI_USE: list[str] = ["ai_manager:use"]
 AI_MANAGE: list[str] = ["ai_manager:manage"]
 
+# alpha.9.6 QA DEF-1（RBAC privilege expansion）修复：房间主数据权限收敛
+#   背景：alpha.9.6 新增 POST /rooms/{id}/disable|enable 后，若继续用
+#   room:write 守卫，则 FRONT_DESK（既有 room:write）获得"新增/编辑/停用/启用
+#   房间主数据"的能力 —— 与 Field Trial PRD「不要让普通低权限用户随意修改
+#   基础房间库存」冲突。独立 QA 已用真实 HTTP 复现（POST=201 / PATCH=200 /
+#   enable=200）。
+#   决策：房间主数据管理（create / update / disable / enable / delete）统一纳入
+#   room:inventory_manage 保护区；room:write 仅保留日常房态操作语义。
+#   DELETE /rooms/{id} 额外保留 room:delete（仓库既有决策：该码不授予任何常规
+#   角色）→ 两码 AND，因此 FRONT_DESK 与 MANAGER 均无法删除房间，
+#   不产生任何权限扩张。
+#   SUPER_ADMIN 经 seed 动态获得全部权限码，无需显式列出。
+#   授权唯一来源 = seed.py（migration 不写 permissions / role_permissions）。
+ROOM_INVENTORY_MANAGE: list[str] = ["room:inventory_manage"]
+
 ROLE_PERMISSIONS: dict[str, list[str]] = {
     "SUPER_ADMIN": [],
     "MANAGER": [
@@ -234,8 +277,10 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
         "role:read",
         "room:read",
         "room:write",
+        *ROOM_INVENTORY_MANAGE,
         "room_type:read",
         "room_type:write",
+        *CHANNEL_WRITE,
         "audit:read",
         "audit:write",
         *BOOKING_PERMISSIONS,
@@ -250,8 +295,10 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
     ],
     "FRONT_DESK": [
         "room:read",
+        # 仅房态操作（POST /rooms/{id}/status）；无 room:inventory_manage
         "room:write",
         "room_type:read",
+        *CHANNEL_READ,
         "audit:read",
         *BOOKING_PERMISSIONS,
         *ROOM_MOVE_PERMISSIONS,
@@ -495,6 +542,63 @@ def _count(db: Session, model: type) -> int:
     return len(db.scalars(select(model)).all())
 
 
+# ---------------------------------------------------------------------------
+# alpha.9.6 F3：客源渠道主数据（幂等 upsert；语义与渠道管理 UI 一致）
+# ---------------------------------------------------------------------------
+# code 稳定不可变（迁移映射 / 外部引用依赖它）；name 为经营者可见名称。
+# 系统预置渠道：美团 / 携程 / 飞猪 为 OTA 主渠道；直订 / 电话 / 微信 / 散客 /
+# 协议客户 覆盖原有 legacy source 语义；「其他」为默认兜底渠道（可改名，
+# 但 code 固定，保证未指定渠道的预订仍有稳定归属）；「历史来源」承载
+# 无法归因的 legacy 数据（Migration 回填目标）。
+SYSTEM_CHANNELS: list[tuple[str, str, str, int]] = [
+    # (code, name, category, sort_order)
+    ("SYS_MEITUAN", "美团", "OTA", 10),
+    ("SYS_CTRIP", "携程", "OTA", 20),
+    ("SYS_FLIGGY", "飞猪", "OTA", 30),
+    ("SYS_DIRECT", "直订", "DIRECT", 40),
+    ("SYS_PHONE", "电话", "OFFLINE", 50),
+    ("SYS_WECHAT", "微信", "OFFLINE", 60),
+    ("SYS_WALK_IN", "散客", "OFFLINE", 70),
+    ("SYS_CORPORATE", "协议客户", "CORPORATE", 80),
+    ("CUSTOM_OTHER", "其他", "OTHER", 900),
+    ("CUSTOM_LEGACY", "历史来源", "OTHER", 990),
+]
+
+
+def seed_channels(db: Session) -> None:
+    """幂等 upsert 预置渠道（按 code 定位，回退按 name 定位）。
+
+    - 渠道不存在 -> 创建（enabled=true, is_system=true）
+    - 已存在 -> 校准 code / category / sort_order / is_system；
+      **不覆盖 enabled**（经营者停用是业务决策，seed 不得把渠道悄悄启用回来）
+      也**不覆盖 name**（CUSTOM_OTHER / CUSTOM_LEGACY 允许经营者改名）。
+
+    按 name 回退定位是为了容忍「迁移插入时 name 已存在但 code 不同」的库
+    （name 全局唯一，此时直接以 name 为准并校准 code，保证与
+    alembic/versions/a96b1c4d7e02 的 SYSTEM_CHANNELS 完全一致）。
+    """
+    for code, name, category, sort_order in SYSTEM_CHANNELS:
+        channel = db.scalar(select(Channel).where(Channel.code == code))
+        if channel is None:
+            channel = db.scalar(select(Channel).where(Channel.name == name))
+        if channel is None:
+            db.add(
+                Channel(
+                    code=code,
+                    name=name,
+                    category=ChannelCategory(category),
+                    enabled=True,
+                    is_system=True,
+                    sort_order=sort_order,
+                )
+            )
+            continue
+        channel.code = code
+        channel.category = ChannelCategory(category)
+        channel.sort_order = sort_order
+        channel.is_system = True
+
+
 def seed() -> None:
     db = SessionLocal()
     try:
@@ -504,6 +608,7 @@ def seed() -> None:
         types_by_name = seed_room_types(db)
         seed_rooms(db, types_by_name)
         seed_inventory_locations(db)
+        seed_channels(db)
         db.commit()
 
         print("种子数据写入完成：")
@@ -513,6 +618,7 @@ def seed() -> None:
         print(f"  users:         {_count(db, User)}")
         print(f"  room_types:    {_count(db, RoomType)}")
         print(f"  rooms:         {_count(db, Room)}")
+        print(f"  channels:      {_count(db, Channel)}")
         print(f"  inventory_locations: {_count(db, InventoryLocation)}")
         admin = db.scalar(
             select(User).where(User.username == ADMIN_USERNAME)

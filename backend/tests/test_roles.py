@@ -20,7 +20,7 @@ def test_list_seeded_roles(client, admin_headers):
     assert {r["name"] for r in body["items"]} == SEEDED_ROLES
     # SUPER_ADMIN 拥有全部 52 个权限（50 = Sprint 8 基线 + Sprint 9 AI Manager 的 2）
     super_admin = next(r for r in body["items"] if r["name"] == "SUPER_ADMIN")
-    assert len(super_admin["permissions"]) == 52
+    assert len(super_admin["permissions"]) == 55
     # Sprint 8 §34：Analytics 权限码存在
     admin_codes = {p["code"] for p in super_admin["permissions"]}
     assert {"analytics:operations_read", "analytics:business_read"} <= admin_codes

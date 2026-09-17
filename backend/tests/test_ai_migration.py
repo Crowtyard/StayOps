@@ -20,7 +20,7 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 NEW_REVISION = "f5d3b9e7a2c4"
 PREV_REVISION = "e3a91f5c8d24"
 AI_TABLES = {"ai_settings", "ai_conversations", "ai_messages"}
-EXPECTED_AI_VIEWS = 21
+EXPECTED_AI_VIEWS = 22  # alpha.9.6 新增 ai_channels（F3 客源渠道主数据）
 ROLE = "stayops_ai_reader"
 
 

@@ -8,6 +8,8 @@ from app.api.routes import (
     audit_logs,
     auth,
     availability,
+    channels,
+    dashboard,
     guests,
     housekeeping,
     inventory,
@@ -30,6 +32,8 @@ api_router.include_router(roles.router)
 api_router.include_router(permissions.router)
 api_router.include_router(room_types.router)
 api_router.include_router(rooms.router)
+api_router.include_router(channels.router)
+api_router.include_router(dashboard.router)
 api_router.include_router(audit_logs.router)
 api_router.include_router(guests.router)
 api_router.include_router(availability.router)

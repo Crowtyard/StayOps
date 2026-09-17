@@ -8,14 +8,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import type { HousekeepingTaskOut, MeOut } from "@/lib/api/types";
+import { businessDate } from "@/lib/booking";
 import DashboardView from "@/components/dashboard-view";
 import { UserContext } from "@/components/app-shell";
 
-const { roomsListMock, reservationsListMock, staysListMock, hkListMock } = vi.hoisted(() => ({
+const { roomsListMock, reservationsListMock, staysListMock, hkListMock, dashboardRoomStatusMock } = vi.hoisted(() => ({
   roomsListMock: vi.fn(),
   reservationsListMock: vi.fn(),
   staysListMock: vi.fn(),
   hkListMock: vi.fn(),
+  dashboardRoomStatusMock: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -44,6 +46,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     ...actual,
     api: {
       rooms: { list: roomsListMock },
+      dashboard: { roomStatus: dashboardRoomStatusMock },
       reservations: { list: reservationsListMock },
       stays: { list: staysListMock },
       housekeeping: { list: hkListMock },
@@ -80,8 +83,33 @@ function makeTask(status: HousekeepingTaskOut["status"], id: number): Housekeepi
   };
 }
 
+/** alpha.9.6 F2：房态概览改为按日期从后端取（前端不再自行计算房态）。 */
+function emptyRoomStatus() {
+  const today = businessDate();
+  return {
+    date: today,
+    business_date: today,
+    is_today: true,
+    is_past: false,
+    physical_status_authoritative: true,
+    enabled_room_count: 0,
+    disabled_room_count: 0,
+    total_room_count: 0,
+    counts: {
+      available: 0,
+      reserved: 0,
+      occupied: 0,
+      out_of_service: 0,
+      total_enabled_rooms: 0,
+      sellable_total: 0,
+    },
+    rooms: [],
+  };
+}
+
 beforeEach(() => {
   roomsListMock.mockReset().mockResolvedValue({ items: [], total: 0, page: 1, page_size: 100 });
+  dashboardRoomStatusMock.mockReset().mockResolvedValue(emptyRoomStatus());
   reservationsListMock.mockReset().mockResolvedValue({ items: [], total: 0, page: 1, page_size: 100 });
   staysListMock.mockReset().mockResolvedValue({ items: [], total: 0, page: 1, page_size: 100 });
   hkListMock.mockReset().mockResolvedValue({ items: [], total: 0, page: 1, page_size: 100 });
@@ -141,7 +169,7 @@ describe("Dashboard HousekeepingOverview（Sprint 3）", () => {
         <DashboardView />
       </UserContext.Provider>,
     );
-    await screen.findByText("当前房态概览");
+    await screen.findByRole("heading", { name: /房态概览/ });
     expect(screen.queryByText("保洁运营概览")).not.toBeInTheDocument();
     expect(hkListMock).not.toHaveBeenCalled();
   });
@@ -155,7 +183,7 @@ describe("Dashboard HousekeepingOverview（Sprint 3）", () => {
         <DashboardView />
       </UserContext.Provider>,
     );
-    expect(await screen.findByText("当前房态概览")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /房态概览/ })).toBeInTheDocument();
     expect(
       await screen.findByText("保洁任务概览加载失败"),
     ).toBeInTheDocument();

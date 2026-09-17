@@ -78,7 +78,7 @@ Copy-Item .env.example .env.local   # BACKEND_API_URL / NEXT_PUBLIC_APP_NAME
 
 > 里程碑：Desktop D1 + D2 foundation（v1.0.0-alpha.9.4）——把 StayOps 封装为可安装的 Windows 客户端（Electron + Next.js Production standalone + FastAPI Production + 自管理 PostgreSQL + 全部运行时随包分发）。完整说明见 [docs/DESKTOP.md](docs/DESKTOP.md)。
 
-- **安装版（推荐）**：下载 `StayOps-Setup-1.0.0-alpha.9.4.exe` → 双击安装（per-user，无需管理员）→ 开始菜单/桌面快捷方式启动 → 自动初始化本机 PostgreSQL、执行迁移、启动前后端 → 打开主窗口。首次启动会在启动窗口**只显示一次**管理员初始密码（登录后必须立即修改）。
+- **安装版（推荐）**：下载 `StayOps-Setup-1.0.0-alpha.9.6.exe` → 双击安装（per-user，无需管理员；**安装路径可含中文/非 ASCII 字符**）→ 开始菜单/桌面快捷方式启动 → 自动 materialize PostgreSQL runtime、初始化本机 PostgreSQL、执行迁移、启动前后端 → 打开主窗口。首次启动会在启动窗口**只显示一次**管理员初始密码（登录后必须立即修改）。
 - 下载包**已包含** Python / Node.js / PostgreSQL / 前端生产构建，用户机器**无需**预装任何组件（Python、Node、pnpm、PostgreSQL、Docker、Git 均不需要），也无需设置 `STAYOPS_ROOT`。
 - 开发者本机运行：双击 `desktop/dist/win-unpacked/StayOps.exe` → 启动窗口 → 自动检查 Runtime → 自管理 PostgreSQL（init/start/ready/建库）→ Alembic 检查 → 启动后端（127.0.0.1:8100）与前端（127.0.0.1:3100，Production standalone）→ 打开 StayOps 主窗口（1440×900）。`StayOps-Portable-*.exe` **尚未正式交付**（见下方 D1/D2 限制）。
 - 普通使用**不需要**打开 PowerShell / CMD / VS Code / DSH；全程零控制台弹窗。
@@ -103,15 +103,15 @@ pnpm.cmd test             # 桌面自动化测试（Vitest）
 ## 测试
 
 ```powershell
-# 后端 pytest（独立测试库 stayops_test，649 用例；含 P0 并发 stress）
+# 后端 pytest（独立测试库 stayops_test，787 用例；含 P0 并发 stress）
 cd backend
 .venv\Scripts\python.exe -m pytest -q
 
-# 前端单元/组件测试（Vitest，462 用例 / 59 个测试文件）
+# 前端单元/组件测试（Vitest，498 用例 / 62 个测试文件）
 cd frontend
 pnpm.cmd test
 
-# Playwright E2E（独立 stayops_test 库 + 专用端口 8001/3001，80 用例；不触碰开发数据）
+# Playwright E2E（独立 stayops_test 库 + 专用端口 8001/3001，84 用例；不触碰开发数据）
 cd frontend
 Copy-Item e2e\test-creds.example e2e\.env.test-creds   # 首次：填入测试库凭据（gitignored）
 pnpm.cmd test:e2e
@@ -132,6 +132,10 @@ pnpm.cmd test:e2e
 > 房间恢复 → 清洁后 Check-in Ready + 全链路审计）、PRE_OPENING、Mobile 报修表单、
 > occupied blocker / future reservation / multiple blockers / Rework / Cancel /
 > Manual OOS 保护 / Check-in 409 / RBAC / PII / 完成 ≠ 清洁；
+> E2E 覆盖（alpha.9.6）：现场反馈闭环 4 条 —— 新增房间并编辑为「豪华大床房」后
+> 在 Rooms 与 Dashboard 正确出现、未来预订在入住日显示「已预订」并可钻取、
+> 新建渠道后预订选择该渠道且详情显示渠道名、经营分析渠道统计出现该渠道
+> （含停用后历史仍可见）；E2E 用例自建数据均自行清理（保护 28 房断言）；
 > 详见 [frontend/e2e/README.md](frontend/e2e/README.md)。
 
 详见 [tests/README.md](tests/README.md)、[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
@@ -239,6 +243,52 @@ pnpm.cmd test:e2e
   真实 PostgreSQL（unexpected 500 = 0、死锁 = 0）；Ledger == Balance 对账；
   19 个审计 action
 
+## 现场反馈闭环（alpha.9.6 · Field Trial Operations Improvements）
+
+> 来源：**real hotel field trial / real operator feedback**（真实酒店经营者现场试用）。
+> 4 个需求属于同一条业务链（房间基础资料 → 某日房态 → 订单来源渠道 → 渠道经营
+> 分析），因此统一设计。**NO TAG / NO RELEASE**：待独立 QA 后再决定发布。
+
+- **房间资料管理**（F1）：房间页新增「房间资料」视图 —— 新增 / 编辑 / 停用 /
+  启用；总房间数 / 启用 / 停用由后端 `COUNT` 计算（**不存在 room_count 真值字段**）。
+  **停用优先于删除**：停用不释放房号、不破坏历史预订/入住/工单；只有从未被任何
+  业务记录引用的房间才允许物理删除。经营者无需改数据库 / seed / 代码即可把
+  28 间改成 30 间，也可把「101 大床房」改成「101 豪华大床房」。
+- **首页房态概览按日期显示**（F2）：`< 2026-09-16 >` + `[今天]` + 日期选择器；
+  展示的是**所选日期的房态**（可售 / 已预订 / 在住 / 维修停用），核心规则全部在
+  后端 `GET /dashboard/room-status?date=`。**严格区分当前物理状态**（`rooms.occupancy_status`，
+  只表示业务日期当天）**与某日占用**；未来日期显式提示「物理房态仅供参考」，
+  不推断未来清洁状态，`arriving` 到店标记绝不谎报成「在住」；点击分类可钻取房间列表。
+- **客源渠道体系**（F3）：`channels` 主数据（**不是硬编码 enum**）——系统预置
+  美团 / 携程 / 飞猪 / 直订 / 电话 / 微信 / 散客 / 协议客户 / 其他 / 历史来源，
+  经营者可自建抖音 / 小红书 / 途家 / Booking 等任意渠道（「其他」就是一行平权
+  渠道，不使用 `channel=OTHER + other_text` 结构）。预订表单「来源渠道」下拉；
+  `reservations.source_channel_id` 是**唯一来源事实**，legacy `source` 降级为只读
+  历史投影（迁移按固定映射全量回填、原值不改）。
+- **渠道经营分析**（F4）：`/analytics` 新增「客源渠道」Tab —— 渠道 / 订单数 /
+  实际房晚 / 合同房费 / 渠道占比 / 合同 ADR（**表格第一优先**，柱状图仅补充）。
+  归因链 `Stay → Reservation.source_channel_id → Channel`，每单恰好一次
+  （换房不重复计房晚）；取消与未到店不计入；**收入口径复用既有经营分析事实源**，
+  并明确标注**合同房费非实际收款**；`Σ 渠道 + 未指定渠道 == 合计`（可对账）。
+- 权限：新增 `channel:read`（前台可选渠道）/ `channel:write`（仅 MANAGER 管理）
+  与 `room:inventory_manage`（房间主数据：新增 / 编辑 / 停用 / 启用），
+  共 **55 权限码**；**前台不因渠道选择获得渠道收入 / 经营分析权限**。
+- 权限边界（QA DEF-1 修复）：`room:write` = **日常房态操作**
+  （`POST /rooms/{id}/status`）；房间**主数据**管理改由 `room:inventory_manage`
+  守卫（`room:write` 不再附带任何房间主数据能力），前台因此**不能**新增 /
+  编辑 / 停用 / 启用房间；`DELETE /rooms/{id}` 需 `room:inventory_manage`
+  **且** `room:delete`（该码仍不授予任何常规角色 → 店长亦不可删除）。
+- AI 店长：`get_analytics(endpoint="channels")` 可回答「哪个渠道订单最多 /
+  渠道合同房费最高」；新增 `ai_channels` 只读视图（21 → 22）。
+- 迁移：新增 revision `a96b1c4d7e02`（单 head）；已验证 alpha.9.4 真实 schema →
+  head 时 28 房与全部 reservation 完整保留、legacy source 逐值正确回填。
+- **Windows 兼容（原 alpha.9.5 hotfix，并入本版本）**：安装版把 bundled
+  PostgreSQL runtime materialize 到 ASCII-safe 路径
+  `%PROGRAMDATA%\StayOps\runtime\postgresql\<version>\pgsql` 后统一执行所有 PG CLI
+  —— 安装路径含中文时不再出现
+  `FATAL: invalid byte sequence for encoding "UTF8": 0xb0`；
+  数据目录/配置/程序文件继续分离，**不要求用户安装到英文目录**。
+
 ## 经营分析（Sprint 8）
 
 - 页面：`/analytics`（经营分析管理驾驶舱，四 Tab：总览 / 客房与预订 / 运营效率 /
@@ -262,7 +312,7 @@ pnpm.cmd test:e2e
   月末）；比率 → percentage points；数量/金额/平均 → percent（previous=0 →
   null，无 Infinity%）；零数据 0 / null / []（Pre-opening 安全）
 - RBAC：`analytics:operations_read`（SUPER_ADMIN/MANAGER/FRONT_DESK）与
-  `analytics:business_read`（SUPER_ADMIN/MANAGER/FINANCE）——共 50 权限码；
+  `analytics:business_read`（SUPER_ADMIN/MANAGER/FINANCE）——共 55 权限码；
   无权限域不请求不显示（后端 403 兜底）；Analytics 不返回 Guest / Supplier
   联系信息（PII）
 - 指标字典：见 [docs/ANALYTICS.md](docs/ANALYTICS.md)
@@ -347,15 +397,36 @@ pnpm.cmd test:e2e
 > API Key Fernet 加密 + 掩码 + Fake Provider 测试体系），
 > 自测全绿（pytest 603 / Vitest 458 / Playwright 80 / lint / typecheck / build），
 > 等待 Kun Fast QA；`v1.0.0-alpha.9` 待 QA PASS 后发布。
+> alpha.9.6 开发完成（Field Trial Operations Improvements：房间资料管理 /
+> 首页房态概览按日期显示 / 客源渠道主数据 / 渠道经营分析；Alembic head =
+> `a96b1c4d7e02`），自测全绿（pytest 783 / Vitest 495 / Playwright 84 /
+> lint / typecheck / build / Desktop typecheck + Vitest 68），
+> **NO TAG / NO RELEASE**，等待独立 QA；alpha.9.5 的 Windows non-ASCII
+> installer hotfix 与本版本不混版。
+> alpha.9.6 QA Fix（独立 QA 复检后）：DEF-1 房间主数据权限扩张 → 新增
+> `room:inventory_manage`（权限总数 55；`room:write` 仅房态操作）、
+> DEF-2 E2E 登录稳定性（可判定登录流程，无 sleep / 无盲目重试）、
+> DEF-3 日期房态文档澄清（产品行为不变）、DEF-4 文件末尾空行 —— 自测全绿
+> （pytest 787 / Vitest 498 / Playwright 84 ×3 + z-ai-manager 6 ×3 /
+> lint / typecheck / build / Desktop typecheck + Vitest 68），
+> **仍未 commit / 未打 tag / 未发布**。
 
 ## Current Release
 
-Version: v1.0.0-alpha.8（当前正式基线，Sprint 8 Release）
+Version: v1.0.0-alpha.9.6（当前 release 候选；含 Field Trial 反馈闭环 + Windows runtime 兼容修复）
 
-Status: Sprint 9 IMPLEMENTATION COMPLETE（DeepSeek AI Manager）— 等待 Kun Fast QA
+Status: RELEASE PREP COMPLETE（final fresh installer 已构建并通过实机 smoke）— 等待最终批准后打 tag
 
-This is the ninth Alpha development baseline of StayOps（DeepSeek AI Manager）。
+This release includes:
 
-Sprint 9 implementation complete（无 commit）：pytest 603 / Vitest 458 / Playwright 74 + ai-manager 6 条全绿；lint / typecheck / build PASS；开发库 stayops seed 幂等收敛至 52 权限码；Alembic head = `f5d3b9e7a2c4`（AI Manager 域迁移：ai_settings/ai_conversations/ai_messages + 21 个 ai_* 只读视图 + stayops_ai_reader 只读 Role）。待 Kun Fast QA PASS 后创建 `v1.0.0-alpha.9` Release Commit。
+- **Windows Compatibility**：中文/非 ASCII 安装路径下的 PostgreSQL 首次启动修复
+  （materialized ASCII-safe runtime + PG CLI 统一解析 + 输出解码 + 部分初始化保护
+  + `lib/` 完整性校验）
+- **Field Trial Improvements**：房间资料管理 / 按日期房态 / 渠道体系 / 渠道经营分析
+- **RBAC hardening**：`room:inventory_manage`（前台不可改房间主数据，日常房态操作保留）
+
+Release candidate 自测（release commit 后 fresh build）：pytest 806 passed + 1 skipped、
+Vitest 498、Desktop Vitest 91 + 1 skipped、Playwright 84、两条真实 PG integration 各 1 passed；
+Alembic head = `a96b1c4d7e02`。**NO TAG / NO RELEASE**（等待最终批准）。
 
 Not intended for production deployment.

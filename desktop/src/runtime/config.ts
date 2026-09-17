@@ -13,6 +13,9 @@
  * - 桌面端口 8100/3100 仅绑定 127.0.0.1（与开发 8000/3000、E2E 8001/3001 互不冲突）。
  * - Electron 不读取任何 .env 秘密；DB/迁移检查全部经 Python 侧脚本完成。
  * - 程序文件与业务数据严格分离：程序在安装目录，数据在 %PROGRAMDATA%\StayOps。
+ * - Packaged Mode 的 **PostgreSQL 执行路径**由 pgRuntime.ts materialize 到
+ *   %PROGRAMDATA%\StayOps\runtime\postgresql\<version>\pgsql（ASCII-safe），
+ *   以支持含中文/非 ASCII 的安装路径（alpha.9.6 hotfix）。
  */
 
 import fs from "node:fs";
@@ -81,7 +84,17 @@ export interface DesktopPaths {
   trayIcon: string;
   appIcon: string;
   /** StayOps 自带 PostgreSQL Runtime（详见 docs/DECISIONS.md） */
+  /** bundled runtime **源**目录（packaged: resources/postgres/pgsql） */
+  pgBundledDir: string;
+  /**
+   * bundled runtime 的 bin 目录（安装完整性检查用）。
+   * Packaged Mode 下**不再直接执行**：PG CLI 统一从
+   * `pgRuntimeRootDir/<version>/pgsql/bin`（ASCII-safe materialized runtime）执行
+   * —— 见 alpha.9.6 Windows non-ASCII hotfix 与 pgRuntime.ts。
+   */
   pgBinDir: string;
+  /** materialize 目标根：%PROGRAMDATA%\StayOps\runtime\postgresql（packaged 模式使用） */
+  pgRuntimeRootDir: string;
   pgDataDir: string;
   pgCredsFile: string;
   /** 安装级配置目录（%PROGRAMDATA%\StayOps\config；不随程序升级/卸载删除） */
@@ -164,6 +177,8 @@ export function buildPaths(
   const logsDir = path.join(localAppData, "StayOps", "logs");
   const pgDataDir = path.join(pgHome, "data");
   const pgCredsFile = path.join(pgHome, "conf", "dbpass.conf");
+  // PostgreSQL runtime materialize 目标（ASCII-safe；与 data 目录、config 目录分离）
+  const pgRuntimeRootDir = path.join(stayOpsData, "runtime", "postgresql");
   const aiKeyFile = path.join(configDir, "ai_encryption.key");
   const adminBootstrapFile = path.join(configDir, "admin-bootstrap.dat");
 
@@ -191,7 +206,9 @@ export function buildPaths(
       logsDir,
       trayIcon: path.join(app, "assets", "tray.png"),
       appIcon: path.join(app, "assets", "app-icon.png"),
+      pgBundledDir: path.join(resources, "postgres", "pgsql"),
       pgBinDir: path.join(resources, BUNDLED_PG_BIN_REL),
+      pgRuntimeRootDir,
       pgDataDir,
       pgCredsFile,
       configDir,
@@ -228,7 +245,9 @@ export function buildPaths(
     logsDir,
     trayIcon: path.join(desktopDir, "assets", "tray.png"),
     appIcon: path.join(desktopDir, "assets", "app-icon.png"),
+    pgBundledDir: path.join(workspaceRoot, "runtime", "postgres", "pgsql"),
     pgBinDir: path.join(workspaceRoot, "runtime", "postgres", "pgsql", "bin"),
+    pgRuntimeRootDir,
     pgDataDir,
     pgCredsFile,
     configDir,

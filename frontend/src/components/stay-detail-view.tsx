@@ -23,6 +23,7 @@ import {
   formatDateTime,
   formatMoney,
 } from "@/lib/booking";
+import { reservationChannelLabel } from "@/lib/channels";
 import {
   formatAssignmentHistory,
   originalRoomNumber,
@@ -293,7 +294,7 @@ export default function StayDetailView({ id }: { id: string }) {
               <div>
                 <dt className="text-xs text-gray-500">来源</dt>
                 <dd className="mt-1 text-sm text-gray-900">
-                  {reservation.source}
+                  {reservationChannelLabel(reservation.source_channel, reservation.source)}
                 </dd>
               </div>
             </dl>

@@ -92,7 +92,7 @@ test("翻房 Golden Path：退房自动任务 → 派单 → 清扫链 → 通�
     checkIn: CHECK_IN,
     checkOut: CHECK_OUT,
     roomNumber: "210",
-    source: "WECHAT",
+    channelName: "微信",
     amount: "428.00",
   });
   const stayId = await uiCheckIn(page, created.id);

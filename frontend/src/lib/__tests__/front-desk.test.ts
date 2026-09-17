@@ -65,6 +65,8 @@ function makeRoom(
   return {
     id: Number(roomNumber),
     room_number: roomNumber,
+    name: null,
+    is_active: true,
     room_type_id: 3,
     floor: Number(roomNumber[0]),
     occupancy_status: "available",

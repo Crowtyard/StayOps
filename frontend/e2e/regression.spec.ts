@@ -16,7 +16,7 @@ test("Sprint 1 回归补充：登录 / BFF / 房态 / 状态修改 / 审计 / �
 
   // Dashboard：真实后端数据（28 间种子房）
   const main = page.locator("main");
-  await expect(main.getByText("总房")).toBeVisible();
+  await expect(main.getByText("启用房间", { exact: true })).toBeVisible();
   await expect(main.getByText("28", { exact: true }).first()).toBeVisible();
 
   // BFF 真实代理链路（浏览器 → BFF → FastAPI）

@@ -23,14 +23,52 @@ import { addDays, businessDate } from "@/lib/booking";
 import ReservationForm from "@/components/booking/reservation-form";
 import { UserContext } from "@/components/app-shell";
 
-const { availabilityMock, roomTypesMock, guestsListMock, guestsGetMock, guestsCreateMock } =
-  vi.hoisted(() => ({
-    availabilityMock: vi.fn(),
-    roomTypesMock: vi.fn(),
-    guestsListMock: vi.fn(),
-    guestsGetMock: vi.fn(),
-    guestsCreateMock: vi.fn(),
-  }));
+const {
+  availabilityMock,
+  roomTypesMock,
+  channelsListMock,
+  guestsListMock,
+  guestsGetMock,
+  guestsCreateMock,
+} = vi.hoisted(() => ({
+  availabilityMock: vi.fn(),
+  roomTypesMock: vi.fn(),
+  channelsListMock: vi.fn(),
+  guestsListMock: vi.fn(),
+  guestsGetMock: vi.fn(),
+  guestsCreateMock: vi.fn(),
+}));
+
+/** alpha.9.6 F3：来源渠道（唯一来源事实）。 */
+const CHANNELS = {
+  items: [
+    {
+      id: 11,
+      code: "SYS_MEITUAN",
+      name: "美团",
+      category: "OTA" as const,
+      enabled: true,
+      is_system: true,
+      sort_order: 10,
+      created_at: "x",
+      updated_at: "x",
+    },
+    {
+      id: 12,
+      code: "SYS_CTRIP",
+      name: "携程",
+      category: "OTA" as const,
+      enabled: true,
+      is_system: true,
+      sort_order: 20,
+      created_at: "x",
+      updated_at: "x",
+    },
+  ],
+  total: 2,
+  page: 1,
+  page_size: 100,
+};
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -39,6 +77,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     api: {
       availability: { query: availabilityMock },
       roomTypes: { list: roomTypesMock },
+      channels: { list: channelsListMock },
       guests: {
         list: guestsListMock,
         get: guestsGetMock,
@@ -114,6 +153,8 @@ const FULL_PERMS = [
   "reservation:read",
   "reservation:write",
   "stay:read",
+  // alpha.9.6 F3：前台创建预订需要能读取来源渠道（FRONT_DESK 持有 channel:read）
+  "channel:read",
 ];
 
 type SubmitFn = ReturnType<typeof vi.fn>;
@@ -174,7 +215,9 @@ beforeEach(() => {
   guestsListMock.mockReset();
   guestsGetMock.mockReset();
   guestsCreateMock.mockReset();
+  channelsListMock.mockReset();
   roomTypesMock.mockResolvedValue({ items: [{ id: 3, name: "豪华大床房" }], total: 1, page: 1, page_size: 100 });
+  channelsListMock.mockResolvedValue(CHANNELS);
   guestsListMock.mockResolvedValue({ items: [GUEST], total: 1, page: 1, page_size: 10 });
   availabilityMock.mockResolvedValue(AVAILABILITY);
 });
@@ -192,7 +235,7 @@ describe("ReservationForm 创建", () => {
       room_type_id: 3,
       check_in_date: TODAY,
       check_out_date: DAY_AFTER,
-      source: "DIRECT",
+      source_channel_id: 11,
       external_reference: null,
       agreed_total_amount: "428.00",
       currency: "CNY",
@@ -227,15 +270,46 @@ describe("ReservationForm 创建", () => {
     expect(screen.getByText("请选择客人")).toBeInTheDocument();
   });
 
-  it("WALK_IN：入住日期自动锁定今天（Property Business Date）", async () => {
+  it("散客渠道：入住日期自动锁定今天（Property Business Date）", async () => {
+    const walkIn = {
+      ...CHANNELS,
+      items: [
+        ...CHANNELS.items,
+        {
+          id: 13,
+          code: "SYS_WALK_IN",
+          name: "散客",
+          category: "OFFLINE" as const,
+          enabled: true,
+          is_system: true,
+          sort_order: 70,
+          created_at: "x",
+          updated_at: "x",
+        },
+      ],
+      total: 3,
+    };
+    channelsListMock.mockResolvedValue(walkIn);
     renderForm();
     await userEvent.selectOptions(
-      screen.getByLabelText("预订来源"),
-      "WALK_IN",
+      await screen.findByLabelText("来源渠道"),
+      "13",
     );
     const checkIn = screen.getByLabelText("入住日期") as HTMLInputElement;
     expect(checkIn.value).toBe(TODAY);
     expect(checkIn.disabled).toBe(true);
+  });
+
+  it("来源渠道默认选中第一个启用渠道，且可切换", async () => {
+    const { onSubmit } = renderForm();
+    const select = (await screen.findByLabelText("来源渠道")) as HTMLSelectElement;
+    // 渠道列表异步加载完成后自动选中第一个启用渠道
+    await waitFor(() => expect(select.value).toBe("11"));
+    await userEvent.selectOptions(select, "12");
+    await fillValidForm();
+    await userEvent.click(screen.getByRole("button", { name: "创建预订" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect((onSubmit.mock.calls[0][0] as ReservationCreate).source_channel_id).toBe(12);
   });
 
   it("409 冲突 → 展示后端原文（冲突条）", async () => {
@@ -307,6 +381,16 @@ describe("ReservationForm 编辑（CONFIRMED）", () => {
     check_in_date: TODAY,
     check_out_date: DAY_AFTER,
     status: "CONFIRMED",
+    // alpha.9.6 F3：来源渠道为唯一事实（渠道已列为可选项时不应产生多余变更）
+    source_channel_id: 11,
+    source_channel: {
+      id: 11,
+      code: "SYS_MEITUAN",
+      name: "美团",
+      category: "OTA",
+      enabled: true,
+      is_system: true,
+    },
     source: "DIRECT",
     external_reference: null,
     agreed_total_amount: "428.00",

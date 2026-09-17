@@ -59,6 +59,8 @@ const DAY_AFTER = addDays(TODAY, 1);
 const ROOM_OCCUPIED: RoomOut = {
   id: 1,
   room_number: "203",
+  name: null,
+  is_active: true,
   room_type_id: 3,
   floor: 2,
   occupancy_status: "occupied",
@@ -94,6 +96,17 @@ const NEXT_RESERVATION: ReservationOut = {
   check_in_date: addDays(TODAY, 3),
   check_out_date: addDays(TODAY, 5),
   status: "CONFIRMED",
+  // alpha.9.6 F3：来源渠道为唯一事实（UI 优先显示渠道名）
+  source_channel_id: 2,
+  source_channel: {
+    id: 2,
+    code: "SYS_CTRIP",
+    name: "携程",
+    category: "OTA",
+    enabled: true,
+    is_system: true,
+  },
+  // LEGACY 只读投影（渠道存在时不再作为主展示）
   source: "OTA",
   agreed_total_amount: "500.00",
   currency: "CNY",
@@ -158,7 +171,8 @@ describe("RoomDetailView Booking 扩展", () => {
     expect(screen.getByText(DAY_AFTER)).toBeInTheDocument();
     expect(await screen.findByText("下一笔预订")).toBeInTheDocument();
     expect(screen.getByText("RSV-NEXT-0012")).toBeInTheDocument();
-    expect(screen.getByText("OTA")).toBeInTheDocument();
+    // alpha.9.6 F3：显示来源渠道名（不再是笼统的 legacy "OTA"）
+    expect(screen.getByText("携程")).toBeInTheDocument();
     // guest:read → 客人姓名可见
     expect(screen.getByText("李女士")).toBeInTheDocument();
   });

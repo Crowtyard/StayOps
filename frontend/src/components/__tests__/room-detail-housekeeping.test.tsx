@@ -56,6 +56,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
 const ROOM: RoomOut = {
   id: 1,
   room_number: "210",
+  name: null,
+  is_active: true,
   room_type_id: 3,
   floor: 2,
   occupancy_status: "available",

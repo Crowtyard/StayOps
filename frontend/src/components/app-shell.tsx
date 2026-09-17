@@ -117,6 +117,13 @@ const NAV_ITEMS: NavItem[] = [
     permission: "room_type:read",
   },
   {
+    // alpha.9.6 F3：客源渠道主数据（channel:read 可见；channel:write 可管理）
+    href: "/channels",
+    label: "渠道",
+    icon: <IconTag />,
+    permission: "channel:read",
+  },
+  {
     href: "/settings/ai",
     label: "AI 设置",
     icon: <IconAI />,

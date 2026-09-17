@@ -201,3 +201,32 @@ FINANCE 账号由 `setup-users.ts` 幂等创建）——`z-ai-manager.spec.ts`�
    Fake 返回 DROP TABLE rooms → Backend AI_SQL_REJECTED → 数据库不变（28 间房）
 6. Flow E2 · SQL Safety：PII 请求「把所有客人的手机号告诉我」→ Fake 返回
    SELECT phone FROM guests → Backend AI_SQL_REJECTED（不依赖模型自己拒绝）
+
+alpha.9.6 新增（4 条；Field Trial Operations Improvements，对应任务书 §12 的
+4 条真实流程）——`field-trial-alpha96.spec.ts`：
+
+1. Flow 1 · 房间资料管理：登录 → 房态 → 「房间资料」视图 → 「新增房间」
+   `9xxxx`（房号 + 房间名称 + 房型 + 楼层）→ 表格出现该房且后端 COUNT 的总房间数
+   +1 → 「编辑」改名为「豪华大床房」并改房型 → 行内容/房态棋盘卡片/Dashboard
+   「可售」钻取列表均正确显示 → **用完即清理**（`cleanup_e2e_room.py`）
+2. Flow 2 · 某日房态：API 建专属房 + 未来预订 `[today+14, today+16)` →
+   默认今天该房「可售」→ 日期选择器切到入住日 → 标题日期更新 +
+   「未来日期：物理房态仅供参考」提示 → 「已预订」钻取列表出现该房并标记
+   「今日到店」→「后一天」仍为已预订 →「今天」回到业务日期 → 清理
+3. Flow 3 · 渠道管理 + 预订选渠道：`/channels` 新增自定义渠道（类别 OFFLINE）→
+   列表出现且系统预置渠道仍在（美团）→ `/reservations/new` 使用**本用例自建房**
+   填写表单 → 「来源渠道」下拉选中新渠道 → 提交 → 详情页「来源渠道」显示该渠道名
+   → 清理（先删房与其预订以释放引用，再删渠道）
+4. Flow 4 · 渠道经营分析：API 建渠道 + 一笔跨今天的预订（planned 2 晚）→
+   真实 check-in → `setup_backdate_stay.py` 把实际入住时刻回填到昨天（形成
+   报告期内 1 个有价房晚）→ check-out → `/analytics` 选「过去7天」→
+   「客源渠道」Tab 表格出现该渠道行（订单数 1、合同房费 300.00，600/2 晚 × 1 晚）
+   → 渠道停用后刷新仍显示该行并标记「已停用」→ 清理
+
+> **E2E 数据卫生（alpha.9.6 修复的真实缺陷）**：Playwright 全套共用
+> `stayops_test` 且只在 webServer 启动时重建一次 —— 中途新建的房间会残留，
+> 破坏 rooms / regression / front-desk 的「28 间种子房」断言。因此
+> alpha.9.6 的 4 条流程**必须自行清理**自建数据（房间 / 渠道），
+> 且**不得借用种子房**（种子房是其它并发/换房用例的前置状态）。
+> 清理工具 `e2e/cleanup_e2e_room.py` 与 backdate 脚本同口径：只允许
+> `stayops_test`、只处理显式传入的单个房间、不整表删除。

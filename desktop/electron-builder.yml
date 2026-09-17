@@ -18,6 +18,14 @@ files:
   - dist/**
   - "!dist/win-unpacked/**"
   - "!dist/win-unpacked"
+  # electron-builder 每次构建都会在 dist/ 写这些产物，必须排除：
+  # - builder-debug.yml：内容含**开发机绝对路径**（security audit：安装包内不得出现）
+  # - StayOps-Setup-*.exe / *.blockmap：安装包本体（避免自嵌套）
+  # - RELEASE-NOTES-*：发布资料，不属于运行时
+  - "!dist/builder-debug.yml"
+  - "!dist/StayOps-Setup-*"
+  - "!dist/*.blockmap"
+  - "!dist/RELEASE-NOTES-*"
   - src/startup/**
   - assets/**
   - "!assets/icon-master.png"

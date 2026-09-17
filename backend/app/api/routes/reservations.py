@@ -61,7 +61,12 @@ def list_reservations(
     room_id: int | None = Query(None),
     guest_id: int | None = Query(None),
     room_type_id: int | None = Query(None),
-    source: ReservationSource | None = Query(None),
+    source_channel_id: int | None = Query(
+        None, description="alpha.9.6 F3：按来源渠道筛选（唯一来源事实）"
+    ),
+    source: ReservationSource | None = Query(
+        None, description="LEGACY：按 legacy 来源投影筛选（新前端请用 source_channel_id）"
+    ),
     check_in_date: date | None = Query(None),
     check_out_date: date | None = Query(None),
     search: str | None = Query(None),
@@ -105,6 +110,7 @@ def list_reservations(
             selectinload(Reservation.room),
             selectinload(Reservation.room_type),
             selectinload(Reservation.stay),
+            selectinload(Reservation.source_channel),
         )
         .order_by(Reservation.id.desc())
     )
@@ -116,6 +122,8 @@ def list_reservations(
         stmt = stmt.where(Reservation.guest_id == guest_id)
     if room_type_id is not None:
         stmt = stmt.where(Reservation.room_type_id == room_type_id)
+    if source_channel_id is not None:
+        stmt = stmt.where(Reservation.source_channel_id == source_channel_id)
     if source is not None:
         stmt = stmt.where(Reservation.source == source)
     if check_in_date is not None:
@@ -181,6 +189,7 @@ def get_reservation(
             selectinload(Reservation.room),
             selectinload(Reservation.room_type),
             selectinload(Reservation.stay),
+            selectinload(Reservation.source_channel),
         )
     )
     if reservation is None:

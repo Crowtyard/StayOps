@@ -154,8 +154,12 @@ export interface RoomTypeUpdate {
 export interface RoomOut {
   id: number;
   room_number: string;
+  /** alpha.9.6 F1：房间显示名称（null 时 UI 回退显示房号） */
+  name: string | null;
   room_type_id: number;
   floor: number;
+  /** alpha.9.6 F1：是否投入经营（false = 已停用；停用不释放房号） */
+  is_active: boolean;
   occupancy_status: OccupancyStatus;
   cleaning_status: CleaningStatus;
   unavailability_source?: UnavailabilitySource | null;
@@ -169,12 +173,16 @@ export interface RoomListParams extends PageParams {
   occupancy_status?: OccupancyStatus;
   cleaning_status?: CleaningStatus;
   room_type_id?: number;
+  /** alpha.9.6 F1：true=仅启用；false=仅停用；不传=全部 */
+  is_active?: boolean;
 }
 
 export interface RoomCreate {
   room_number: string;
+  name?: string | null;
   room_type_id: number;
   floor: number;
+  is_active?: boolean;
   occupancy_status?: OccupancyStatus;
   cleaning_status?: CleaningStatus;
   notes?: string | null;
@@ -182,9 +190,18 @@ export interface RoomCreate {
 
 export interface RoomUpdate {
   room_number?: string | null;
+  name?: string | null;
   room_type_id?: number | null;
   floor?: number | null;
+  is_active?: boolean | null;
   notes?: string | null;
+}
+
+/** alpha.9.6 F1：房间数量统计（后端 COUNT 计算，不是可编辑字段） */
+export interface RoomSummaryOut {
+  total_count: number;
+  enabled_count: number;
+  disabled_count: number;
 }
 
 export interface RoomStatusChange {
@@ -229,6 +246,157 @@ export type ReservationSource =
   | "OTA"
   | "CORPORATE"
   | "OTHER";
+
+/* ------------------------------------------------------------------ */
+/* alpha.9.6 F3：客源渠道主数据（Channel）                              */
+/* ------------------------------------------------------------------ */
+
+export type ChannelCategory =
+  | "OTA"
+  | "DIRECT"
+  | "OFFLINE"
+  | "CORPORATE"
+  | "OTHER";
+
+export interface ChannelOut {
+  id: number;
+  /** 稳定机器标识（预置渠道固定；自建渠道由后端生成 CUSTOM_xxx） */
+  code: string;
+  name: string;
+  category: ChannelCategory;
+  enabled: boolean;
+  /** 系统预置渠道：名称固定、不可删除，仅可停用 */
+  is_system: boolean;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChannelListParams extends PageParams {
+  enabled?: boolean;
+  include_disabled?: boolean;
+  category?: ChannelCategory;
+}
+
+export interface ChannelCreate {
+  name: string;
+  category?: ChannelCategory;
+  sort_order?: number;
+}
+
+export interface ChannelUpdate {
+  name?: string | null;
+  category?: ChannelCategory | null;
+  sort_order?: number | null;
+  enabled?: boolean | null;
+}
+
+/** 预订响应内嵌的渠道摘要（「来源渠道」的业务可读表达）。 */
+export interface SourceChannelBrief {
+  id: number;
+  code: string;
+  name: string;
+  category: ChannelCategory;
+  /** 渠道事后停用时为 false（历史预订仍保留其渠道名） */
+  enabled: boolean;
+  is_system: boolean;
+}
+
+/* ------------------------------------------------------------------ */
+/* alpha.9.6 F2：某日房态（GET /dashboard/room-status）                */
+/* ------------------------------------------------------------------ */
+
+/** 某日房态分类（对启用房间构成精确 partition）。 */
+export type DailyRoomStatus =
+  | "AVAILABLE"
+  | "RESERVED"
+  | "OCCUPIED"
+  | "OUT_OF_SERVICE";
+
+export interface RoomStatusCountsOut {
+  available: number;
+  reserved: number;
+  occupied: number;
+  out_of_service: number;
+  total_enabled_rooms: number;
+  sellable_total: number;
+}
+
+export interface RoomStatusItemOut {
+  room_id: number;
+  room_number: string;
+  room_name?: string | null;
+  floor: number;
+  is_active: boolean;
+  room_type_id: number;
+  room_type_name?: string | null;
+  status: DailyRoomStatus;
+  /** 当前物理占用状态（真实入住记录对应）；非业务日期为 null（不推断未来） */
+  effective_occupancy_status?: OccupancyStatus | null;
+  /** 当前清洁状态；非业务日期为 null（不推断未来 CLEANING） */
+  current_cleaning_status?: CleaningStatus | null;
+  unavailability_source?: UnavailabilitySource | null;
+  /** 预计到店（status=RESERVED 且 date == check_in_date） */
+  arriving?: boolean;
+  stay_id?: number | null;
+  stay_no?: string | null;
+  reservation_id?: number | null;
+  check_in_date?: string | null;
+  planned_check_out_date?: string | null;
+}
+
+export interface RoomStatusOut {
+  date: string;
+  business_date: string;
+  is_today: boolean;
+  is_past: boolean;
+  /** false = 未来日期：物理房态不具权威性，UI 必须显式提示 */
+  physical_status_authoritative: boolean;
+  enabled_room_count: number;
+  disabled_room_count: number;
+  total_room_count: number;
+  counts: RoomStatusCountsOut;
+  rooms: RoomStatusItemOut[];
+}
+
+/* ------------------------------------------------------------------ */
+/* alpha.9.6 F4：渠道经营分析                                           */
+/* ------------------------------------------------------------------ */
+
+export interface ChannelPerformanceRow {
+  channel_id?: number | null;
+  channel_code?: string | null;
+  channel_name: string;
+  channel_category?: ChannelCategory | null;
+  channel_enabled?: boolean;
+  is_system?: boolean;
+  order_count: number;
+  stay_count: number;
+  occupied_room_nights: number;
+  /** 合同房费金额（非实际收款；Decimal 字符串序列化） */
+  contracted_room_value: string;
+  /** 合同 ADR（分母 0 -> null） */
+  contracted_adr?: string | null;
+  /** 渠道占比（ratio 0..1；区间总额 0 -> null） */
+  share?: number | null;
+}
+
+export interface ChannelPerformanceTotals {
+  order_count: number;
+  stay_count: number;
+  occupied_room_nights: number;
+  contracted_room_value: string;
+  contracted_adr?: string | null;
+}
+
+export interface BusinessChannelsOut {
+  business_date: string;
+  period: AnalyticsPeriodOut;
+  physical_room_count: number;
+  totals: ChannelPerformanceTotals;
+  channels: ChannelPerformanceRow[];
+  unassigned: ChannelPerformanceRow;
+}
 
 export type StayStatus = "ACTIVE" | "CHECKED_OUT";
 
@@ -306,7 +474,11 @@ export interface ReservationOut {
   check_in_date: string;
   check_out_date: string;
   status: ReservationStatus;
-  source: ReservationSource;
+  /** alpha.9.6 F3：来源渠道（唯一来源事实） */
+  source_channel_id?: number | null;
+  source_channel?: SourceChannelBrief | null;
+  /** LEGACY 只读投影（未升级前端回退显示用；请优先使用 source_channel） */
+  source?: ReservationSource | null;
   external_reference?: string | null;
   /** Decimal 以字符串序列化，如 "428.00" */
   agreed_total_amount?: string | null;
@@ -327,7 +499,11 @@ export interface ReservationSummary {
   check_in_date: string;
   check_out_date: string;
   status: ReservationStatus;
-  source: ReservationSource;
+  /** alpha.9.6 F3：来源渠道 */
+  source_channel_id?: number | null;
+  source_channel?: SourceChannelBrief | null;
+  /** LEGACY 只读投影 */
+  source?: ReservationSource | null;
   agreed_total_amount: string;
   currency: string;
 }
@@ -391,6 +567,9 @@ export interface ReservationCreate {
   room_type_id: number;
   check_in_date: string;
   check_out_date: string;
+  /** alpha.9.6 F3：来源渠道（唯一来源事实；新前端使用本字段） */
+  source_channel_id?: number;
+  /** LEGACY 入站兼容（后端解析为渠道；新前端不应使用） */
   source?: ReservationSource;
   external_reference?: string | null;
   agreed_total_amount: number | string;
@@ -405,6 +584,7 @@ export interface ReservationUpdate {
   room_type_id?: number;
   check_in_date?: string;
   check_out_date?: string;
+  source_channel_id?: number;
   source?: ReservationSource;
   external_reference?: string | null;
   agreed_total_amount?: number | string;
@@ -417,6 +597,9 @@ export interface ReservationListParams extends PageParams {
   room_id?: number;
   guest_id?: number;
   room_type_id?: number;
+  /** alpha.9.6 F3：按来源渠道筛选（唯一来源事实） */
+  source_channel_id?: number;
+  /** LEGACY 筛选（后端仍支持；新前端使用 source_channel_id） */
   source?: ReservationSource;
   check_in_date?: string;
   check_out_date?: string;

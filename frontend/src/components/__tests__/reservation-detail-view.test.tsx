@@ -77,6 +77,8 @@ const DAY_AFTER = addDays(TODAY, 1);
 const ROOM: RoomOut = {
   id: 1,
   room_number: "203",
+  name: null,
+  is_active: true,
   room_type_id: 3,
   floor: 2,
   occupancy_status: "available",

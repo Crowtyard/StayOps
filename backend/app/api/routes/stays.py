@@ -36,6 +36,9 @@ def _load_stay(db: Session, stay_id: int) -> Stay | None:
         .options(
             selectinload(Stay.room),
             selectinload(Stay.reservation).selectinload(Reservation.guest),
+            selectinload(Stay.reservation).selectinload(
+                Reservation.source_channel
+            ),
             selectinload(Stay.assignments).selectinload(StayRoomAssignment.room),
         )
     )
@@ -60,6 +63,9 @@ def list_stays(
         .options(
             selectinload(Stay.room),
             selectinload(Stay.reservation).selectinload(Reservation.guest),
+            selectinload(Stay.reservation).selectinload(
+                Reservation.source_channel
+            ),
         )
         .order_by(Stay.id.desc())
     )

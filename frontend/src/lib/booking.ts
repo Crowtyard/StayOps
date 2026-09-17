@@ -92,6 +92,14 @@ export const RESERVATION_SOURCES = Object.keys(
   SOURCE_LABELS,
 ) as ReservationSource[];
 
+/**
+ * alpha.9.6 F3：散客渠道的稳定 code。
+ *
+ * 「散客」（Walk-in）统一流程要求 check_in_date = Property Business Date 今天。
+ * 用渠道 code 判断而不是渠道名：渠道名允许经营者本地化修改，code 稳定不可变。
+ */
+export const WALK_IN_CHANNEL_CODE = "SYS_WALK_IN";
+
 /** 金额展示：直接展示后端返回的字符串（Decimal 序列化），不做浮点运算 */
 export function formatMoney(
   amount: string | null | undefined,

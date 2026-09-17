@@ -121,7 +121,9 @@ def test_create_duplicate_room_number_409(client, admin_headers):
         headers=admin_headers,
     )
     assert resp.status_code == 409
-    assert resp.json()["detail"] == "房间号已存在"
+    # alpha.9.6 F1：错误信息人类可读且区分「已启用 / 已停用」占用者
+    detail = resp.json()["detail"]
+    assert "101" in detail and "已被启用" in detail
 
 
 def test_create_bad_room_type_404(client, admin_headers):

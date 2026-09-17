@@ -126,6 +126,8 @@ function makeStay(overrides: Partial<StayOut> = {}): StayOut {
 const ROOM_205: RoomOut = {
   id: 205,
   room_number: "205",
+  name: null,
+  is_active: true,
   room_type_id: 3,
   floor: 2,
   occupancy_status: "occupied",

@@ -59,6 +59,8 @@ import { UserContext } from "@/components/app-shell";
 const ROOM: RoomOut = {
   id: 1,
   room_number: "101",
+  name: null,
+  is_active: true,
   room_type_id: 1,
   floor: 1,
   occupancy_status: "available",

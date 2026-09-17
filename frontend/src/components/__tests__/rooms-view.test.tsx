@@ -10,12 +10,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-const { replaceMock, roomsListMock, roomTypesListMock, routerMock } =
+const { replaceMock, roomsListMock, roomTypesListMock, roomsSummaryMock, routerMock } =
   vi.hoisted(() => {
     const replaceMock = vi.fn();
     return {
       replaceMock,
       roomsListMock: vi.fn(),
+  roomsSummaryMock: vi.fn(),
       roomTypesListMock: vi.fn(),
       // 稳定引用：RoomsView 的 useEffect 依赖 router
       routerMock: { replace: replaceMock, refresh: vi.fn(), push: vi.fn() },
@@ -47,7 +48,15 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return {
     ...actual,
     api: {
-      rooms: { list: roomsListMock },
+      rooms: {
+        list: roomsListMock,
+        summary: roomsSummaryMock,
+        create: vi.fn(),
+        patch: vi.fn(),
+        disable: vi.fn(),
+        enable: vi.fn(),
+        remove: vi.fn(),
+      },
       roomTypes: { list: roomTypesListMock },
     },
   };
@@ -79,6 +88,8 @@ function makeRoom(
   return {
     id,
     room_number: roomNumber,
+    name: null,
+    is_active: true,
     room_type_id: 1,
     floor: Math.floor(id / 10),
     occupancy_status: occupancy,
@@ -116,6 +127,12 @@ beforeEach(() => {
   roomsListMock.mockReset();
   roomTypesListMock.mockReset();
   replaceMock.mockClear();
+  // alpha.9.6 F1：房间数量统计来自后端 COUNT（GET /rooms/summary）
+  roomsSummaryMock.mockReset().mockResolvedValue({
+    total_count: 28,
+    enabled_count: 28,
+    disabled_count: 0,
+  });
 });
 
 describe("RoomsView 房态棋盘", () => {

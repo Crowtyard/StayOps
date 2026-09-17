@@ -97,7 +97,35 @@ Move event = `StayRoomAssignment.reason IS NOT NULL`；Move timestamp =
 | `room_moves_by_reason` | 换房原因分布 | GROUP BY reason | `[]` |
 | `room_moves_by_source_room` | 换出房分布 | 来源房 = **上一个** assignment 的 room（self-join `prev.ended_at = cur.started_at`） | `[]` |
 
-### 2.5 Contracted Room Value 合同房费（business，§17-§22）
+### 2.5 Channel Performance 客源渠道（business，alpha.9.6 F4）
+
+**「客人从哪里来」** —— 归因链：`Stay → Reservation.source_channel_id → Channel`。
+端点 `GET /analytics/business/channels`，权限 `analytics:business_read`。
+
+| Metric Code | 中文名 | 公式 / 定义 | 零分母 |
+|---|---|---|---|
+| `order_count` | 渠道订单数 | Arrival Cohort：`reservation.check_in_date ∈ [from,to)`，**排除 `CANCELLED` / `NO_SHOW`**（与 §2.3 同源同界） | 0 |
+| `stay_count` | 渠道住宿数 | `COUNT(DISTINCT stay_id)`（Room Move 不重复计数） | 0 |
+| `occupied_room_nights` | 渠道实际房晚 | 逐字复用 §2.1 的 `stay_intervals`（COMPLETED 用 `bd(actual_check_out_at)`，ACTIVE 用 `current_business_date` exclusive），仅统计归属于该渠道的住宿 | 0 |
+| `contracted_room_value` | 渠道合同房费 | 逐字复用 §2.5 口径：`agreed_total_amount / planned_nights` 分摊到落在 planned interval 内的实际房晚 | `0.00` |
+| `contracted_adr` | 渠道合同 ADR | `contracted_room_value / occupied_room_nights`；**合同口径、非实际收款** | `null` |
+| `share` | 渠道占比 | `渠道合同房费 / 区间合同房费总额`（ratio 0..1） | `null` |
+
+口径纪律（LOCKED）：
+
+- **收入口径不新造**：与 `/business/rooms` 使用同一事实源与同一分摊公式；
+  同区间 `totals.contracted_room_value` 必须与 `/business/rooms` 的
+  `contracted_room_value` **精确相等**（pytest 对账测试锁定）。
+- **每单恰好一次**：归因走 `Stay → Reservation.source_channel_id`，
+  不使用 `stay_room_assignments`（换房会造成重复计数）。
+- **取消与未到店不计入**订单数 / 房晚 / 房费。
+- **对账不变式**：`Σ channels + unassigned == totals`（`unassigned` = 未指定渠道桶）。
+- **命名**：StayOps 无 Folio / Payment / Settlement → **禁止「营业收入 / 实收」**；
+  UI 必须注明「合同房费（非实际收款）」。
+- 渠道**停用后历史业绩仍展示**，并标记 `channel_enabled=false`。
+- 响应不含任何 Guest PII（payload 扫描测试锁定）。
+
+### 2.6 Contracted Room Value 合同房费（business，§17-§22）
 
 命名 LOCKED：StayOps 无 Folio/Payment/Settlement，**禁止使用 Revenue /
 营业收入 / 实收**；正式名称 = Contracted Room Value / 合同房费金额。
@@ -110,7 +138,7 @@ Move event = `StayRoomAssignment.reason IS NOT NULL`；Move timestamp =
 | `contracted_adr` | 合同 ADR | `contracted_room_value / priced_occupied_room_nights`；UI 注明**非实际收款**（§21） | `null` |
 | `contracted_revpar` | 合同 RevPAR | `contracted_room_value / physical_room_nights`；UI 注明**合同 RevPAR、物理房间分母**，非财务正式 RevPAR（§22） | `null` |
 
-### 2.6 Housekeeping 保洁（operations，§23）
+### 2.7 Housekeeping 保洁（operations，§23）
 
 | Metric Code | 中文名 | 公式 / 定义 | 零分母 |
 |---|---|---|---|
@@ -120,7 +148,7 @@ Move event = `StayRoomAssignment.reason IS NOT NULL`；Move timestamp =
 | `checkout_turnover_minutes` | 退房翻房时长（分钟） | `source=CHECKOUT` 且区间内完成：`AVG(completed_at - created_at)` | `null` |
 | `room_move_cleaning_tasks` | 换房保洁任务数 | `source=ROOM_MOVE` 且 `bd(created_at) ∈ [from,to)` | 0 |
 
-### 2.7 Maintenance 维修（operations，§24）
+### 2.8 Maintenance 维修（operations，§24）
 
 | Metric Code | 中文名 | 公式 / 定义 | 零分母 |
 |---|---|---|---|
@@ -135,7 +163,7 @@ Move event = `StayRoomAssignment.reason IS NOT NULL`；Move timestamp =
 
 Alpha.8 **不实现** historical maintenance downtime room nights（无确定性事实）。
 
-### 2.8 Inventory 库存（business，§26-§28）
+### 2.9 Inventory 库存（business，§26-§28）
 
 | Metric Code | 中文名 | 公式 / 定义 | 零分母 |
 |---|---|---|---|
@@ -144,7 +172,7 @@ Alpha.8 **不实现** historical maintenance downtime room nights（无确定性
 | `item_issue_quantity` | 领用量 | 每 Item：`SUM(abs(quantity))` where `movement_type='ISSUE'` 且 `bd(created_at) ∈ [from,to)`。**gross issue activity，不减 RETURN**；**禁止跨不同 Base Unit 求和**（每 Item / 每 Base Unit 单独给出，§26） | 0 |
 | `issue_quantity_per_occupied_room_night` | 每实际房晚领用强度 | `item_issue_quantity / actual_occupied_room_nights`（每 Item；这是酒店库存领用强度，**不等于客人实际消费量**——无自动客耗扣账，Sprint 7） | `null` |
 
-### 2.9 Procurement 采购（business，§29/§30）
+### 2.10 Procurement 采购（business，§29/§30）
 
 | Metric Code | 中文名 | 公式 / 定义 | 零分母 |
 |---|---|---|---|
@@ -158,7 +186,7 @@ Alpha.8 **不实现** historical maintenance downtime room nights（无确定性
 | `received_value_by_supplier` | 按供应商到货金额 | GROUP BY supplier（只含 supplier_code / name，**不含 phone / notes**） | `[]` |
 | `received_value_by_item` | 按物资到货金额 | GROUP BY item | `[]` |
 
-### 2.10 On-Books Forecast 在册预测（operations，§10/§11）
+### 2.11 On-Books Forecast 在册预测（operations，§10/§11）
 
 | Metric Code | 中文名 | 公式 / 定义 | 零分母 |
 |---|---|---|---|
@@ -180,6 +208,7 @@ Alpha.8 **不实现** historical maintenance downtime room nights（无确定性
 | GET | /analytics/operations/maintenance | operations | 新建/完成/MTTR/验收 + 分类/房间分布 + 阻断快照 |
 | GET | /analytics/operations/room-moves | operations | 次数/涉及住宿/换房率 + 原因/换出房分布 |
 | GET | /analytics/business/rooms | business | 合同房费/有价与无价房晚/合同 ADR/合同 RevPAR + 每日趋势 |
+| GET | /analytics/business/channels | business | **客源渠道经营分析**（alpha.9.6 F4）：渠道订单数/实际房晚/合同房费/占比/合同 ADR + 合计与「未指定渠道」桶 |
 | GET | /analytics/business/inventory | business | 低/缺货快照 + 每物资领用量与领用强度 |
 | GET | /analytics/business/procurement | business | 申请/订单/待收货 + 到货采购金额（供应商/物资/每日） |
 | GET | /analytics/forecast | operations | 7d/14d/30d + 30 日每日序列 |

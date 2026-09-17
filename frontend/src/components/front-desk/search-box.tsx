@@ -17,7 +17,7 @@ import {
   looksLikeReservationNo,
   matchRoomsByNumber,
 } from "@/lib/front-desk";
-import { SOURCE_LABELS } from "@/lib/booking";
+import { reservationChannelLabel } from "@/lib/channels";
 import { IconSearch, IconX } from "@/components/icons";
 import { CleaningBadge, OccupancyBadge } from "@/components/status-badge";
 
@@ -177,7 +177,8 @@ export default function SearchBox({
                 </span>
                 <span className="block text-xs text-gray-400">
                   {res.check_in_date} → {res.check_out_date} ·{" "}
-                  {SOURCE_LABELS[res.source] ?? res.source} · {res.status}
+                  {reservationChannelLabel(res.source_channel, res.source)} ·{" "}
+                  {res.status}
                 </span>
               </button>
             ))}

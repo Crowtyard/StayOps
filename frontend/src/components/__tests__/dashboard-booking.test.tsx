@@ -11,11 +11,37 @@ import { addDays, businessDate } from "@/lib/booking";
 import DashboardView from "@/components/dashboard-view";
 import { UserContext } from "@/components/app-shell";
 
-const { roomsListMock, reservationsListMock, staysListMock } = vi.hoisted(() => ({
-  roomsListMock: vi.fn(),
-  reservationsListMock: vi.fn(),
-  staysListMock: vi.fn(),
-}));
+const { roomsListMock, reservationsListMock, staysListMock, dashboardRoomStatusMock } =
+  vi.hoisted(() => ({
+    roomsListMock: vi.fn(),
+    reservationsListMock: vi.fn(),
+    staysListMock: vi.fn(),
+    dashboardRoomStatusMock: vi.fn(),
+  }));
+
+/** alpha.9.6 F2：房态概览改为按日期从后端取（前端不再自行计算房态）。 */
+function emptyRoomStatus() {
+  const today = businessDate();
+  return {
+    date: today,
+    business_date: today,
+    is_today: true,
+    is_past: false,
+    physical_status_authoritative: true,
+    enabled_room_count: 0,
+    disabled_room_count: 0,
+    total_room_count: 0,
+    counts: {
+      available: 0,
+      reserved: 0,
+      occupied: 0,
+      out_of_service: 0,
+      total_enabled_rooms: 0,
+      sellable_total: 0,
+    },
+    rooms: [],
+  };
+}
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: vi.fn(), push: vi.fn(), refresh: vi.fn() }),
@@ -43,6 +69,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     ...actual,
     api: {
       rooms: { list: roomsListMock },
+      dashboard: { roomStatus: dashboardRoomStatusMock },
       reservations: { list: reservationsListMock },
       stays: { list: staysListMock },
     },
@@ -106,6 +133,7 @@ const EMPTY_ROOMS_PAGE = { items: [], total: 0, page: 1, page_size: 100 };
 
 beforeEach(() => {
   roomsListMock.mockReset().mockResolvedValue(EMPTY_ROOMS_PAGE);
+  dashboardRoomStatusMock.mockReset().mockResolvedValue(emptyRoomStatus());
   reservationsListMock.mockReset().mockResolvedValue({
     items: [],
     total: 0,
@@ -186,7 +214,7 @@ describe("Dashboard BookingOverview", () => {
         <DashboardView />
       </UserContext.Provider>,
     );
-    await screen.findByText("当前房态概览");
+    await screen.findByRole("heading", { name: /房态概览/ });
     expect(screen.queryByText("预订运营概览")).not.toBeInTheDocument();
     expect(reservationsListMock).not.toHaveBeenCalled();
     expect(staysListMock).not.toHaveBeenCalled();
@@ -221,7 +249,7 @@ describe("Dashboard BookingOverview", () => {
         <DashboardView />
       </UserContext.Provider>,
     );
-    expect(await screen.findByText("当前房态概览")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /房态概览/ })).toBeInTheDocument();
     expect(
       await screen.findByText("预订/在住概览加载失败"),
     ).toBeInTheDocument();

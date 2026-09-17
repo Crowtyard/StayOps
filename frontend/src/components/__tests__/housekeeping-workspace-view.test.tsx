@@ -291,6 +291,8 @@ describe("HousekeepingWorkspaceView", () => {
         {
           id: 12,
           room_number: "110",
+          name: null,
+          is_active: true,
           room_type_id: 1,
           floor: 1,
           occupancy_status: "available",

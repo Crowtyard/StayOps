@@ -43,7 +43,7 @@ test("Early Checkout：A=[today, today+2) 当天退房 → COMPLETED → B=[toda
     checkIn,
     checkOut: addDays(checkIn, 2),
     roomNumber: ROOM,
-    source: "DIRECT",
+    channelName: "直订",
     amount: "388.00",
   });
   expect(a.reservationNo).toMatch(/^RSV\d{8}-\d{4,}$/);
@@ -71,7 +71,7 @@ test("Early Checkout：A=[today, today+2) 当天退房 → COMPLETED → B=[toda
     checkIn: addDays(checkIn, 1),
     checkOut: addDays(checkIn, 3),
     roomNumber: ROOM,
-    source: "DIRECT",
+    channelName: "直订",
     amount: "388.00",
   });
   await expect(

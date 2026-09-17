@@ -30,6 +30,7 @@ from app.database import get_db
 from app.schemas.analytics import (
     AnalyticsPeriod,
     BookingsOut,
+    BusinessChannelsOut,
     BusinessInventoryOut,
     BusinessProcurementOut,
     BusinessRoomsOut,
@@ -213,6 +214,32 @@ def business_rooms(
 ):
     from_date, to_date = _validate_period(from_date, to_date)
     data = svc.business_rooms_analytics(db, from_date, to_date)
+    data["period"] = _period(from_date, to_date)
+    return data
+
+
+@router.get(
+    "/business/channels",
+    response_model=BusinessChannelsOut,
+    summary="客源渠道经营分析（订单数/实际房晚/合同房费/占比/合同 ADR）",
+)
+def business_channels(
+    from_date: date = Query(alias="from"),
+    to_date: date = Query(alias="to"),
+    db=Depends(get_db),
+    _user=Depends(BUSINESS),
+):
+    """「客人从哪里来」：按 source_channel_id 归因（每单恰好一次）。
+
+    口径（LOCKED，见 docs/DECISIONS.md）：
+    - 订单数 = Arrival Cohort 且排除 CANCELLED / NO_SHOW
+    - 房晚 = 实际占用（Stay 派生，天然防 Room Move 重复计数）
+    - 合同房费 = 复用既有经营分析同一事实源（agreed_total_amount 按计划房晚
+      分摊到实际占用房晚），**非实际收款**
+    - Σ channels + unassigned == totals（对账不变式）
+    """
+    from_date, to_date = _validate_period(from_date, to_date)
+    data = svc.channel_performance_analytics(db, from_date, to_date)
     data["period"] = _period(from_date, to_date)
     return data
 

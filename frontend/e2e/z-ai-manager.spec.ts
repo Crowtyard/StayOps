@@ -182,7 +182,7 @@ test.describe("AI Manager E2E（Sprint 9）", () => {
     await page.getByRole("link", { name: "首页" }).click();
     await expect(page).toHaveURL(/\/dashboard/);
     await expect(
-      page.getByRole("heading", { name: "当前房态概览" }),
+      page.getByRole("heading", { name: /房态概览/ }),
     ).toBeVisible();
   });
 

@@ -13,19 +13,18 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ApiError, api } from "@/lib/api";
 import type {
+  ChannelOut,
   GuestOut,
   ReservationOut,
-  ReservationSource,
   ReservationStatus,
   RoomOut,
   RoomTypeOut,
 } from "@/lib/api/types";
 import {
-  RESERVATION_SOURCES,
   RESERVATION_STATUS_META,
-  SOURCE_LABELS,
   formatMoney,
 } from "@/lib/booking";
+import { reservationChannelLabel, selectableChannels } from "@/lib/channels";
 import { StatusBadge } from "@/components/status-badge";
 import { Empty, ErrorView, Forbidden, Loading } from "@/components/status-views";
 import { useUser } from "@/components/app-shell";
@@ -39,7 +38,8 @@ interface Filters {
   status: ReservationStatus | "";
   roomId: number | "";
   roomTypeId: number | "";
-  source: ReservationSource | "";
+  /** alpha.9.6 F3：来源渠道筛选（唯一来源事实） */
+  channelId: number | "";
   checkIn: string;
   checkOut: string;
   search: string;
@@ -49,7 +49,7 @@ const EMPTY_FILTERS: Filters = {
   status: "",
   roomId: "",
   roomTypeId: "",
-  source: "",
+  channelId: "",
   checkIn: "",
   checkOut: "",
   search: "",
@@ -72,6 +72,24 @@ export default function ReservationsView() {
   const [reloadKey, setReloadKey] = useState(0);
   const [rooms, setRooms] = useState<RoomOut[]>([]);
   const [roomTypes, setRoomTypes] = useState<RoomTypeOut[]>([]);
+  const [channels, setChannels] = useState<ChannelOut[]>([]);
+
+  // alpha.9.6 F3：来源渠道筛选选项（无 channel:read 不请求）
+  useEffect(() => {
+    if (!permissions.has("channel:read")) return;
+    let cancelled = false;
+    api.channels
+      .list({ page: 1, page_size: 100 })
+      .then((page) => {
+        if (!cancelled) setChannels(page.items);
+      })
+      .catch(() => {
+        // 渠道列表失败不阻塞预订列表
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [permissions]);
 
   useEffect(() => {
     let cancelled = false;
@@ -83,7 +101,8 @@ export default function ReservationsView() {
         room_id: typeof filters.roomId === "number" ? filters.roomId : undefined,
         room_type_id:
           typeof filters.roomTypeId === "number" ? filters.roomTypeId : undefined,
-        source: filters.source || undefined,
+        source_channel_id:
+          typeof filters.channelId === "number" ? filters.channelId : undefined,
         check_in_date: filters.checkIn || undefined,
         check_out_date: filters.checkOut || undefined,
         search: filters.search.trim() || undefined,
@@ -118,7 +137,7 @@ export default function ReservationsView() {
     filters.status,
     filters.roomId,
     filters.roomTypeId,
-    filters.source,
+    filters.channelId,
     filters.checkIn,
     filters.checkOut,
     filters.search,
@@ -161,7 +180,7 @@ export default function ReservationsView() {
     filters.status !== "" ||
     filters.roomId !== "" ||
     filters.roomTypeId !== "" ||
-    filters.source !== "" ||
+    filters.channelId !== "" ||
     filters.checkIn !== "" ||
     filters.checkOut !== "" ||
     filters.search !== "" ||
@@ -270,19 +289,22 @@ export default function ReservationsView() {
           </label>
 
           <label className="text-xs font-medium text-gray-600">
-            来源
+            来源渠道
             <select
-              value={filters.source}
+              value={filters.channelId === "" ? "" : String(filters.channelId)}
               onChange={(e) =>
-                setFilter("source", e.target.value as ReservationSource | "")
+                setFilter(
+                  "channelId",
+                  e.target.value === "" ? "" : Number(e.target.value),
+                )
               }
               className={`${inputClass} mt-1`}
-              aria-label="按来源筛选"
+              aria-label="按来源渠道筛选"
             >
-              <option value="">全部来源</option>
-              {RESERVATION_SOURCES.map((s) => (
-                <option key={s} value={s}>
-                  {SOURCE_LABELS[s]}（{s}）
+              <option value="">全部渠道</option>
+              {selectableChannels(channels).map((channel) => (
+                <option key={channel.id} value={channel.id}>
+                  {channel.name}
                 </option>
               ))}
             </select>
@@ -401,7 +423,7 @@ export default function ReservationsView() {
                   <td className="px-4 py-3 text-gray-700">{r.check_in_date}</td>
                   <td className="px-4 py-3 text-gray-700">{r.check_out_date}</td>
                   <td className="px-4 py-3 text-gray-700">
-                    {SOURCE_LABELS[r.source] ?? r.source}
+                    {reservationChannelLabel(r.source_channel, r.source)}
                   </td>
                   <td className="px-4 py-3">
                     <StatusBadge meta={RESERVATION_STATUS_META[r.status]} />

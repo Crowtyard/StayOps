@@ -165,6 +165,10 @@ describe("config: buildPaths", () => {
     expect(p.desktopProbe).toBe(path.join(resources, "scripts", "desktop_runtime.py"));
     expect(p.nodeExe).toBe(path.join(resources, "node", "node.exe"));
     expect(p.pgBinDir).toBe(path.join(resources, "postgres", "pgsql", "bin"));
+    expect(p.pgBundledDir).toBe(path.join(resources, "postgres", "pgsql"));
+    expect(p.pgRuntimeRootDir).toBe(
+      path.join(PROGRAM_DATA, "StayOps", "runtime", "postgresql"),
+    );
     expect(p.frontendStandaloneDir).toBe(path.join(resources, "frontend-server"));
     expect(p.trayIcon).toBe(path.join(app, "assets", "tray.png"));
     expect(p.appIcon).toBe(path.join(app, "assets", "app-icon.png"));
@@ -195,6 +199,10 @@ describe("config: buildPaths", () => {
     expect(p.workspaceRoot).toBe(root);
     expect(p.trayIcon).toBe(path.join(root, "desktop", "assets", "tray.png"));
     expect(p.pgBinDir).toBe(path.join(root, "runtime", "postgres", "pgsql", "bin"));
+    expect(p.pgBundledDir).toBe(path.join(root, "runtime", "postgres", "pgsql"));
+    expect(p.pgRuntimeRootDir).toBe(
+      path.join(PROGRAM_DATA, "StayOps", "runtime", "postgresql"),
+    );
     fs.rmSync(root, { recursive: true, force: true });
   });
 });
